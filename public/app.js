@@ -1397,7 +1397,17 @@ function maybeNudgeBackup(){
 
 function imageSrc(img){
   if(!img) return '';
-  if(img.url) return img.url;
+  if(img.url){
+    // Server-hosted images are auth-protected. An <img> tag can't send the
+    // Authorization header, so pass the token as a query param instead.
+    if(img.url.startsWith('/api/images/')){
+      const token = localStorage.getItem(LS_TOKEN);
+      if(token){
+        return img.url + (img.url.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(token);
+      }
+    }
+    return img.url;
+  }
   return img.dataURL || '';
 }
 
