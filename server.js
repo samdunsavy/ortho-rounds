@@ -149,8 +149,15 @@ function mergePatientRecords(local, remote){
   if(!local) return Object.assign({}, remote);
   if(!remote) return Object.assign({}, local);
   const merged = Object.assign({}, remote, local);
-  merged.postOpChecks = mergeChecklistById(local.postOpChecks, remote.postOpChecks);
-  merged.dischargeChecks = mergeChecklistById(local.dischargeChecks, remote.dischargeChecks);
+  const localTs = Number(local.updatedAt) || 0;
+  const remoteTs = Number(remote.updatedAt) || 0;
+  if(localTs >= remoteTs){
+    merged.postOpChecks = (local.postOpChecks || []).map(c => Object.assign({}, c));
+    merged.dischargeChecks = (local.dischargeChecks || []).map(c => Object.assign({}, c));
+  }else{
+    merged.postOpChecks = mergeChecklistById(local.postOpChecks, remote.postOpChecks);
+    merged.dischargeChecks = mergeChecklistById(local.dischargeChecks, remote.dischargeChecks);
+  }
   merged.planHistory = mergePlanHistory(local.planHistory, remote.planHistory);
   merged.labs = Object.assign({}, remote.labs || {}, local.labs || {});
   const localPlanTs = Number(local.planUpdatedAt) || 0;

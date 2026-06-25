@@ -302,6 +302,9 @@ async function mergeServerRecords(serverRecords){
     }
     if(cur._dirty){
       const merged = mergePatientRecords(cur, rec);
+      // Unsynced local edits (including removed milestones) must not be resurrected from server.
+      merged.postOpChecks = (cur.postOpChecks || []).map(c => Object.assign({}, c));
+      merged.dischargeChecks = (cur.dischargeChecks || []).map(c => Object.assign({}, c));
       merged._dirty = true;
       merged.updatedAt = Math.max(Number(cur.updatedAt) || 0, Number(rec.updatedAt) || 0);
       const conflicts = detectPatientConflicts(cur, rec);
@@ -1176,8 +1179,17 @@ function mergePatientRecords(local, remote){
   if(!local) return Object.assign({}, remote);
   if(!remote) return Object.assign({}, local);
   const merged = Object.assign({}, remote, local);
-  merged.postOpChecks = mergeChecklistById(local.postOpChecks, remote.postOpChecks);
-  merged.dischargeChecks = mergeChecklistById(local.dischargeChecks, remote.dischargeChecks);
+  const localTs = Number(local.updatedAt) || 0;
+  const remoteTs = Number(remote.updatedAt) || 0;
+  // Newer patient snapshot wins the full checklist (so deletions persist).
+  // Per-item merge only when remote is strictly newer at the patient level.
+  if(localTs >= remoteTs){
+    merged.postOpChecks = (local.postOpChecks || []).map(c => Object.assign({}, c));
+    merged.dischargeChecks = (local.dischargeChecks || []).map(c => Object.assign({}, c));
+  }else{
+    merged.postOpChecks = mergeChecklistById(local.postOpChecks, remote.postOpChecks);
+    merged.dischargeChecks = mergeChecklistById(local.dischargeChecks, remote.dischargeChecks);
+  }
   merged.planHistory = mergePlanHistory(local.planHistory, remote.planHistory);
   merged.labs = Object.assign({}, remote.labs || {}, local.labs || {});
 
