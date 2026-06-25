@@ -53,6 +53,18 @@ PORT=4000 npm start
 - Login config (password hash + token secret): `data/config.json`.
 - The `data/` folder is git-ignored so patient data and secrets are never
   committed.
+- By default `data/` sits next to `server.js`. To point it at a mounted
+  volume elsewhere, set `ORTHO_DATA_DIR=/path/to/volume`.
+
+> **Patients disappear after a redeploy?** This is almost always a hosting
+> persistence problem, not a data bug: the `data/` directory was **not** on a
+> persistent disk/volume, so the redeploy started with an empty `ortho.db`.
+> The server prints a loud `starting EMPTY` warning on boot when this happens.
+> Mount a persistent disk at the `data/` directory (see the Railway/Render
+> notes below) or set `ORTHO_DATA_DIR` to a path on your mounted volume.
+> Any device that still holds its local cache will automatically re-upload its
+> records and repopulate the server on the next sync — so log in from a device
+> that was used recently before wiping anything.
 
 ### Reset the password
 

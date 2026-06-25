@@ -28,7 +28,13 @@ import { DatabaseSync } from 'node:sqlite';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
-const DATA_DIR = path.join(__dirname, 'data');
+// DATA_DIR holds the SQLite DB, config, images and backups. It MUST live on a
+// persistent disk/volume, otherwise every redeploy starts with an empty
+// database and all patients are lost. Allow it to be pointed at a mounted
+// volume that isn't next to the code via ORTHO_DATA_DIR.
+const DATA_DIR = process.env.ORTHO_DATA_DIR
+  ? path.resolve(process.env.ORTHO_DATA_DIR)
+  : path.join(__dirname, 'data');
 const DB_PATH = path.join(DATA_DIR, 'ortho.db');
 const CONFIG_PATH = path.join(DATA_DIR, 'config.json');
 const IMAGES_DIR = path.join(DATA_DIR, 'images');
@@ -106,8 +112,11 @@ function verifyToken(token){
 
 /* ---------------- database ---------------- */
 
+let dbWasFresh = false;
+
 function initDb(){
   if(!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
+  dbWasFresh = !existsSync(DB_PATH);
   const database = new DatabaseSync(DB_PATH);
   database.exec('PRAGMA journal_mode = WAL;');
   database.exec(`
@@ -493,6 +502,18 @@ function printStartupBanner(){
   }
   console.log('  ------------------------------------------');
   console.log(`  Database:  ${DB_PATH}`);
+  if(dbWasFresh){
+    const patientCount = (()=>{ try{ return db.prepare('SELECT COUNT(*) AS n FROM patients').get().n; }catch{ return 0; } })();
+    if(patientCount === 0){
+      console.warn('\n  !! No existing database was found — starting EMPTY.');
+      console.warn('  !! If this is a redeploy and you expected existing patients,');
+      console.warn('  !! the data directory is NOT on a persistent disk/volume.');
+      console.warn(`  !! Mount a persistent disk at: ${DATA_DIR}`);
+      console.warn('  !! (or set ORTHO_DATA_DIR to a path on your mounted volume).');
+      console.warn('  !! Devices that still hold local copies will re-upload them');
+      console.warn('  !! to repopulate the server on their next sync.');
+    }
+  }
   if(usingEnvPassword){
     console.log('  Password:  (from ORTHO_PASSWORD environment variable)');
   }else if(generatedPassword){
