@@ -1560,13 +1560,13 @@ function getAntibioticsCourse(p){
 function getDvtCourse(p){
   const name = (p.dvtProphylaxis || '').trim();
   const duration = parseTherapyDays(p.dvtDays);
+  if(!name && !duration) return null;
   const day = computeTherapyDay(p, 'dvtStart');
-  if(!name && day == null) return null;
   const drug = name || 'LMWH';
   if(!duration){
     return day != null
       ? { label: `${drug} day ${day}`, flagType: 'good' }
-      : null;
+      : { label: `${drug} — set start date`, flagType: 'warn' };
   }
   if(day == null) return { label: `${drug} — set start (${duration}d)`, flagType: 'warn' };
   if(day > duration) return { label: `${drug} day ${day}/${duration} — stop overdue`, flagType: 'bad' };
