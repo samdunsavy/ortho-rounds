@@ -66,7 +66,10 @@ By default the server uses **SQLite**:
 > disk/volume, so the redeploy started with an empty `ortho.db` (the server
 > prints a loud `starting EMPTY` warning when this happens). Either mount a
 > persistent disk at `data/`, or use the **MongoDB backend** below, which
-> persists independently of the app host.
+> persists independently of the app host. As a safety net, any device that
+> still holds its local cache automatically re-uploads its records on the next
+> sync, repopulating the server — so log in from a recently-used device before
+> wiping anything.
 
 ### Use MongoDB instead (persistent cloud storage)
 
