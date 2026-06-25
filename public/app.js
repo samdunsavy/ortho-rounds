@@ -2274,12 +2274,15 @@ function renderRounds(){
 
 function bindCardListEvents(root){
   if(!root) return;
-  root.querySelectorAll('.card-plan-input').forEach(inp=>{
+  root.querySelectorAll('.card-plan-input, .card-plan-edit').forEach(inp=>{
     if(inp._bound) return;
     inp._bound = true;
+    const isTextarea = inp.tagName === 'TEXTAREA';
     inp.addEventListener('click', e=> e.stopPropagation());
     inp.addEventListener('keydown', (e)=>{
-      if(e.key === 'Enter'){
+      // One-line input saves on Enter; multi-line plan textarea keeps
+      // newlines and saves on Ctrl/Cmd+Enter (or when focus leaves).
+      if(e.key === 'Enter' && (!isTextarea || e.metaKey || e.ctrlKey)){
         e.preventDefault();
         inp.blur();
       }
@@ -2390,7 +2393,7 @@ function toggleCardOpen(id){
         <div class="small-muted">${escapeHTML(p.bed||'—')}${dayInfo ? ' · '+dayInfo.prefix+' '+dayInfo.day : ''}</div>
       </div>
       ${renderCardBody(p)}
-      <div class="card-quick-footer">${renderCardQuickBar(p)}</div>
+      <div class="card-quick-footer">${renderCardQuickBar(p, false)}</div>
     </div>`;
   bindCardListEvents(card);
   patchCardHeadGlance(p, false);
@@ -2399,7 +2402,7 @@ function toggleCardOpen(id){
   });
 }
 
-function renderCardQuickBar(p){
+function renderCardQuickBar(p, includePlan = true){
   if(isConsultantMode()) return '';
   const dueMs = getNextDueMilestones(p, 2);
   const planVal = escapeHTML(p.dailyPlan || '');
@@ -2408,8 +2411,8 @@ function renderCardQuickBar(p){
   const statusLabel = STATUS_LABELS[p.status] || 'Status';
   return `
     <div class="card-quick-bar" data-id="${p.id}">
-      <input type="text" class="card-plan-input ${planStale ? 'stale' : ''}" data-action="save-plan" data-id="${p.id}"
-        value="${planVal}" placeholder="Today's plan…" title="Enter plan and press Enter">
+      ${includePlan ? `<input type="text" class="card-plan-input ${planStale ? 'stale' : ''}" data-action="save-plan" data-id="${p.id}"
+        value="${planVal}" placeholder="Today's plan…" title="Enter plan and press Enter">` : ''}
       <div class="card-quick-milestones">
         ${dueMs.length ? dueMs.map(c=>`
           <button type="button" class="card-ms-btn ${isItemOverdue(c, getPatientPod(p)) ? 'overdue' : ''}"
@@ -2474,7 +2477,7 @@ function renderCard(p){
           <div class="small-muted">${escapeHTML(p.bed||'—')}${dayInfo ? ' · '+dayInfo.prefix+' '+dayInfo.day : ''}</div>
         </div>
         ${renderCardBody(p)}
-        <div class="card-quick-footer">${renderCardQuickBar(p)}</div>
+        <div class="card-quick-footer">${renderCardQuickBar(p, false)}</div>
       </div>` : ''}</div>
   </div>`;
 }
@@ -2514,7 +2517,9 @@ function renderCardBody(p){
     ${(p.handoverNote||'').trim() ? `<div class="section-label">Handover note</div><div class="notes-box handover-box">${escapeHTML(p.handoverNote.trim())}</div><button type="button" class="btn" data-action="clear-handover" data-id="${p.id}" style="margin-top:6px;">Clear handover</button>` : ''}
 
     <div class="section-label">Today's plan</div>
-    <div class="notes-box">${escapeHTML(p.dailyPlan) || '<span class="text-muted">No plan entered for today</span>'}</div>
+    ${isConsultantMode()
+      ? `<div class="notes-box">${escapeHTML(p.dailyPlan) || '<span class="text-muted">No plan entered for today</span>'}</div>`
+      : `<textarea class="notes-box card-plan-edit ${p.dailyPlan && !hasPlanToday(p) ? 'stale' : ''}" data-id="${p.id}" rows="3" placeholder="Type today's plan here… (saved automatically when you tap away)">${escapeHTML(p.dailyPlan)}</textarea>`}
     ${renderPlanHistoryBlock(p) ? `<div class="section-label" style="margin-top:10px;">Plan history</div><div class="plan-history">${renderPlanHistoryBlock(p)}</div>` : ''}
 
     ${(p.postOpChecks||[]).length ? `

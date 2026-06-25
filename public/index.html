@@ -491,6 +491,16 @@
 
   .notes-box{font-size:13px;line-height:1.5;background:var(--card);border:1px solid var(--line-soft);
     border-radius:7px;padding:9px 11px;white-space:pre-wrap;}
+  textarea.card-plan-edit{
+    width:100%;display:block;font-family:inherit;color:var(--ink);
+    resize:vertical;min-height:64px;border-color:var(--line);
+    transition:border-color var(--dur-fast),box-shadow var(--dur-fast);
+  }
+  textarea.card-plan-edit:focus{
+    outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(44,95,110,0.12);
+  }
+  textarea.card-plan-edit.stale{border-color:var(--warn);background:var(--warn-bg);}
+  textarea.card-plan-edit::placeholder{color:var(--ink-soft);opacity:0.85;}
 
   .card-actions{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;}
   .btn{
