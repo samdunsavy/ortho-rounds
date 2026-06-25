@@ -55,7 +55,13 @@ const FILTER_LABELS = {
   ottoday: 'OT today',
   mine: 'My patients'
 };
-const LAB_THRESHOLDS = { hb: 100, crp: 10, wcc: 11, creatinine: 120 };
+// Indian lab report units (g/dL, mg/L, cells/cu.mm, mg/dL)
+const LAB_SPEC = {
+  hb:         { unit: 'g/dL',        low: 12,    siLow: 100,   siIfAbove: 25 },
+  crp:        { unit: 'mg/L',        high: 10 },
+  wcc:        { unit: 'cells/cu.mm', high: 11000, siHigh: 11, siIfBelow: 100 },
+  creatinine: { unit: 'mg/dL',       high: 1.3,  siHigh: 120,  siIfAbove: 20 }
+};
 const PLAN_HISTORY_MAX = 14;
 const FULL_RECONCILE_INTERVAL_MS = 5 * 60 * 1000; // periodic full reconcile
 let idb = null;
@@ -1225,21 +1231,40 @@ async function markAntibioticsStopped(p){
 function labValueClass(key, val){
   const n = parseFloat(val);
   if(isNaN(n)) return '';
-  const th = LAB_THRESHOLDS[key];
-  if(th == null) return '';
-  if(key === 'hb' && n < th) return 'lab-low';
-  if(key === 'creatinine' && n > th) return 'lab-high';
-  if((key === 'crp' || key === 'wcc') && n > th) return 'lab-high';
+  const spec = LAB_SPEC[key];
+  if(!spec) return '';
+  if(key === 'hb'){
+    const limit = n > spec.siIfAbove ? spec.siLow : spec.low;
+    return n < limit ? 'lab-low' : '';
+  }
+  if(key === 'wcc'){
+    const limit = n < spec.siIfBelow ? spec.siHigh * 1000 : spec.high;
+    const compare = n < spec.siIfBelow ? n * 1000 : n;
+    return compare > limit ? 'lab-high' : '';
+  }
+  if(key === 'creatinine'){
+    const limit = n > spec.siIfAbove ? spec.siHigh : spec.high;
+    return n > limit ? 'lab-high' : '';
+  }
+  if(key === 'crp'){
+    return n > spec.high ? 'lab-high' : '';
+  }
   return '';
+}
+
+function formatLabWithUnit(key, val){
+  if(val === '' || val == null) return '';
+  const unit = LAB_SPEC[key]?.unit || '';
+  return unit ? `${val} ${unit}` : String(val);
 }
 
 function formatLabsLine(p){
   const labs = p.labs || {};
   const parts = [];
-  if(labs.hb) parts.push(`Hb ${labs.hb}`);
-  if(labs.crp) parts.push(`CRP ${labs.crp}`);
-  if(labs.wcc) parts.push(`WCC ${labs.wcc}`);
-  if(labs.creatinine) parts.push(`Cr ${labs.creatinine}`);
+  if(labs.hb) parts.push(`Hb ${formatLabWithUnit('hb', labs.hb)}`);
+  if(labs.crp) parts.push(`CRP ${formatLabWithUnit('crp', labs.crp)}`);
+  if(labs.wcc) parts.push(`TLC ${formatLabWithUnit('wcc', labs.wcc)}`);
+  if(labs.creatinine) parts.push(`Cr ${formatLabWithUnit('creatinine', labs.creatinine)}`);
   return parts.join(' · ');
 }
 
@@ -2341,7 +2366,7 @@ function collectWorklistData(){
     for(const key of ['hb','crp','wcc','creatinine']){
       const val = labs[key];
       if(val && labValueClass(key, val)){
-        labAbnormalItems.push({ p, text: `${key.toUpperCase()} ${val}`, kind: 'lab', labKey: key, labVal: val });
+        labAbnormalItems.push({ p, text: formatLabWithUnit(key, val), kind: 'lab', labKey: key, labVal: val });
       }
     }
     const abx = getAntibioticsCourse(p);
@@ -3674,12 +3699,12 @@ function renderModalForm(d){
     </div>
 
     <div class="form-row">
-      <label>Key labs (optional)</label>
+      <label>Key labs (optional) <span class="small-muted">— Indian report units</span></label>
       <div class="labs-grid">
-        <div><span>Hb</span><input id="f_lab_hb" inputmode="decimal" value="${escapeHTML((d.labs||{}).hb||'')}" class="${labValueClass('hb', (d.labs||{}).hb)}"></div>
-        <div><span>CRP</span><input id="f_lab_crp" inputmode="decimal" value="${escapeHTML((d.labs||{}).crp||'')}" class="${labValueClass('crp', (d.labs||{}).crp)}"></div>
-        <div><span>WCC</span><input id="f_lab_wcc" inputmode="decimal" value="${escapeHTML((d.labs||{}).wcc||'')}" class="${labValueClass('wcc', (d.labs||{}).wcc)}"></div>
-        <div><span>Creatinine</span><input id="f_lab_creatinine" inputmode="decimal" value="${escapeHTML((d.labs||{}).creatinine||'')}" class="${labValueClass('creatinine', (d.labs||{}).creatinine)}"></div>
+        <div><span>Hb (g/dL)</span><input id="f_lab_hb" inputmode="decimal" placeholder="e.g. 12.5" value="${escapeHTML((d.labs||{}).hb||'')}" class="${labValueClass('hb', (d.labs||{}).hb)}"></div>
+        <div><span>CRP (mg/L)</span><input id="f_lab_crp" inputmode="decimal" placeholder="e.g. 5" value="${escapeHTML((d.labs||{}).crp||'')}" class="${labValueClass('crp', (d.labs||{}).crp)}"></div>
+        <div><span>TLC (cells/cu.mm)</span><input id="f_lab_wcc" inputmode="decimal" placeholder="e.g. 8500" value="${escapeHTML((d.labs||{}).wcc||'')}" class="${labValueClass('wcc', (d.labs||{}).wcc)}"></div>
+        <div><span>Creatinine (mg/dL)</span><input id="f_lab_creatinine" inputmode="decimal" placeholder="e.g. 0.9" value="${escapeHTML((d.labs||{}).creatinine||'')}" class="${labValueClass('creatinine', (d.labs||{}).creatinine)}"></div>
       </div>
     </div>
 
