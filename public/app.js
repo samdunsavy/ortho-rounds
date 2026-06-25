@@ -80,6 +80,8 @@ let expandedPlanHistory = {}; // patientId -> bool
 const LS_LAST_SYNC_OK = 'ortho_lastSyncOk';
 let syncChipState = 'offline';
 let lastSyncSuccessAt = Number(localStorage.getItem(LS_LAST_SYNC_OK) || 0);
+let aiAvailable = false;
+const presentationAiCache = new Map();
 
 /* ---------------- IndexedDB cache layer ---------------- */
 
@@ -304,6 +306,223 @@ async function pingServer(){
   }catch{
     return false;
   }
+}
+
+async function refreshAiStatus(){
+  try{
+    const ctrl = new AbortController();
+    const t = setTimeout(()=> ctrl.abort(), 2500);
+    const res = await fetch('/api/health', { signal: ctrl.signal });
+    clearTimeout(t);
+    if(!res.ok){ aiAvailable = false; return false; }
+    const data = await res.json();
+    aiAvailable = !!(data.ai && data.ai.enabled);
+    updateAiButtonsVisibility();
+    return aiAvailable;
+  }catch{
+    aiAvailable = false;
+    updateAiButtonsVisibility();
+    return false;
+  }
+}
+
+function canUseAi(){
+  return aiAvailable && !isConsultantMode() && navigator.onLine;
+}
+
+async function callAi(endpoint, body){
+  return api('/api/ai/' + endpoint, { method: 'POST', body: JSON.stringify(body) });
+}
+
+function setAiButtonBusy(btn, busy){
+  if(!btn) return;
+  btn.disabled = busy;
+  btn.classList.toggle('ai-btn-busy', busy);
+}
+
+function buildPatientAiSnapshot(p){
+  const dayInfo = getClinicalDayInfo(p);
+  const abx = getAntibioticsCourse(p);
+  const yPlan = getYesterdayPlan(p);
+  const history = (p.planHistory || []).slice(-2).map(h => ({ date: h.date, text: h.text }));
+  return {
+    bed: p.bed,
+    ward: p.ward || getPatientWard(p),
+    name: p.name,
+    age: p.age,
+    sex: p.sex,
+    status: p.status,
+    diagnosis: p.diagnosis,
+    procedure: p.procedure,
+    surgeon: p.surgeon,
+    implant: p.implant,
+    surgeryDate: p.surgeryDate,
+    admissionDate: p.admissionDate,
+    clinicalDay: dayInfo ? `${dayInfo.prefix} ${dayInfo.day}` : null,
+    pod: getPatientPod(p),
+    dailyPlan: p.dailyPlan,
+    dailyPlanDate: p.dailyPlanDate,
+    yesterdayPlan: yPlan ? yPlan.text : null,
+    planHistory: history,
+    labsLine: formatLabsLine(p) || null,
+    investigations: (p.investigations || []).map(i => ({
+      name: i.name,
+      status: i.status,
+      value: i.value || null
+    })),
+    fitness: (p.fitness || []).map(f => ({ dept: f.dept, status: f.status })),
+    milestonesOverdue: getOverduePostOpChecks(p).slice(0, 4).map(c => c.label),
+    milestonesDue: getDuePostOpChecks(p).slice(0, 4).map(c => c.label),
+    therapy: getTherapyBadges(p).map(b => b.label),
+    antibioticsDay: abx && abx.status !== 'stopped' ? abx.label : null,
+    handoverPin: (p.handoverPin || '').trim() || null,
+    handoverNote: (p.handoverNote || '').trim() || null,
+    complications: (p.complications || []).map(c => c.type + (c.note ? ': ' + c.note : '')),
+    notes: (p.notes || '').trim() || null
+  };
+}
+
+function collectHandoverAiPatients(){
+  const w = collectWorklistData();
+  const ids = new Set();
+  const out = [];
+  const add = (p) => {
+    if(!p || ids.has(p.id)) return;
+    ids.add(p.id);
+    out.push(p);
+  };
+  w.handoverItems.forEach(it => add(it.p));
+  getPgScopedPatients(patients.filter(p => p.status !== 'discharged')).forEach(p => {
+    if((p.handoverPin || '').trim()) add(p);
+  });
+  w.abxLastDayItems.forEach(it => add(it.p));
+  w.abxOverdueItems.forEach(it => add(it.p));
+  w.postOpOverdueItems.forEach(it => add(it.p));
+  return out.slice(0, 25);
+}
+
+async function generateWardHandoverNote(){
+  const flagged = collectHandoverAiPatients();
+  if(!flagged.length){
+    showToast('No handover flags — add pins or notes first');
+    return null;
+  }
+  const { text } = await callAi('handover-summary', {
+    patients: flagged.map(buildPatientAiSnapshot),
+    wardNote: wardMeta.handoverNote || ''
+  });
+  return text;
+}
+
+function aiDraftPlanButtonHtml(patientId, target){
+  if(!canUseAi()) return '';
+  const targetAttr = target ? ` data-target="${escapeHTML(target)}"` : '';
+  return `<button type="button" class="btn btn-sm ai-btn" data-ai-draft-plan data-patient-id="${escapeHTML(patientId)}"${targetAttr} title="Draft plan with AI">✨ Draft</button>`;
+}
+
+function updateAiButtonsVisibility(){
+  const genBtn = document.getElementById('worklistGenerateHandoverBtn');
+  if(genBtn) genBtn.style.display = canUseAi() ? '' : 'none';
+}
+
+function bindAiEvents(){
+  if(window._aiBound) return;
+  window._aiBound = true;
+
+  document.addEventListener('click', async (e) => {
+    const draftBtn = e.target.closest('[data-ai-draft-plan]');
+    if(draftBtn){
+      e.stopPropagation();
+      e.preventDefault();
+      const pid = draftBtn.dataset.patientId;
+      const p = patients.find(x => x.id === pid);
+      if(!p) return;
+      if(!canUseAi()){
+        showToast('AI not available — check server key or connection');
+        return;
+      }
+      let input = null;
+      if(draftBtn.dataset.target === 'modal'){
+        input = document.getElementById('f_dailyPlan');
+      }else if(draftBtn.dataset.target === 'work'){
+        input = document.querySelector(`[data-work-plan="${pid}"]`);
+      }else{
+        input = document.querySelector(`.card-plan-edit[data-id="${pid}"]`);
+      }
+      setAiButtonBusy(draftBtn, true);
+      try{
+        const { text } = await callAi('draft-plan', { patient: buildPatientAiSnapshot(p) });
+        if(input) input.value = text;
+        if(draftBtn.dataset.target === 'modal') renderPlanStatus();
+        showToast('Draft ready — review and save');
+      }catch(err){
+        showToast(err.message || 'AI draft failed');
+      }finally{
+        setAiButtonBusy(draftBtn, false);
+      }
+      return;
+    }
+
+    const polishBtn = e.target.closest('[data-ai-polish]');
+    if(polishBtn){
+      e.stopPropagation();
+      const pid = polishBtn.dataset.patientId;
+      const style = polishBtn.dataset.style === 'compact' ? 'compact' : 'full';
+      const p = patients.find(x => x.id === pid);
+      if(!p || !canUseAi()) return;
+      setAiButtonBusy(polishBtn, true);
+      try{
+        const seed = style === 'compact'
+          ? generateCompactPresentationScript(p).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
+          : generatePresentationScript(p);
+        const { text } = await callAi('polish-presentation', {
+          patient: buildPatientAiSnapshot(p),
+          style,
+          seedScript: seed
+        });
+        presentationAiCache.set(`${pid}:${style}`, text);
+        renderPresentationSlide();
+        if(presentationReadAloud) speakCurrentPresentation();
+        showToast('Script polished');
+      }catch(err){
+        showToast(err.message || 'AI polish failed');
+      }finally{
+        setAiButtonBusy(polishBtn, false);
+      }
+      return;
+    }
+
+    const revertBtn = e.target.closest('[data-ai-revert-polish]');
+    if(revertBtn){
+      e.stopPropagation();
+      presentationAiCache.delete(`${revertBtn.dataset.patientId}:${revertBtn.dataset.style}`);
+      renderPresentationSlide();
+      return;
+    }
+
+    const genHandoverBtn = e.target.closest('#worklistGenerateHandoverBtn');
+    if(genHandoverBtn){
+      e.stopPropagation();
+      if(!canUseAi()){
+        showToast('AI not available — check server key or connection');
+        return;
+      }
+      setAiButtonBusy(genHandoverBtn, true);
+      try{
+        const text = await generateWardHandoverNote();
+        if(!text) return;
+        await saveWardMeta({ handoverNote: text.trim() });
+        renderWardHandoverBanner();
+        renderWorklist();
+        updateCounts();
+        showToast('Handover generated — review on worklist');
+      }catch(err){
+        showToast(err.message || 'AI handover failed');
+      }finally{
+        setAiButtonBusy(genHandoverBtn, false);
+      }
+    }
+  });
 }
 
 /* ---------------- sync engine ---------------- */
@@ -585,6 +804,7 @@ async function attemptLogin(){
     const data = await res.json();
     localStorage.setItem(LS_TOKEN, data.token);
     hideLogin();
+    await refreshAiStatus();
     await syncNow({ fullReconcile: true });
   }catch{
     errEl.textContent = 'Cannot reach the server';
@@ -739,6 +959,26 @@ function showAppDialog(opts){
 
     const btnRow = document.getElementById('appDialogButtons');
     btnRow.innerHTML = '';
+    (opts.extraButtons || []).forEach(b => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn ai-btn' + (b.primary ? ' primary' : '');
+      btn.textContent = b.label;
+      btn.addEventListener('click', async ()=>{
+        const out = { fields: {} };
+        for(const f of (opts.fields || [])){
+          const el = document.getElementById('adf_' + f.id);
+          if(el) out.fields[f.id] = el.value;
+        }
+        setAiButtonBusy(btn, true);
+        try{
+          await b.onClick(out);
+        }finally{
+          setAiButtonBusy(btn, false);
+        }
+      });
+      btnRow.appendChild(btn);
+    });
     (opts.buttons || [{ label: 'OK', value: true, primary: true }]).forEach(b => {
       const btn = document.createElement('button');
       btn.type = 'button';
@@ -1793,6 +2033,7 @@ async function init(){
   document.body.classList.toggle('consultant-mode', isConsultantMode());
   bindEvents();
   bindAuthEvents();
+  bindAiEvents();
   updateStorageNotice();
   updatePgInitialsUI();
   renderWardHandoverBanner();
@@ -1811,6 +2052,8 @@ async function init(){
   }
 
   const reachable = await pingServer();
+  await refreshAiStatus();
+  renderAll();
   if(reachable){
     if(hasToken()){
       try{
@@ -1832,7 +2075,7 @@ async function init(){
 
   setInterval(()=>{ if(hasToken() && navigator.onLine) syncNow({}); }, 20000);
   setInterval(()=>{ refreshSyncChipLabel(); }, 30000);
-  window.addEventListener('online', ()=>{ if(hasToken()) syncNow({}); });
+  window.addEventListener('online', ()=>{ refreshAiStatus(); if(hasToken()) syncNow({}); });
   window.addEventListener('focus', ()=>{ if(hasToken()) syncNow({}); });
 }
 
@@ -2772,7 +3015,7 @@ function renderCardBody(p){
 
     ${(p.handoverNote||'').trim() ? `<div class="section-label">Handover note</div><div class="notes-box handover-box">${escapeHTML(p.handoverNote.trim())}</div><button type="button" class="btn" data-action="clear-handover" data-id="${p.id}" style="margin-top:6px;">Clear handover</button>` : ''}
 
-    <div class="section-label">Today's plan</div>
+    <div class="section-label plan-section-header"><span>Today's plan</span>${aiDraftPlanButtonHtml(p.id)}</div>
     ${isConsultantMode()
       ? `<div class="notes-box">${escapeHTML(p.dailyPlan) || '<span class="text-muted">No plan entered for today</span>'}</div>`
       : `<textarea class="notes-box card-plan-edit ${p.dailyPlan && !hasPlanToday(p) ? 'stale' : ''}" data-id="${p.id}" rows="3" placeholder="Type today's plan here… (saved automatically when you tap away)">${escapeHTML(p.dailyPlan)}</textarea>`}
@@ -3278,7 +3521,7 @@ function renderWorklist(){
           ? `<input type="text" class="work-lab-input ${labValueClass(it.labKey, it.labVal)}" data-lab-edit="${escapeHTML(it.p.id)}" data-lab-key="${escapeHTML(it.labKey)}" value="${escapeHTML(it.labVal||'')}" inputmode="decimal">`
           : '';
         const planEdit = (it.kind === 'plan')
-          ? `<input type="text" class="work-plan-input" data-work-plan="${escapeHTML(it.p.id)}" placeholder="Today's plan…" value="">`
+          ? `<span class="work-plan-row">${aiDraftPlanButtonHtml(it.p.id, 'work')}<input type="text" class="work-plan-input" data-work-plan="${escapeHTML(it.p.id)}" placeholder="Today's plan…" value=""></span>`
           : '';
         const invChips = (it.kind === 'inv')
           ? `<span class="work-inv-chips">${COMMON_INVESTIGATIONS.slice(0,6).map(n=>`<button type="button" class="btn work-inv-chip" data-add-inv="${escapeHTML(it.p.id)}" data-inv-name="${escapeHTML(n)}">${escapeHTML(n)}</button>`).join('')}</span>`
@@ -3730,6 +3973,7 @@ function renderModalForm(d){
         </select>
         <button type="button" class="btn" id="insertPlanFromTemplateBtn" title="Insert plan text for current POD only">Insert plan</button>
         <button type="button" class="btn primary" id="applyPathwayTemplateBtn" title="Add milestones + insert today's plan">Apply pathway</button>
+        ${aiDraftPlanButtonHtml(d.id, 'modal')}
       </div>
       <div id="templateApplyPreview" class="form-hint"></div>
       <textarea id="f_dailyPlan" placeholder="e.g. Dressing check, wrist mobilization, repeat X-ray">${escapeHTML(d.dailyPlan)}</textarea>
@@ -4509,11 +4753,37 @@ function renderWardHandoverBanner(){
 
 async function editWardHandover(){
   const cur = wardMeta.handoverNote || '';
-  const fields = await showPromptFields('Unit handover note', [
-    { id: 'note', label: 'Visible on worklist for all PGs', value: cur, type: 'textarea', rows: 5, placeholder: 'Ward-wide handover for today…' }
-  ]);
-  if(!fields) return;
-  const next = fields.note ?? '';
+  const extraButtons = canUseAi() ? [{
+    label: '✨ Generate from ward',
+    onClick: async (out) => {
+      if(!canUseAi()){
+        showToast('AI not available — check server key or connection');
+        return;
+      }
+      try{
+        const text = await generateWardHandoverNote();
+        if(!text) return;
+        const noteEl = document.getElementById('adf_note');
+        if(noteEl) noteEl.value = text;
+        showToast('Draft ready — review and save');
+      }catch(err){
+        showToast(err.message || 'AI handover failed');
+      }
+    }
+  }] : [];
+  const result = await showAppDialog({
+    title: 'Unit handover note',
+    fields: [
+      { id: 'note', label: 'Visible on worklist for all PGs', value: cur, type: 'textarea', rows: 5, placeholder: 'Ward-wide handover for today…' }
+    ],
+    extraButtons,
+    buttons: [
+      { label: 'Cancel', value: false },
+      { label: 'OK', value: true, primary: true }
+    ]
+  });
+  if(!result || !result.action) return;
+  const next = result.fields?.note ?? '';
   await saveWardMeta({ handoverNote: next.trim() });
   renderWardHandoverBanner();
   renderWorklist();
@@ -4691,7 +4961,8 @@ function speakCurrentPresentation(){
   const p = list[presentationIndex];
   if(!p) return;
   window.speechSynthesis.cancel();
-  const text = generatePresentationScript(p).replace(/<[^>]+>/g, ' ');
+  const polished = presentationAiCache.get(`${p.id}:full`);
+  const text = (polished || generatePresentationScript(p)).replace(/<[^>]+>/g, ' ');
   const u = new SpeechSynthesisUtterance(text);
   u.rate = 1.05;
   window.speechSynthesis.speak(u);
@@ -4743,6 +5014,17 @@ function renderPresentationSlide(animating){
   const curWard = getPatientWard(p);
   wardJump.innerHTML = wards.map(w=>`<option value="${escapeHTML(w)}" ${w===curWard?'selected':''}>Ward ${escapeHTML(w)}</option>`).join('');
 
+  const compactPolished = presentationAiCache.get(`${p.id}:compact`);
+  const fullPolished = presentationAiCache.get(`${p.id}:full`);
+  const compactScript = compactPolished || generateCompactPresentationScript(p);
+  const fullScript = fullPolished || generatePresentationScript(p);
+  const polishBtn = (style) => canUseAi()
+    ? `<button type="button" class="btn btn-sm ai-btn" data-ai-polish data-style="${style}" data-patient-id="${escapeHTML(p.id)}">✨ Polish</button>`
+    : '';
+  const revertBtn = (style) => presentationAiCache.has(`${p.id}:${style}`)
+    ? `<button type="button" class="btn btn-sm pres-revert-btn" data-ai-revert-polish data-style="${style}" data-patient-id="${escapeHTML(p.id)}">Revert to template</button>`
+    : '';
+
   el.innerHTML = `
     <div class="pres-hero-line">Ward ${escapeHTML(getPatientWard(p))} · Bed ${escapeHTML(p.bed||'—')}</div>
     <div class="pres-head">
@@ -4754,8 +5036,16 @@ function renderPresentationSlide(animating){
     <div class="pres-section"><div class="pres-label">Today's plan</div><div class="pres-plan">${escapeHTML(p.dailyPlan) || '—'}</div></div>
     ${renderPresentationExtras(p)}
     ${renderPresentationXrays(p)}
-    <div class="pres-section"><div class="pres-label">Compact script</div><div class="pres-script pres-compact">${generateCompactPresentationScript(p)}</div></div>
-    <div class="pres-section"><div class="pres-label">Full script</div><div class="pres-script">${generatePresentationScript(p)}</div></div>
+    <div class="pres-section">
+      <div class="pres-label-row"><span class="pres-label">Compact script</span>${polishBtn('compact')}</div>
+      <div class="pres-script pres-compact" data-pres-script="compact">${compactPolished ? escapeHTML(compactPolished) : compactScript}</div>
+      ${revertBtn('compact')}
+    </div>
+    <div class="pres-section">
+      <div class="pres-label-row"><span class="pres-label">Full script</span>${polishBtn('full')}</div>
+      <div class="pres-script" data-pres-script="full">${fullPolished ? escapeHTML(fullPolished) : escapeHTML(fullScript)}</div>
+      ${revertBtn('full')}
+    </div>
   `;
 
   bindPresentationXrayClicks(el, p);

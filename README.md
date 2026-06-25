@@ -132,6 +132,31 @@ New X-rays uploaded while online are stored under `data/images/` on the server
 (URL reference) instead of embedding base64 in the database. Older images
 embedded as base64 continue to work.
 
+## AI assistants (optional)
+
+The app can draft daily plans, polish presentation scripts, and generate unit
+handover notes using OpenAI. AI is **opt-in** — without a key, the app works
+exactly as before.
+
+```bash
+OPENAI_API_KEY="sk-..." OPENAI_MODEL="gpt-4o-mini" npm start
+```
+
+Environment variables:
+
+- `OPENAI_API_KEY` — required to enable AI (set on the server, never in the browser)
+- `OPENAI_MODEL` — optional, defaults to `gpt-4o-mini`
+- `OPENAI_MAX_TOKENS` — optional, defaults to `350`
+
+`GET /api/health` reports `ai.enabled` so clients hide AI buttons when
+unconfigured.
+
+### Privacy
+
+- Patient snapshots sent to OpenAI **exclude images and UHID**
+- AI output is a **draft only** — PGs must review before saving
+- Recommend hospital IT review before using with real patient data on a cloud API
+
 ## Deploy to Railway (optional cloud)
 
 For access off the ward Wi‑Fi, you can host the same app on
@@ -163,6 +188,7 @@ no special proxy headers are required for basic use.
 
 ```
 server.js                 Node HTTP server + REST API
+ai.js                     OpenAI proxy for AI assistants
 storage.js                Pluggable storage backends (SQLite / MongoDB)
 package.json              Scripts + optional mongodb dependency
 public/

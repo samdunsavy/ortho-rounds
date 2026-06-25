@@ -30,3 +30,8 @@ services:
       # the SQLite disk (then the disk block above can be removed).
       - key: MONGODB_URI
         sync: false
+      # Optional: enable AI assistants (draft plan, polish presentation, handover).
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: "gpt-4o-mini"

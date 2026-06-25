@@ -30,6 +30,14 @@ import crypto from 'node:crypto';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createStore } from './storage.js';
+import {
+  isAiEnabled,
+  getAiConfig,
+  checkRateLimit,
+  draftPlan,
+  polishPresentation,
+  handoverSummary
+} from './ai.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -278,7 +286,13 @@ async function handleApi(req, res, pathname){
   if(pathname === '/api/health' && req.method === 'GET'){
     // `storage` lets you confirm at a glance whether a deployment is actually
     // using MongoDB ("mongo") or the ephemeral local file ("sqlite").
-    return sendJSON(res, 200, { ok: true, app: 'ortho-rounds', storage: store ? store.kind : 'starting', time: Date.now() });
+    return sendJSON(res, 200, {
+      ok: true,
+      app: 'ortho-rounds',
+      storage: store ? store.kind : 'starting',
+      time: Date.now(),
+      ai: getAiConfig()
+    });
   }
   if(pathname === '/api/login' && req.method === 'POST'){
     const body = await readBody(req);
@@ -395,6 +409,46 @@ async function handleApi(req, res, pathname){
       'Cache-Control': 'no-store'
     });
     return res.end(JSON.stringify(payload, null, 2));
+  }
+
+  if(pathname.startsWith('/api/ai/') && req.method === 'POST'){
+    if(!isAiEnabled()){
+      return sendJSON(res, 503, { error: 'AI not configured' });
+    }
+    const token = getBearerToken(req);
+    const rate = checkRateLimit(token);
+    if(!rate.ok){
+      return sendJSON(res, 429, { error: `AI rate limit — try again in ${rate.retryAfterSec}s` });
+    }
+    const body = await readBody(req) || {};
+    try{
+      if(pathname === '/api/ai/draft-plan'){
+        if(!body.patient || typeof body.patient !== 'object'){
+          return sendJSON(res, 400, { error: 'patient snapshot required' });
+        }
+        const text = await draftPlan(body.patient);
+        return sendJSON(res, 200, { text });
+      }
+      if(pathname === '/api/ai/polish-presentation'){
+        if(!body.patient || typeof body.patient !== 'object'){
+          return sendJSON(res, 400, { error: 'patient snapshot required' });
+        }
+        const style = body.style === 'compact' ? 'compact' : 'full';
+        const text = await polishPresentation(body.patient, style, body.seedScript || '');
+        return sendJSON(res, 200, { text });
+      }
+      if(pathname === '/api/ai/handover-summary'){
+        if(!Array.isArray(body.patients)){
+          return sendJSON(res, 400, { error: 'patients array required' });
+        }
+        const text = await handoverSummary(body.patients, body.wardNote || '');
+        return sendJSON(res, 200, { text });
+      }
+      return sendJSON(res, 404, { error: 'Unknown AI endpoint' });
+    }catch(err){
+      const status = err.statusCode || 502;
+      return sendJSON(res, status, { error: err.message || 'AI request failed' });
+    }
   }
 
   if(pathname === '/api/import' && req.method === 'POST'){
