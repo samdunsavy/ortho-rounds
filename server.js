@@ -269,7 +269,9 @@ function serveStatic(req, res){
 async function handleApi(req, res, pathname){
   // Public endpoints (no auth)
   if(pathname === '/api/health' && req.method === 'GET'){
-    return sendJSON(res, 200, { ok: true, app: 'ortho-rounds', time: Date.now() });
+    // `storage` lets you confirm at a glance whether a deployment is actually
+    // using MongoDB ("mongo") or the ephemeral local file ("sqlite").
+    return sendJSON(res, 200, { ok: true, app: 'ortho-rounds', storage: store ? store.kind : 'starting', time: Date.now() });
   }
   if(pathname === '/api/login' && req.method === 'POST'){
     const body = await readBody(req);
@@ -282,6 +284,18 @@ async function handleApi(req, res, pathname){
   // Everything below requires a valid token
   if(!verifyToken(getBearerToken(req))){
     return sendJSON(res, 401, { error: 'Login required' });
+  }
+
+  if(pathname === '/api/diag' && req.method === 'GET'){
+    const all = await store.getAll();
+    const live = all.filter(r => !r.deleted);
+    return sendJSON(res, 200, {
+      storage: store.kind,
+      location: store.location,
+      totalRecords: all.length,
+      livePatients: live.length,
+      sample: live.slice(0, 10).map(r => { let nm=''; try{ nm = JSON.parse(r.data||'{}').name || ''; }catch{} return { id: r.id, name: nm, updatedAt: r.updatedAt }; })
+    });
   }
 
   if(pathname === '/api/sync' && req.method === 'POST'){
