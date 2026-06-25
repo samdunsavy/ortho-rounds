@@ -6,8 +6,11 @@ A small orthopedic ward rounds app. Patient data is stored in a single
 The app also works **offline** (local cache) and **syncs** automatically when
 the connection returns. You can **export/import** JSON backups any time.
 
-- **No cloud.** Data never leaves the computer running the server.
-- **No npm dependencies.** Uses only built-in Node modules.
+- **Local by default.** With SQLite, data never leaves the computer running
+  the server, and no npm dependencies are required (built-in Node modules only).
+- **Optional MongoDB backend** for persistent cloud hosting — set `MONGODB_URI`
+  and patients, X-rays and login config live in a managed database that
+  survives redeploys. (This is the one optional dependency.)
 - **Login** with a single shared password.
 
 ## Requirements
@@ -48,11 +51,48 @@ PORT=4000 npm start
 
 ## How data is stored
 
-- Server database file: `data/ortho.db` (SQLite). Back it up by copying this
-  file, or use the in-app **Export** button.
+By default the server uses **SQLite**:
+
+- Server database file: `data/ortho.db`. Back it up by copying this file, or
+  use the in-app **Export** button.
 - Login config (password hash + token secret): `data/config.json`.
 - The `data/` folder is git-ignored so patient data and secrets are never
   committed.
+- By default `data/` sits next to `server.js`. To point it at a mounted
+  volume elsewhere, set `ORTHO_DATA_DIR=/path/to/volume`.
+
+> **Patients disappear after a redeploy?** With SQLite this is almost always a
+> hosting problem: the `data/` directory was **not** on a persistent
+> disk/volume, so the redeploy started with an empty `ortho.db` (the server
+> prints a loud `starting EMPTY` warning when this happens). Either mount a
+> persistent disk at `data/`, or use the **MongoDB backend** below, which
+> persists independently of the app host. As a safety net, any device that
+> still holds its local cache automatically re-uploads its records on the next
+> sync, repopulating the server — so log in from a recently-used device before
+> wiping anything.
+
+### Use MongoDB instead (persistent cloud storage)
+
+For cloud hosting without managing a disk, point the app at MongoDB (for
+example a free [MongoDB Atlas](https://www.mongodb.com/atlas) M0 cluster):
+
+```bash
+MONGODB_URI="mongodb+srv://USER:PASSWORD@cluster0.xxxxx.mongodb.net/ortho" \
+ORTHO_PASSWORD="choose-a-password" npm start
+```
+
+- When `MONGODB_URI` is set, **all** data — patients, X-ray images, and the
+  auth config (token secret + password hash) — is stored in MongoDB. Nothing
+  is written to `data/`, and the database survives every redeploy.
+- The database name is taken from the URI path (`/ortho` above); it defaults
+  to `ortho` if omitted. Collections used: `patients`, `images`, `config`.
+- Install the driver first with `npm install` (it is the project's only
+  dependency and is only needed for this backend).
+- On the host (Railway/Render/etc.), set `MONGODB_URI` and `ORTHO_PASSWORD`
+  as environment variables. With MongoDB you do **not** need a persistent disk.
+- Atlas setup: create a free cluster, add a database user, allow your host's
+  IP (or `0.0.0.0/0` for managed hosts with dynamic IPs), then copy the
+  **Drivers** connection string into `MONGODB_URI`.
 
 ### Reset the password
 
@@ -122,12 +162,13 @@ no special proxy headers are required for basic use.
 ## Project layout
 
 ```
-server.js                 Zero-dependency Node server + REST API + SQLite
-package.json              Scripts (npm start)
+server.js                 Node HTTP server + REST API
+storage.js                Pluggable storage backends (SQLite / MongoDB)
+package.json              Scripts + optional mongodb dependency
 public/
   index.html              UI
   app.js                  Client logic, offline cache, sync, login
   sw.js                   Service worker (offline app shell)
   manifest.webmanifest    PWA metadata
-data/                     Created at runtime (DB + config) — git-ignored
+data/                     SQLite DB + config (runtime, git-ignored; unused with MongoDB)
 ```

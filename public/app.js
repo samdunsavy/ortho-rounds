@@ -335,13 +335,23 @@ async function reconcileWithSnapshot(serverRecords){
   await mergeServerRecords(serverRecords);
 
   const local = await cacheGetAll();
+  let resurrected = 0;
   for(const localRec of local){
     if(!localRec || !localRec.id || String(localRec.id).startsWith('__')) continue;
     if(localRec._dirty) continue;
 
     const serverRec = serverById.get(localRec.id);
     if(!serverRec){
-      await cacheDelete(localRec.id);
+      // The server has no row for this id at all. Because the app only ever
+      // soft-deletes (an intentionally removed patient stays in the snapshot
+      // flagged deleted=true), a record that is *missing* from a full snapshot
+      // means the server lost its database — e.g. a redeploy without a
+      // persistent disk. Re-upload our local copy instead of deleting it, so
+      // the first device to sync repopulates the server rather than every
+      // device wiping its own records to match an empty server.
+      localRec._dirty = true;
+      await cachePutRaw(localRec);
+      resurrected++;
       continue;
     }
     if(serverRec.deleted){
@@ -350,6 +360,8 @@ async function reconcileWithSnapshot(serverRecords){
   }
 
   localStorage.setItem(LS_LAST_FULL_SYNC, String(Date.now()));
+  // Push the resurrected records back up on the next sync cycle.
+  if(resurrected) scheduleSync();
 }
 
 async function syncNow(opts){
@@ -1397,7 +1409,17 @@ function maybeNudgeBackup(){
 
 function imageSrc(img){
   if(!img) return '';
-  if(img.url) return img.url;
+  if(img.url){
+    // Server-hosted images are auth-protected. An <img> tag can't send the
+    // Authorization header, so pass the token as a query param instead.
+    if(img.url.startsWith('/api/images/')){
+      const token = localStorage.getItem(LS_TOKEN);
+      if(token){
+        return img.url + (img.url.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(token);
+      }
+    }
+    return img.url;
+  }
   return img.dataURL || '';
 }
 
