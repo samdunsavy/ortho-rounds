@@ -42,6 +42,7 @@ const LS_TIP_MINE_EMPTY = "ortho_tipMineEmpty";
 const LS_TIP_WORKLIST = "ortho_tipWorklist";
 const LS_TIP_PRESENT = "ortho_tipPresent";
 const LS_TIP_AI_DRAFT = "ortho_tipAiDraft";
+const LS_TIP_VOICE_PLAN = "ortho_tipVoicePlan";
 const BULK_DRAFT_MAX = 20;
 const WARD_META_ID = "__ward_meta__";
 const FILTER_LABELS = {
@@ -84,6 +85,8 @@ let syncChipState = 'offline';
 let lastSyncSuccessAt = Number(localStorage.getItem(LS_LAST_SYNC_OK) || 0);
 let aiAvailable = false;
 const presentationAiCache = new Map();
+let activeVoiceRecognition = null;
+let voiceDictationKey = '';
 
 /* ---------------- IndexedDB cache layer ---------------- */
 
@@ -547,6 +550,103 @@ function aiDraftPlanButtonHtml(patientId, target){
   return `<button type="button" class="btn btn-sm ai-btn" data-ai-draft-plan data-patient-id="${escapeHTML(patientId)}"${targetAttr} title="Draft plan with AI">✨ Draft</button>`;
 }
 
+function isVoicePlanSupported(){
+  return !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+}
+
+function planInputForVoiceTarget(patientId, target){
+  if(target === 'modal') return document.getElementById('f_dailyPlan');
+  if(target === 'work') return document.querySelector(`[data-work-plan="${patientId}"]`);
+  return document.querySelector(`.card-plan-edit[data-id="${patientId}"]`);
+}
+
+function stopVoicePlanDictation(){
+  if(activeVoiceRecognition){
+    try{ activeVoiceRecognition.stop(); }catch{ /* ignore */ }
+    activeVoiceRecognition = null;
+  }
+  voiceDictationKey = '';
+  document.querySelectorAll('[data-voice-plan].listening').forEach(btn=>{
+    btn.classList.remove('listening');
+  });
+}
+
+function appendVoiceTranscript(input, transcript, target){
+  const piece = (transcript || '').trim();
+  if(!piece) return;
+  const cur = (input.value || '').trim();
+  const sep = cur && !/[.!?]$/.test(cur) ? ' ' : (cur ? '\n' : '');
+  input.value = cur ? cur + sep + piece : piece;
+  if(target === 'modal') renderPlanStatus();
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function startVoicePlanDictation(patientId, target, btn){
+  if(!isVoicePlanSupported()){
+    showToast('Voice input not supported in this browser');
+    return;
+  }
+  const key = `${patientId}:${target || 'card'}`;
+  if(activeVoiceRecognition && voiceDictationKey === key){
+    stopVoicePlanDictation();
+    showToast('Stopped');
+    return;
+  }
+  const input = planInputForVoiceTarget(patientId, target || 'card');
+  if(!input){
+    showToast('Open the plan field first');
+    return;
+  }
+  stopVoicePlanDictation();
+  if(window.speechSynthesis) window.speechSynthesis.cancel();
+
+  const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const rec = new Recognition();
+  rec.lang = 'en-IN';
+  rec.interimResults = false;
+  rec.continuous = true;
+  rec.maxAlternatives = 1;
+
+  activeVoiceRecognition = rec;
+  voiceDictationKey = key;
+  btn.classList.add('listening');
+
+  rec.onresult = (e)=>{
+    for(let i = e.resultIndex; i < e.results.length; i++){
+      if(!e.results[i].isFinal) continue;
+      appendVoiceTranscript(input, e.results[i][0].transcript, target || 'card');
+    }
+  };
+
+  rec.onerror = (e)=>{
+    stopVoicePlanDictation();
+    if(e.error === 'not-allowed') showToast('Microphone permission denied');
+    else if(e.error !== 'aborted') showToast('Voice input failed — try again');
+  };
+
+  rec.onend = ()=>{
+    if(activeVoiceRecognition === rec) stopVoicePlanDictation();
+  };
+
+  try{
+    rec.start();
+    showToast('Listening… tap mic to stop', { duration: 3500 });
+  }catch{
+    stopVoicePlanDictation();
+    showToast('Could not start microphone');
+  }
+}
+
+function voicePlanButtonHtml(patientId, target){
+  if(!isVoicePlanSupported() || isConsultantMode()) return '';
+  const targetAttr = target ? ` data-voice-target="${escapeHTML(target)}"` : '';
+  return `<button type="button" class="btn btn-sm voice-plan-btn" data-voice-plan data-patient-id="${escapeHTML(patientId)}"${targetAttr} title="Dictate plan" aria-label="Dictate plan">🎤</button>`;
+}
+
+function planActionButtonsHtml(patientId, target){
+  return `<span class="plan-action-btns">${voicePlanButtonHtml(patientId, target)}${aiDraftPlanButtonHtml(patientId, target)}</span>`;
+}
+
 function updateAiButtonsVisibility(){
   const genBtn = document.getElementById('worklistGenerateHandoverBtn');
   if(genBtn) genBtn.style.display = canUseAi() ? '' : 'none';
@@ -557,6 +657,14 @@ function bindAiEvents(){
   window._aiBound = true;
 
   document.addEventListener('click', async (e) => {
+    const voiceBtn = e.target.closest('[data-voice-plan]');
+    if(voiceBtn){
+      e.stopPropagation();
+      e.preventDefault();
+      startVoicePlanDictation(voiceBtn.dataset.patientId, voiceBtn.dataset.voiceTarget || 'card', voiceBtn);
+      return;
+    }
+
     const draftBtn = e.target.closest('[data-ai-draft-plan]');
     if(draftBtn){
       e.stopPropagation();
@@ -3146,7 +3254,7 @@ function renderCardBody(p){
 
     ${(p.handoverNote||'').trim() ? `<div class="section-label">Handover note</div><div class="notes-box handover-box">${escapeHTML(p.handoverNote.trim())}</div><button type="button" class="btn" data-action="clear-handover" data-id="${p.id}" style="margin-top:6px;">Clear handover</button>` : ''}
 
-    <div class="section-label plan-section-header"><span>Today's plan</span>${aiDraftPlanButtonHtml(p.id)}</div>
+    <div class="section-label plan-section-header"><span>Today's plan</span>${planActionButtonsHtml(p.id)}</div>
     ${isConsultantMode()
       ? `<div class="notes-box">${escapeHTML(p.dailyPlan) || '<span class="text-muted">No plan entered for today</span>'}</div>`
       : `<textarea class="notes-box card-plan-edit ${p.dailyPlan && !hasPlanToday(p) ? 'stale' : ''}" data-id="${p.id}" rows="3" placeholder="Type today's plan here… (saved automatically when you tap away)">${escapeHTML(p.dailyPlan)}</textarea>`}
@@ -3652,7 +3760,7 @@ function renderWorklist(){
           ? `<input type="text" class="work-lab-input ${labValueClass(it.labKey, it.labVal)}" data-lab-edit="${escapeHTML(it.p.id)}" data-lab-key="${escapeHTML(it.labKey)}" value="${escapeHTML(it.labVal||'')}" inputmode="decimal">`
           : '';
         const planEdit = (it.kind === 'plan')
-          ? `<span class="work-plan-row">${aiDraftPlanButtonHtml(it.p.id, 'work')}<input type="text" class="work-plan-input" data-work-plan="${escapeHTML(it.p.id)}" placeholder="Today's plan…" value=""></span>`
+          ? `<span class="work-plan-row">${planActionButtonsHtml(it.p.id, 'work')}<input type="text" class="work-plan-input" data-work-plan="${escapeHTML(it.p.id)}" placeholder="Today's plan…" value=""></span>`
           : '';
         const invChips = (it.kind === 'inv')
           ? `<span class="work-inv-chips">${COMMON_INVESTIGATIONS.slice(0,6).map(n=>`<button type="button" class="btn work-inv-chip" data-add-inv="${escapeHTML(it.p.id)}" data-inv-name="${escapeHTML(n)}">${escapeHTML(n)}</button>`).join('')}</span>`
@@ -3705,6 +3813,10 @@ function renderWorklist(){
   if(canUseAi() && planMissingItems.length && !localStorage.getItem(LS_TIP_AI_DRAFT)){
     localStorage.setItem(LS_TIP_AI_DRAFT, '1');
     showToast('Tip: tap ✨ Draft all to auto-write missing plans', { duration: 6000 });
+  }
+  if(isVoicePlanSupported() && planMissingItems.length && !localStorage.getItem(LS_TIP_VOICE_PLAN)){
+    localStorage.setItem(LS_TIP_VOICE_PLAN, '1');
+    setTimeout(()=> showToast('Tip: tap 🎤 to dictate today\'s plan', { duration: 6000 }), 6500);
   }
 
   document.getElementById('worklistBulkPlanBtn')?.addEventListener('click', (e)=>{
@@ -3831,7 +3943,7 @@ function renderWorklist(){
 
   el.querySelectorAll('.work-item').forEach(item=>{
     item.addEventListener('click', (e)=>{
-      if(e.target.closest('[data-work-done], [data-abx-stop], [data-lab-edit], [data-work-plan], [data-add-inv], [data-clear-handover]')) return;
+      if(e.target.closest('[data-work-done], [data-abx-stop], [data-lab-edit], [data-work-plan], [data-voice-plan], [data-ai-draft-plan], [data-add-inv], [data-clear-handover]')) return;
       const id = item.dataset.jump;
       switchView('rounds');
       toggleCardOpen(id);
@@ -3953,6 +4065,7 @@ async function closePatientModal(){
     const ok = await showConfirm('Discard changes?', 'You have unsaved edits in this form.', { confirmLabel: 'Discard', danger: true });
     if(!ok) return;
   }
+  stopVoicePlanDictation();
   document.getElementById('patientModal').classList.remove('active');
   editingPatientId = null;
   modalWorkingData = null;
@@ -4115,7 +4228,7 @@ function renderModalForm(d){
         </select>
         <button type="button" class="btn" id="insertPlanFromTemplateBtn" title="Insert plan text for current POD only">Insert plan</button>
         <button type="button" class="btn primary" id="applyPathwayTemplateBtn" title="Add milestones + insert today's plan">Apply pathway</button>
-        ${aiDraftPlanButtonHtml(d.id, 'modal')}
+        ${planActionButtonsHtml(d.id, 'modal')}
       </div>
       <div id="templateApplyPreview" class="form-hint"></div>
       <textarea id="f_dailyPlan" placeholder="e.g. Dressing check, wrist mobilization, repeat X-ray">${escapeHTML(d.dailyPlan)}</textarea>
@@ -5033,6 +5146,7 @@ function bindPresentationKeyboard(){
 
 function closePresentationMode(){
   document.getElementById('presentationOverlay').classList.remove('active');
+  stopVoicePlanDictation();
   if(window.speechSynthesis) window.speechSynthesis.cancel();
 }
 
