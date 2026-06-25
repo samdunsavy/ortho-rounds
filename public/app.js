@@ -347,7 +347,9 @@ function buildPatientAiSnapshot(p){
   const abx = getAntibioticsCourse(p);
   const yPlan = getYesterdayPlan(p);
   const history = (p.planHistory || []).slice(-2).map(h => ({ date: h.date, text: h.text }));
-  return {
+  const dvtName = (p.dvtProphylaxis || '').trim();
+  const dvtDays = parseTherapyDays(p.dvtDays);
+  const snapshot = {
     bed: p.bed,
     ward: p.ward || getPatientWard(p),
     name: p.name,
@@ -382,6 +384,9 @@ function buildPatientAiSnapshot(p){
     complications: (p.complications || []).map(c => c.type + (c.note ? ': ' + c.note : '')),
     notes: (p.notes || '').trim() || null
   };
+  if(dvtName) snapshot.dvtProphylaxis = dvtName;
+  if(dvtDays) snapshot.dvtDays = dvtDays;
+  return snapshot;
 }
 
 function collectHandoverAiPatients(){

@@ -48,7 +48,8 @@ export function sanitizePatientSnapshot(p){
     'bed', 'ward', 'name', 'age', 'sex', 'status', 'diagnosis', 'procedure', 'surgeon', 'implant',
     'surgeryDate', 'admissionDate', 'dailyPlan', 'dailyPlanDate', 'handoverPin', 'handoverNote',
     'clinicalDay', 'pod', 'labsLine', 'yesterdayPlan', 'planHistory', 'investigations',
-    'fitness', 'milestonesOverdue', 'milestonesDue', 'therapy', 'antibioticsDay', 'complications', 'notes'
+    'fitness', 'milestonesOverdue', 'milestonesDue', 'therapy', 'antibioticsDay',
+    'dvtProphylaxis', 'dvtDays', 'complications', 'notes'
   ];
   for(const key of allow){
     if(p[key] !== undefined && p[key] !== null && p[key] !== '') out[key] = p[key];
@@ -116,6 +117,9 @@ export async function draftPlan(patient){
 Write today's ward round plan for this patient.
 Use 2–5 short lines in telegraphic style (mobilisation, investigations, antibiotics, discharge planning).
 Reference overdue or due milestones and abnormal labs if present.
+Milestone checklist labels (e.g. "DVT prophylaxis") are tasks to document — do not assume a specific drug unless dvtProphylaxis or dvtDays is in the JSON.
+Do not mention LMWH or DVT prophylaxis unless dvtProphylaxis, dvtDays, or therapy includes it.
+If yesterday's plan mentions DVT/LMWH but those fields are absent today, omit DVT from the new plan.
 If yesterday's plan exists and is still appropriate, evolve it rather than rewriting from scratch.`;
 
   const userContent = `Patient data:\n${JSON.stringify(snapshot, null, 2)}\n\nWrite today's plan.`;
