@@ -1,6 +1,22 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" fill="#2c5f6e"/>
-  <g fill="#ffffff" transform="translate(128,120)">
+  <defs>
+    <linearGradient id="bgm" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3a7a8c"/>
+      <stop offset="0.55" stop-color="#2c5f6e"/>
+      <stop offset="1" stop-color="#1f4651"/>
+    </linearGradient>
+    <radialGradient id="glowm" cx="0.3" cy="0.2" r="0.95">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="bonem" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#e3eef0"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" fill="url(#bgm)"/>
+  <rect width="512" height="512" fill="url(#glowm)"/>
+  <g fill="url(#bonem)" transform="translate(128,120)">
     <rect x="88" y="0" width="48" height="200" rx="24"/>
     <rect x="88" y="160" width="48" height="120" rx="24" transform="rotate(35 112 220)"/>
     <rect x="88" y="160" width="48" height="120" rx="24" transform="rotate(-35 112 220)"/>
