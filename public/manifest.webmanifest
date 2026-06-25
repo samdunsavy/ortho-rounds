@@ -1,0 +1,23 @@
+{
+  "name": "Ortho Rounds",
+  "short_name": "Ortho Rounds",
+  "description": "Self-hosted orthopedic ward rounds and patient tracker.",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f4f5f7",
+  "theme_color": "#2c5f6e",
+  "icons": [
+    {
+      "src": "icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-maskable.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="96" fill="#2c5f6e"/>
+  <g fill="#ffffff" transform="translate(128,96)">
+    <rect x="88" y="0" width="48" height="200" rx="24"/>
+    <rect x="88" y="160" width="48" height="120" rx="24" transform="rotate(35 112 220)"/>
+    <rect x="88" y="160" width="48" height="120" rx="24" transform="rotate(-35 112 220)"/>
+    <rect x="20" y="88" width="184" height="48" rx="24"/>
+  </g>
+  <text x="256" y="430" text-anchor="middle" font-family="system-ui,sans-serif" font-weight="700" font-size="52" fill="#e7f0f0" letter-spacing="6">ORTHO</text>
+</svg>

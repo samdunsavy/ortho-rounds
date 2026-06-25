@@ -1,0 +1,12 @@
+# Local database + secrets — never commit patient data or password hashes
+/data/
+
+# OS / editor noise
+.DS_Store
+node_modules/
+*.log
+.cursor/
+
+# Patient / ward backup exports (may contain PHI)
+*_backup.json
+*_recovered*.json
