@@ -35,6 +35,12 @@ const LS_CONSULTANT_MODE = "ortho_consultantMode";
 const LS_LAST_EXPORT = "ortho_lastExport";
 const LS_BACKUP_NUDGE = "ortho_backupNudge";
 const LS_DARK_MODE = "ortho_darkMode";
+const LS_PG_SCOPE = "ortho_pgScope";
+const LS_READ_ALOUD = "ortho_readAloud";
+const LS_MORNING_VIEW = "ortho_morningView";
+const LS_TIP_MINE_EMPTY = "ortho_tipMineEmpty";
+const LS_TIP_WORKLIST = "ortho_tipWorklist";
+const LS_TIP_PRESENT = "ortho_tipPresent";
 const WARD_META_ID = "__ward_meta__";
 const FILTER_LABELS = {
   all: 'All',
@@ -53,10 +59,11 @@ const LAB_THRESHOLDS = { hb: 100, crp: 10, wcc: 11, creatinine: 120 };
 const PLAN_HISTORY_MAX = 14;
 const FULL_RECONCILE_INTERVAL_MS = 5 * 60 * 1000; // periodic full reconcile
 let idb = null;
-let wardMeta = { handoverNote: '', pgRoster: [], updatedAt: 0 };
+let wardMeta = { handoverNote: '', pgRoster: [], presentedToday: { date: '', ids: [] }, updatedAt: 0 };
 let syncing = false;
 let presentationUnpresentedOnly = localStorage.getItem(LS_PRESENT_UNPRESENTED) === '1';
-let presentationReadAloud = false;
+let presentationReadAloud = localStorage.getItem(LS_READ_ALOUD) === '1';
+let modalBaselineJson = null;
 let bulkSelectMode = false;
 let bulkSelectedIds = new Set();
 let pendingSyncConflicts = [];
@@ -148,18 +155,99 @@ function stripClientFields(rec){
   return out;
 }
 
+function normalizePresentedToday(pt){
+  const today = todayISO();
+  if(!pt || pt.date !== today) return { date: today, ids: [] };
+  return { date: today, ids: Array.isArray(pt.ids) ? [...pt.ids] : [] };
+}
+
+function parseWardMetaFromRecord(metaRec){
+  if(!metaRec) return { handoverNote: '', pgRoster: [], presentedToday: normalizePresentedToday(null), updatedAt: 0 };
+  return {
+    handoverNote: metaRec.handoverNote || '',
+    pgRoster: Array.isArray(metaRec.pgRoster) ? metaRec.pgRoster : [],
+    presentedToday: normalizePresentedToday(metaRec.presentedToday),
+    updatedAt: metaRec.updatedAt || 0
+  };
+}
+
+function mergePresentedToday(a, b){
+  const today = todayISO();
+  const norm = (pt)=> (!pt || pt.date !== today) ? { date: today, ids: [] } : { date: today, ids: [...(pt.ids || [])] };
+  const left = norm(a);
+  const right = norm(b);
+  return { date: today, ids: [...new Set([...left.ids, ...right.ids])] };
+}
+
+function mergeWardMetaFields(local, remote){
+  const lt = Number(local.updatedAt) || 0;
+  const rt = Number(remote.updatedAt) || 0;
+  const base = lt >= rt ? local : remote;
+  const other = lt >= rt ? remote : local;
+  return {
+    handoverNote: (base.handoverNote || '').trim() ? base.handoverNote : (other.handoverNote || ''),
+    pgRoster: (base.pgRoster && base.pgRoster.length) ? base.pgRoster : (other.pgRoster || []),
+    presentedToday: mergePresentedToday(local.presentedToday, remote.presentedToday),
+    updatedAt: Math.max(lt, rt)
+  };
+}
+
+async function mergeWardMetaRecord(remote){
+  const cur = await cacheGet(WARD_META_ID);
+  let merged;
+  if(!cur){
+    merged = parseWardMetaFromRecord(remote);
+    merged._dirty = false;
+  }else if(cur._dirty){
+    merged = mergeWardMetaFields(parseWardMetaFromRecord(cur), parseWardMetaFromRecord(remote));
+    merged._dirty = true;
+  }else if(Number(remote.updatedAt) >= (Number(cur.updatedAt) || 0)){
+    merged = mergeWardMetaFields(parseWardMetaFromRecord(cur), parseWardMetaFromRecord(remote));
+    merged._dirty = false;
+  }else return;
+  const rec = Object.assign({ id: WARD_META_ID, deleted: false }, merged);
+  await cachePutRaw(rec);
+  wardMeta = parseWardMetaFromRecord(rec);
+}
+
+function migratePresentedFromLocalStorage(){
+  try{
+    const raw = JSON.parse(localStorage.getItem(LS_PRESENTED) || '{}');
+    if(raw.date === todayISO() && Array.isArray(raw.ids) && raw.ids.length){
+      const cur = normalizePresentedToday(wardMeta.presentedToday);
+      wardMeta.presentedToday = mergePresentedToday(cur, raw);
+      void saveWardMeta({ presentedToday: wardMeta.presentedToday });
+    }
+    localStorage.removeItem(LS_PRESENTED);
+  }catch{ /* ignore */ }
+}
+
 async function reloadFromCache(){
   const all = await cacheGetAll();
   const metaRec = all.find(r => r && r.id === WARD_META_ID);
-  wardMeta = metaRec
-    ? { handoverNote: metaRec.handoverNote || '', updatedAt: metaRec.updatedAt || 0 }
-    : { handoverNote: '', updatedAt: 0 };
+  wardMeta = parseWardMetaFromRecord(metaRec);
+  migratePresentedFromLocalStorage();
+  const prevModalUpdatedAt = modalWorkingData?.updatedAt;
+  const editingId = editingPatientId;
   patients = all
     .filter(r => r && r.id && !r.deleted && !String(r.id).startsWith('__'))
     .map(r => { const o = Object.assign({}, r); delete o._dirty; return o; });
   const libRec = all.find(r => r && r.id === TEMPLATE_LIBRARY_ID);
   loadTemplateLibraryFromRecord(libRec);
   patients.forEach(normalizePatientChecklists);
+  if(editingId && modalWorkingData){
+    const fresh = patients.find(p => p.id === editingId);
+    if(fresh && Number(fresh.updatedAt) > Number(prevModalUpdatedAt || 0)){
+      modalWorkingData = JSON.parse(JSON.stringify(fresh));
+      const body = document.getElementById('modalBody');
+      if(body && document.getElementById('patientModal')?.classList.contains('active')){
+        body.innerHTML = renderModalForm(modalWorkingData);
+        bindModalDynamicLists();
+        snapshotModalBaseline();
+        showToast('Patient updated elsewhere — form refreshed', { duration: 5000 });
+      }
+    }
+  }
 }
 
 // One-time migration: stamp old local-only records so they sync to the server.
@@ -294,6 +382,10 @@ function shouldFullReconcile(force){
 async function mergeServerRecords(serverRecords){
   for(const rec of serverRecords){
     if(!rec || typeof rec.id !== 'string') continue;
+    if(rec.id === WARD_META_ID){
+      await mergeWardMetaRecord(rec);
+      continue;
+    }
     const cur = await cacheGet(rec.id);
     if(!cur){
       rec._dirty = false;
@@ -747,6 +839,7 @@ function downloadJSON(obj, filename){
 /* ---------------- patient data shape (defaults) ---------------- */
 
 function blankPatient(){
+  const ini = getPgInitials();
   return {
     id: uid(),
     name: '', age: '', sex: 'M', bed: '', ward: '', uhid: '',
@@ -761,7 +854,7 @@ function blankPatient(){
     dailyPlanDate: '',   // ISO date the current plan applies to
     planHistory: [],     // { date, text, by }
     handoverNote: '',
-    assignedPg: '',
+    assignedPg: ini || '',
     postOpChecks: [],    // { id, label, duePod, status, doneAt }
     dischargeChecks: [], // { id, label, status, doneAt }
     complications: [],   // { type, date, note }
@@ -969,6 +1062,7 @@ function isConsultantMode(){
 
 function setConsultantMode(on){
   localStorage.setItem(LS_CONSULTANT_MODE, on ? '1' : '0');
+  if(!on && location.hash === '#consultant') history.replaceState(null, '', location.pathname + location.search);
   document.body.classList.toggle('consultant-mode', on);
   const btn = document.getElementById('consultantModeBtn');
   if(btn) btn.classList.toggle('active', on);
@@ -1268,8 +1362,43 @@ function showConflictCompare(patientId, conflict){
         localP.statusUpdatedAt = Date.now();
       }
       void persistAndRerender(localP);
+    }else if(choice.action === 'local'){
+      localP.updatedAt = Date.now();
+      void persistAndRerender(localP).then(()=> showToast('Kept your version — will sync'));
     }
   });
+}
+
+function isPgScopeMine(){
+  const scope = localStorage.getItem(LS_PG_SCOPE);
+  if(scope === 'all') return false;
+  if(scope === 'mine') return true;
+  return !!getPgInitials();
+}
+
+function setPgScope(mine){
+  localStorage.setItem(LS_PG_SCOPE, mine ? 'mine' : 'all');
+  if(mine && getPgInitials()) applyFilter('mine');
+  updatePgScopeUI();
+  renderAll();
+}
+
+function updatePgScopeUI(){
+  const mine = isPgScopeMine();
+  ['pgScopeBtn', 'pgScopeBtnMobile'].forEach(id=>{
+    const btn = document.getElementById(id);
+    if(!btn) return;
+    btn.textContent = mine ? 'My work' : 'Whole ward';
+    btn.classList.toggle('active', mine);
+    btn.title = mine ? 'Showing your patients — tap for whole ward' : 'Showing whole ward — tap for your patients';
+  });
+}
+
+function getPgScopedPatients(items){
+  if(!isPgScopeMine()) return items;
+  const ini = getPgInitials();
+  if(!ini) return items;
+  return items.filter(p => (p.assignedPg || '').toUpperCase() === ini);
 }
 
 function patientNeedsAttention(p){
@@ -1278,7 +1407,8 @@ function patientNeedsAttention(p){
   return inList(w.pendingInvItems) || inList(w.abnormalItems) || inList(w.pendingFitItems)
     || inList(w.handoverItems) || inList(w.postOpOverdueItems) || inList(w.postOpDueItems)
     || inList(w.planMissingItems) || inList(w.dischargeIncompleteItems)
-    || inList(w.abxLastDayItems) || inList(w.abxOverdueItems);
+    || inList(w.labAbnormalItems)
+    || inList(w.abxLastDayItems) || inList(w.abxOverdueItems) || inList(w.abxEndingSoonItems);
 }
 
 function getNextDueMilestones(p, limit){
@@ -1363,9 +1493,13 @@ function restoreSavedFilter(){
     });
   }else if(getPgInitials()){
     currentFilter = 'mine';
+    localStorage.setItem(LS_FILTER, 'mine');
     document.querySelectorAll('.filter-chip').forEach(c=>{
       c.classList.toggle('active', c.dataset.filter === 'mine');
     });
+  }
+  if(!localStorage.getItem(LS_PG_SCOPE) && getPgInitials()){
+    localStorage.setItem(LS_PG_SCOPE, 'mine');
   }
   updateFilterUI();
 }
@@ -1374,7 +1508,14 @@ function maybeAutoSwitchWorklist(){
   const today = todayISO();
   if(localStorage.getItem(LS_AUTO_WORKLIST) === today) return;
   localStorage.setItem(LS_AUTO_WORKLIST, today);
-  switchView('worklist');
+  const pending = countPendingItems();
+  if(pending > 0){
+    switchView('worklist');
+    return;
+  }
+  const saved = localStorage.getItem(LS_MORNING_VIEW);
+  if(saved === 'worklist') switchView('worklist');
+  else if(saved === 'rounds') switchView('rounds');
 }
 
 async function runOnboarding(){
@@ -1391,13 +1532,31 @@ async function runOnboarding(){
   if(filterChoice && filterChoice.action !== 'cancel'){
     currentFilter = filterChoice.action;
     localStorage.setItem(LS_FILTER, currentFilter);
+    if(filterChoice.action === 'mine') localStorage.setItem(LS_PG_SCOPE, 'mine');
     document.querySelectorAll('.filter-chip').forEach(c=>{
       c.classList.toggle('active', c.dataset.filter === currentFilter);
     });
   }else if(ini){
     currentFilter = 'mine';
     localStorage.setItem(LS_FILTER, 'mine');
+    localStorage.setItem(LS_PG_SCOPE, 'mine');
   }
+  const morningChoice = await showAppDialog({
+    title: 'Morning start',
+    message: 'Where do you usually begin your day?',
+    buttons: [
+      { label: 'Worklist (inbox)', value: 'worklist', primary: true },
+      { label: 'Rounds list', value: 'rounds' }
+    ]
+  });
+  if(morningChoice && morningChoice.action !== 'cancel'){
+    localStorage.setItem(LS_MORNING_VIEW, morningChoice.action);
+  }
+  await showAppDialog({
+    title: 'Quick tips',
+    message: '• Worklist tab — clear tasks inline (Done, plan, labs)\n• Collapsed card — type plan, tap milestones & PG chip\n• Long-press + to clone last patient\n• Present — ward rounds mode',
+    buttons: [{ label: 'Got it', value: 'ok', primary: true }]
+  });
   await showAppDialog({
     title: 'Tip: use on your phone',
     message: 'Open the network URL printed when the server starts, then Add to Home Screen for quick access offline.',
@@ -1452,18 +1611,26 @@ async function uploadPatientImage(patientId, dataURL){
 
 async function saveWardMeta(partial){
   wardMeta = Object.assign({}, wardMeta, partial, { updatedAt: Date.now() });
+  if(wardMeta.presentedToday) wardMeta.presentedToday = normalizePresentedToday(wardMeta.presentedToday);
   const rec = Object.assign({ id: WARD_META_ID, deleted: false, handoverNote: wardMeta.handoverNote || '' }, wardMeta);
   await cachePut(rec, true);
   scheduleSync();
 }
 
-async function loadWardMetaFromCache(){
-  const rec = await cacheGet(WARD_META_ID);
-  if(rec) wardMeta = {
-    handoverNote: rec.handoverNote || '',
-    pgRoster: Array.isArray(rec.pgRoster) ? rec.pgRoster : [],
-    updatedAt: rec.updatedAt || 0
-  };
+function getPresentedState(){
+  const pt = normalizePresentedToday(wardMeta.presentedToday);
+  return new Set(pt.ids || []);
+}
+
+async function markPresented(id){
+  const pt = normalizePresentedToday(wardMeta.presentedToday);
+  if(!pt.ids.includes(id)) pt.ids.push(id);
+  wardMeta.presentedToday = pt;
+  await saveWardMeta({ presentedToday: pt });
+}
+
+function isPresented(id){
+  return getPresentedState().has(id);
 }
 
 function getFilteredRoundsItems(){
@@ -1527,13 +1694,15 @@ function updateStickyHeaderOffset(){
 
 function buildExportPatientList(){
   const list = patients.map(p => Object.assign({}, p));
-  if((wardMeta.handoverNote || '').trim()){
-    list.push({
+  const hasWardMeta = (wardMeta.handoverNote || '').trim()
+    || (wardMeta.pgRoster || []).length
+    || (wardMeta.presentedToday?.ids || []).length;
+  if(hasWardMeta){
+    list.push(Object.assign({
       id: WARD_META_ID,
-      handoverNote: wardMeta.handoverNote,
-      updatedAt: wardMeta.updatedAt || Date.now(),
-      deleted: false
-    });
+      deleted: false,
+      updatedAt: wardMeta.updatedAt || Date.now()
+    }, wardMeta));
   }
   if((wardTemplateLibrary.templates || []).length || (wardTemplateLibrary.disabledIds || []).length){
     list.push(Object.assign({
@@ -1564,23 +1733,6 @@ function groupPatientsByWard(items){
     groups.get(w).push(p);
   }
   return [...groups.entries()].sort((a,b)=> a[0].localeCompare(b[0], undefined, {numeric:true}));
-}
-
-function getPresentedState(){
-  try{
-    const raw = JSON.parse(localStorage.getItem(LS_PRESENTED) || '{}');
-    if(raw.date === todayISO()) return new Set(raw.ids || []);
-  }catch{ /* ignore */ }
-  return new Set();
-}
-
-function markPresented(id){
-  const ids = [...getPresentedState(), id];
-  localStorage.setItem(LS_PRESENTED, JSON.stringify({ date: todayISO(), ids: [...ids] }));
-}
-
-function isPresented(id){
-  return getPresentedState().has(id);
 }
 
 /* ---------------- writes (cache + sync) ---------------- */
@@ -1733,8 +1885,8 @@ function bindEvents(){
   });
   document.getElementById('addPatientFab').addEventListener('mouseup', ()=>{ if(fabTimer){ clearTimeout(fabTimer); fabTimer = null; }});
   document.getElementById('addPatientFab').addEventListener('mouseleave', ()=>{ if(fabTimer){ clearTimeout(fabTimer); fabTimer = null; }});
-  document.getElementById('modalCloseBtn').addEventListener('click', closePatientModal);
-  document.getElementById('cancelModalBtn').addEventListener('click', closePatientModal);
+  document.getElementById('modalCloseBtn').addEventListener('click', ()=> void closePatientModal());
+  document.getElementById('cancelModalBtn').addEventListener('click', ()=> void closePatientModal());
   document.getElementById('savePatientBtn').addEventListener('click', savePatientFromModal);
   document.getElementById('deletePatientBtn').addEventListener('click', deleteCurrentPatient);
   document.getElementById('exportBtn').addEventListener('click', exportData);
@@ -1756,17 +1908,34 @@ function bindEvents(){
     document.getElementById('moreMenuPanel')?.classList.toggle('open');
   });
   document.addEventListener('click', ()=> document.getElementById('moreMenuPanel')?.classList.remove('open'));
+  document.getElementById('pgScopeBtn')?.addEventListener('click', ()=> setPgScope(!isPgScopeMine()));
+  document.getElementById('pgScopeBtnMobile')?.addEventListener('click', ()=> setPgScope(!isPgScopeMine()));
+  document.getElementById('bulkBarApplyBtn')?.addEventListener('click', ()=> void applyBulkPlan());
+  document.getElementById('bulkBarCancelBtn')?.addEventListener('click', ()=>{
+    bulkSelectMode = false;
+    bulkSelectedIds.clear();
+    document.getElementById('bulkPlanBtn')?.classList.remove('active');
+    updateBulkBar();
+    renderRounds();
+  });
   document.getElementById('presentUnpresentedOnly')?.addEventListener('change', (e)=>{
     presentationUnpresentedOnly = e.target.checked;
     localStorage.setItem(LS_PRESENT_UNPRESENTED, presentationUnpresentedOnly ? '1' : '0');
+    if(document.getElementById('presentationOverlay')?.classList.contains('active')){
+      presentationIndex = 0;
+      renderPresentationSlide();
+    }
   });
   const unpresCb = document.getElementById('presentUnpresentedOnly');
   if(unpresCb) unpresCb.checked = presentationUnpresentedOnly;
   document.getElementById('presentationReadAloud')?.addEventListener('change', (e)=>{
     presentationReadAloud = e.target.checked;
+    localStorage.setItem(LS_READ_ALOUD, presentationReadAloud ? '1' : '0');
     if(presentationReadAloud) speakCurrentPresentation();
     else if(window.speechSynthesis) window.speechSynthesis.cancel();
   });
+  const readAloudCb = document.getElementById('presentationReadAloud');
+  if(readAloudCb) readAloudCb.checked = presentationReadAloud;
   document.getElementById('pgInitialsInput').addEventListener('change', (e)=>{
     localStorage.setItem(LS_PG_INITIALS, (e.target.value || '').trim().toUpperCase().slice(0, 6));
     updatePgInitialsUI();
@@ -1816,6 +1985,8 @@ function switchView(name){
 
 function renderAll(){
   updateFilterUI();
+  updatePgScopeUI();
+  updateBulkBar();
   renderSummaryStrip();
   renderRounds();
   renderWorklist();
@@ -1823,6 +1994,14 @@ function renderAll(){
   updateCounts();
   renderWardHandoverBanner();
   updateStickyHeaderOffset();
+  maybeShowContextualTips();
+}
+
+function maybeShowContextualTips(){
+  if(currentFilter === 'mine' && !getFilteredRoundsItems().length && getPgInitials() && !localStorage.getItem(LS_TIP_MINE_EMPTY)){
+    localStorage.setItem(LS_TIP_MINE_EMPTY, '1');
+    showToast('Tap the PG chip on any card to assign yourself', { duration: 7000 });
+  }
 }
 
 function updateCounts(){
@@ -1835,10 +2014,8 @@ function updateCounts(){
 
 function getSummaryCounts(){
   const w = collectWorklistData();
-  const active = patients.filter(p => p.status !== 'discharged');
-  const urgentIds = new Set();
-  [...w.postOpOverdueItems, ...w.abxOverdueItems, ...w.abxLastDayItems, ...w.labAbnormalItems, ...w.abnormalItems]
-    .forEach(it => urgentIds.add(it.p.id));
+  const active = getPgScopedPatients(patients.filter(p => p.status !== 'discharged'));
+  const urgent = active.filter(p => patientNeedsAttention(p)).length;
   const t = todayISO();
   const otToday = active.filter(p =>
     p.surgeryDate === t || (p.status === 'postop' && p.surgeryDate && calcPOD(p.surgeryDate) === 0)
@@ -1846,7 +2023,7 @@ function getSummaryCounts(){
   const unpresented = active.filter(p => !isPresented(p.id)).length;
   return {
     needsPlan: w.planMissingItems.length,
-    urgent: urgentIds.size,
+    urgent,
     otToday,
     unpresented
   };
@@ -2105,18 +2282,18 @@ function countPendingItems(){
     + w.handoverItems.length
     + w.postOpOverdueItems.length
     + w.postOpDueItems.length
-    + w.postOpUpcomingItems.length
     + w.dischargeIncompleteItems.length
     + w.planMissingItems.length
     + w.labAbnormalItems.length
     + w.abxLastDayItems.length
     + w.abxOverdueItems.length
+    + w.abxEndingSoonItems.length
     + (w.hasUnitHandover ? 1 : 0);
 }
 
 /** Shared worklist buckets — keep tab badge and worklist view in sync. */
 function collectWorklistData(){
-  const active = patients.filter(p=>p.status!=='discharged');
+  const active = getPgScopedPatients(patients.filter(p=>p.status!=='discharged'));
 
   const pendingInvItems = [];
   const abnormalItems = [];
@@ -2255,9 +2432,20 @@ function renderRounds(){
     if(currentFilter==='mine'){
       const ini = getPgInitials();
       msg = ini
-        ? `No patients assigned to ${ini}. Open a patient → Edit → Assigned PG.`
+        ? `No patients assigned to ${ini} yet.`
         : 'Set your PG initials in the top bar, then assign patients to yourself.';
-    }else if(currentFilter==='needsplan'){
+      list.innerHTML = `<div class="empty-state"><div class="big">${emptyStateSvg('bed')}</div><div class="msg">${escapeHTML(msg)}</div>
+        <div class="empty-actions">
+          <button type="button" class="btn primary pressable" data-empty-action="showall">Show whole ward</button>
+          <button type="button" class="btn pressable" data-empty-action="tip-pg">How to assign patients</button>
+        </div></div>`;
+      list.querySelector('[data-empty-action="showall"]')?.addEventListener('click', ()=> applyFilter('all'));
+      list.querySelector('[data-empty-action="tip-pg"]')?.addEventListener('click', ()=>{
+        showToast('Tap the PG chip on any patient card to assign yourself');
+      });
+      return;
+    }
+    if(currentFilter==='needsplan'){
       msg = 'All patients have a plan for today.';
     }else if(currentFilter==='attention'){
       msg = 'No patients need attention right now.';
@@ -2450,6 +2638,8 @@ function renderCardQuickBar(p, includePlan = true){
   const planStale = p.dailyPlan && !hasPlanToday(p);
   const pgLabel = p.assignedPg || 'PG';
   const statusLabel = STATUS_LABELS[p.status] || 'Status';
+  const yPlan = getYesterdayPlan(p);
+  const copyLabel = planStale && yPlan ? 'Use yesterday' : 'Copy yesterday';
   return `
     <div class="card-quick-bar" data-id="${p.id}">
       ${includePlan ? `<input type="text" class="card-plan-input ${planStale ? 'stale' : ''}" data-action="save-plan" data-id="${p.id}"
@@ -2462,7 +2652,7 @@ function renderCardQuickBar(p, includePlan = true){
       </div>
       <button type="button" class="status-badge clickable ${p.status||'preop'}" data-action="cycle-status" data-id="${p.id}">${statusLabel}</button>
       <button type="button" class="pg-chip" data-action="cycle-pg" data-id="${p.id}">${escapeHTML(pgLabel)}</button>
-      <button type="button" class="btn card-copy-plan" data-action="copy-yesterday-plan" data-id="${p.id}" title="Copy yesterday's plan">↶</button>
+      ${yPlan ? `<button type="button" class="btn card-copy-plan" data-action="copy-yesterday-plan" data-id="${p.id}" title="Copy yesterday's plan"><span class="copy-plan-label">${copyLabel}</span><span class="copy-plan-icon">↶</span></button>` : ''}
       ${renderAbxQuickChip(p)}
     </div>`;
 }
@@ -2518,7 +2708,7 @@ function renderCard(p){
           <div class="small-muted">${escapeHTML(p.bed||'—')}${dayInfo ? ' · '+dayInfo.prefix+' '+dayInfo.day : ''}</div>
         </div>
         ${renderCardBody(p)}
-        <div class="card-quick-footer">${renderCardQuickBar(p, false)}</div>
+        <div class="card-quick-footer">${renderCardQuickBar(p, true)}</div>
       </div>` : ''}</div>
   </div>`;
 }
@@ -2763,6 +2953,7 @@ function handleCardAction(action, id, el){
   if(action==='bulk-toggle'){
     if(bulkSelectedIds.has(id)) bulkSelectedIds.delete(id);
     else bulkSelectedIds.add(id);
+    updateBulkBar();
     renderRounds();
     return;
   }
@@ -2827,6 +3018,7 @@ function handleCardAction(action, id, el){
     if(p.status !== 'fordischarge'){
       p.statusBeforeDischarge = p.status;
       p.status = 'fordischarge';
+      p.statusUpdatedAt = Date.now();
       applyDischargeTemplate(p);
       persistAndRerender(p);
       showToast('Marked for discharge');
@@ -2835,6 +3027,7 @@ function handleCardAction(action, id, el){
   if(action==='unmark-fordischarge'){
     p.status = p.statusBeforeDischarge || (p.surgeryDate ? 'postop' : 'preop');
     if(!p.statusBeforeDischarge && !p.surgeryDate && (p.postOpChecks||[]).length) p.status = 'conservative';
+    p.statusUpdatedAt = Date.now();
     delete p.statusBeforeDischarge;
     persistAndRerender(p);
     showToast('Removed from discharge list');
@@ -2871,6 +3064,7 @@ function handleCardAction(action, id, el){
   if(action==='mark-postop'){
     void (async ()=>{
       p.status='postop';
+      p.statusUpdatedAt = Date.now();
       if(!p.surgeryDate) p.surgeryDate = todayISO();
       if(!p.postOpChecks || !p.postOpChecks.length){
         const suggestions = suggestTemplatesForPatient(p, 'postop_pathway', 3);
@@ -2957,9 +3151,8 @@ async function clonePatientRecord(p){
     const tpl = suggestTemplatesForPatient(copy, 'postop_pathway', 1)[0];
     if(tpl) applyTemplateToPatient(copy, tpl.id, { merge: false, fillPlan: 'none' });
   }
-  await savePatient(copy);
   openPatientModal(copy);
-  showToast('Patient cloned — update bed/name');
+  showToast('Cloned — update bed/name and Save');
 }
 
 async function persistAndRerender(p){
@@ -2998,9 +3191,13 @@ async function confirmImageType(type){
   if(!pendingImageData) return;
   const p = patients.find(x=>x.id===pendingImageData.patientId);
   if(!p){ closeImageTypeModal(); return; }
-  const img = { id: uid(), type, dataURL: pendingImageData.compressed, date: todayISO() };
   const url = await uploadPatientImage(p.id, pendingImageData.compressed);
-  if(url){ img.url = url; delete img.dataURL; }
+  if(!url){
+    showToast('Image upload failed — check connection');
+    closeImageTypeModal();
+    return;
+  }
+  const img = { id: uid(), type, url, date: todayISO() };
   p.images = p.images || [];
   p.images.push(img);
   try{
@@ -3033,25 +3230,36 @@ function renderWorklist(){
     abxLastDayItems, abxOverdueItems, abxEndingSoonItems, hasUnitHandover
   } = w;
 
-  function section(title, items, emoji, urgency){
+  function section(title, items, emoji, urgency, opts){
+    opts = opts || {};
     if(!items.length) return '';
     const urgClass = urgency ? ` work-${urgency}` : '';
-    return `<div class="work-section${urgClass}"><h3>${emoji} ${title} <span class="small-muted">(${items.length})</span></h3>
+    const headerExtra = opts.headerAction || '';
+    return `<div class="work-section${urgClass}"><h3>${emoji} ${title} <span class="small-muted">(${items.length})</span>${headerExtra}</h3>
       ${items.map(it=>{
         const doneBtn = (it.kind === 'postop' && it.checkId)
           ? `<button type="button" class="btn primary work-done-btn pressable" data-work-done="${escapeHTML(it.p.id)}" data-check-id="${escapeHTML(it.checkId)}">Done</button>`
           : (it.kind === 'abx' && it.abxAction === 'stop')
           ? `<button type="button" class="btn primary work-abx-stop pressable" data-abx-stop="${escapeHTML(it.p.id)}">Stopped</button>`
+          : (it.kind === 'handover')
+          ? `<button type="button" class="btn work-clear-handover pressable" data-clear-handover="${escapeHTML(it.p.id)}">Clear</button>`
           : '';
         const labEdit = (it.kind === 'lab')
           ? `<input type="text" class="work-lab-input ${labValueClass(it.labKey, it.labVal)}" data-lab-edit="${escapeHTML(it.p.id)}" data-lab-key="${escapeHTML(it.labKey)}" value="${escapeHTML(it.labVal||'')}" inputmode="decimal">`
           : '';
+        const planEdit = (it.kind === 'plan')
+          ? `<input type="text" class="work-plan-input" data-work-plan="${escapeHTML(it.p.id)}" placeholder="Today's plan…" value="">`
+          : '';
+        const invChips = (it.kind === 'inv')
+          ? `<span class="work-inv-chips">${COMMON_INVESTIGATIONS.slice(0,6).map(n=>`<button type="button" class="btn work-inv-chip" data-add-inv="${escapeHTML(it.p.id)}" data-inv-name="${escapeHTML(n)}">${escapeHTML(n)}</button>`).join('')}</span>`
+          : '';
         const pg = (it.p.assignedPg || '').trim();
         const pgAvatar = pg ? `<span class="work-pg-avatar" title="PG ${escapeHTML(pg)}">${escapeHTML(pg.slice(0,2).toUpperCase())}</span>` : '';
-        return `<div class="work-item pressable" data-jump="${it.p.id}">
+        const whatContent = labEdit || planEdit || invChips || escapeHTML(it.text);
+        return `<div class="work-item pressable" data-jump="${it.p.id}" data-jump-kind="${it.kind || ''}">
           <span class="work-item-icon">${workItemIcon(it.kind, urgency)}</span>
-          <div class="work-item-main"><div class="who">${escapeHTML(it.p.name)} <span class="small-muted">· Ward ${escapeHTML(it.p.bed||'—')}</span></div>
-          <div class="what">${labEdit || escapeHTML(it.text)}</div></div>
+          <div class="work-item-main"><div class="who">${escapeHTML(it.p.name)} <span class="small-muted">· ${escapeHTML(it.p.bed||'—')}</span></div>
+          <div class="what">${whatContent}</div></div>
           ${pgAvatar}
           ${doneBtn}
         </div>`;
@@ -3059,26 +3267,42 @@ function renderWorklist(){
     </div>`;
   }
 
+  const planHeaderAction = planMissingItems.length
+    ? ` <button type="button" class="btn btn-sm work-bulk-plan-entry" id="worklistBulkPlanBtn">Bulk plan</button>`
+    : '';
+
   const html = [
     hasUnitHandover ? `<div class="work-section work-warn ward-meta-handover"><h3>Unit handover</h3><div class="notes-box">${escapeHTML(wardMeta.handoverNote)}</div><button type="button" class="btn section-action" id="clearWardHandoverBtn">Clear unit handover</button></div>` : '',
-    section('Handover flags', handoverItems, '↪', 'warn'),
+    section('Handover flags', handoverItems.map(it => Object.assign({}, it, { kind: 'handover' })), '↪', 'warn'),
     section('Antibiotics — stop today', abxLastDayItems, '💊', 'urgent'),
     section('Antibiotics — stop overdue', abxOverdueItems, '💊', 'urgent'),
     section('Antibiotics — ending tomorrow', abxEndingSoonItems, '💊', 'warn'),
     section('Abnormal labs (structured)', labAbnormalItems, '🧪', 'urgent'),
     section('Abnormal results — needs review', abnormalItems, '△', 'urgent'),
-    section('Pending investigations', pendingInvItems, '⚠', 'warn'),
+    section('Pending investigations', pendingInvItems.map(it => Object.assign({}, it, { kind: 'inv' })), '⚠', 'warn'),
     section('Pending fitness clearance', pendingFitItems, '⚠', 'warn'),
     section('Post-op milestones overdue', postOpOverdueItems, '⏱', 'urgent'),
     section('Post-op milestones due', postOpDueItems, '◷', 'warn'),
     section('Post-op milestones upcoming', postOpUpcomingItems, '○', 'info'),
     section('Discharge checklist incomplete', dischargeIncompleteItems, '☐', 'warn'),
-    section('Plan not entered for today', planMissingItems, '📝', 'warn'),
+    section('Plan not entered for today', planMissingItems.map(it => Object.assign({}, it, { kind: 'plan' })), '📝', 'warn', { headerAction: planHeaderAction }),
     section("Today's plan", planTodayItems, '🗒️', 'good'),
     section('Ready for discharge', readyForDischarge, '✓', 'good'),
   ].join('');
 
   el.innerHTML = html || `<div class="empty-state"><div class="big">${emptyStateSvg('check')}</div><div class="msg">Nothing pending. All caught up.</div></div>`;
+
+  if(!localStorage.getItem(LS_TIP_WORKLIST) && html){
+    localStorage.setItem(LS_TIP_WORKLIST, '1');
+    showToast('Tip: tap Done inline — no need to open each patient', { duration: 6000 });
+  }
+
+  document.getElementById('worklistBulkPlanBtn')?.addEventListener('click', (e)=>{
+    e.stopPropagation();
+    if(!bulkSelectMode) toggleBulkSelectMode();
+    switchView('rounds');
+    showToast('Select patients, then Apply plan in the bar below');
+  });
 
   const clearBtn = document.getElementById('clearWardHandoverBtn');
   if(clearBtn){
@@ -3147,19 +3371,66 @@ function renderWorklist(){
     });
   });
 
+  el.querySelectorAll('[data-work-plan]').forEach(inp=>{
+    inp.addEventListener('click', e=> e.stopPropagation());
+    inp.addEventListener('keydown', (e)=>{
+      if(e.key === 'Enter'){ e.preventDefault(); inp.blur(); }
+    });
+    inp.addEventListener('blur', async ()=>{
+      const p = patients.find(x=>x.id===inp.dataset.workPlan);
+      if(!p) return;
+      const val = inp.value.trim();
+      if(!val) return;
+      saveCardPlan(p, val);
+      await persistAndRerender(p);
+      showToast('Plan saved');
+    });
+  });
+
+  el.querySelectorAll('[data-add-inv]').forEach(btn=>{
+    btn.addEventListener('click', async (e)=>{
+      e.stopPropagation();
+      const p = patients.find(x => x.id === btn.dataset.addInv);
+      if(!p) return;
+      const name = btn.dataset.invName;
+      p.investigations = p.investigations || [];
+      if(!p.investigations.some(i => i.name === name)){
+        p.investigations.push({ name, status: 'pending', value: '' });
+        await persistAndRerender(p);
+        showToast(`Added ${name}`);
+      }
+    });
+  });
+
+  el.querySelectorAll('[data-clear-handover]').forEach(btn=>{
+    btn.addEventListener('click', async (e)=>{
+      e.stopPropagation();
+      const p = patients.find(x => x.id === btn.dataset.clearHandover);
+      if(!p) return;
+      const prev = p.handoverNote || '';
+      p.handoverNote = '';
+      await persistAndRerender(p);
+      showToast('Handover cleared', { undo: async ()=>{ p.handoverNote = prev; await persistAndRerender(p); } });
+    });
+  });
+
   el.querySelectorAll('.work-item').forEach(item=>{
     item.addEventListener('click', (e)=>{
-      if(e.target.closest('[data-work-done]')) return;
+      if(e.target.closest('[data-work-done], [data-abx-stop], [data-lab-edit], [data-work-plan], [data-add-inv], [data-clear-handover]')) return;
       const id = item.dataset.jump;
       switchView('rounds');
-      openCardId = id;
-      currentFilter = 'all';
-      document.querySelectorAll('.filter-chip').forEach(c=>c.classList.toggle('active', c.dataset.filter==='all'));
-      renderRounds();
+      toggleCardOpen(id);
+      updateFilterUI();
       setTimeout(()=>{
         const card = document.querySelector(`.card[data-id="${id}"]`);
-        if(card) card.scrollIntoView({behavior:'smooth', block:'center'});
-      }, 60);
+        if(card){
+          card.scrollIntoView({behavior:'smooth', block:'center'});
+          if(item.dataset.jumpKind === 'plan'){
+            const planInp = card.querySelector('.card-plan-input, .card-plan-edit');
+            if(planInp) planInp.focus();
+          }
+        }
+      }, 80);
     });
   });
 }
@@ -3225,12 +3496,52 @@ function openPatientModal(p){
   document.getElementById('modalBody').innerHTML = renderModalForm(modalWorkingData);
   bindModalDynamicLists();
   document.getElementById('patientModal').classList.add('active');
+  requestAnimationFrame(()=> snapshotModalBaseline());
 }
 
-function closePatientModal(){
+function readModalFieldsToObject(){
+  const d = getWorkingData();
+  d.name = document.getElementById('f_name')?.value.trim() || '';
+  d.bed = document.getElementById('f_bed')?.value.trim() || '';
+  d.ward = document.getElementById('f_ward')?.value.trim() || '';
+  d.assignedPg = document.getElementById('f_assignedPg')?.value.trim().toUpperCase() || '';
+  d.diagnosis = document.getElementById('f_diagnosis')?.value.trim() || '';
+  d.status = document.getElementById('f_status')?.value || d.status;
+  d.dailyPlan = document.getElementById('f_dailyPlan')?.value.trim() || '';
+  d.handoverNote = document.getElementById('f_handoverNote')?.value.trim() || '';
+  d.notes = document.getElementById('f_notes')?.value.trim() || '';
+  flushChecklistsFromModal(d);
+  return d;
+}
+
+function snapshotModalBaseline(){
+  try{
+    if(!document.getElementById('patientModal')?.classList.contains('active')) return;
+    modalBaselineJson = JSON.stringify(readModalFieldsToObject());
+  }catch{
+    modalBaselineJson = modalWorkingData ? JSON.stringify(modalWorkingData) : null;
+  }
+}
+
+function isModalDirty(){
+  if(!modalWorkingData || !document.getElementById('patientModal')?.classList.contains('active')) return false;
+  if(!modalBaselineJson) return false;
+  try{
+    return JSON.stringify(readModalFieldsToObject()) !== modalBaselineJson;
+  }catch{
+    return false;
+  }
+}
+
+async function closePatientModal(){
+  if(isModalDirty()){
+    const ok = await showConfirm('Discard changes?', 'You have unsaved edits in this form.', { confirmLabel: 'Discard', danger: true });
+    if(!ok) return;
+  }
   document.getElementById('patientModal').classList.remove('active');
   editingPatientId = null;
   modalWorkingData = null;
+  modalBaselineJson = null;
   modalSuppressAutoTemplate = false;
 }
 
@@ -3697,7 +4008,7 @@ function bindModalDynamicLists(){
   document.getElementById('applyPostOpTemplateBtn').addEventListener('click', ()=>{
     const id = document.getElementById('postOpTemplatePicker').value;
     if(!id){ showToast('Choose a post-op template'); return; }
-    const d = getWorkingData();
+    const d = syncModalFieldsToWorkingData();
     const res = applyTemplateToPatient(d, id, { merge: true, preserveDone: true, fillPlan: 'none' });
     setWorkingData(d);
     renderPostOpList();
@@ -3707,7 +4018,7 @@ function bindModalDynamicLists(){
   document.getElementById('applyDischargeTemplateBtn').addEventListener('click', ()=>{
     const id = document.getElementById('dischargeTemplatePicker').value;
     if(!id){ showToast('Choose a discharge template'); return; }
-    const d = getWorkingData();
+    const d = syncModalFieldsToWorkingData();
     const res = applyTemplateToPatient(d, id, { merge: true, preserveDone: true, fillPlan: 'none' });
     setWorkingData(d);
     renderDischargeList();
@@ -4079,6 +4390,19 @@ async function savePatientFromModal(){
 
     if(isNew && !modalSuppressAutoTemplate && newStatus === 'postop' && !d.postOpChecks?.length) applyPostOpTemplate(d);
     if(isNew && !modalSuppressAutoTemplate && newStatus === 'fordischarge' && !d.dischargeChecks?.length) applyDischargeTemplate(d);
+    if(isNew && !modalSuppressAutoTemplate && newStatus === 'conservative' && !d.postOpChecks?.length) applyConservativeTemplate(d);
+
+    if(!isNew && editingPatientId){
+      const cached = await cacheGet(editingPatientId);
+      if(cached && Number(cached.updatedAt) > Number(modalWorkingData.updatedAt || 0)){
+        const ok = await showConfirm(
+          'Updated elsewhere',
+          'This patient was changed on another device after you opened the form. Save anyway?',
+          { confirmLabel: 'Save anyway', danger: true }
+        );
+        if(!ok) return;
+      }
+    }
 
     const ini = await ensurePgInitials();
     if(prevPlan && (newPlan !== prevPlan || (newPlan && prevPlanDate !== todayISO() && newPlan === prevPlan))){
@@ -4104,9 +4428,11 @@ async function savePatientFromModal(){
     await savePatient(d);
 
     if(isNew){
-      currentFilter = 'all';
+      const savedFilter = localStorage.getItem(LS_FILTER) || (getPgInitials() ? 'mine' : 'all');
+      currentFilter = savedFilter;
       document.getElementById('searchInput').value = '';
-      document.querySelectorAll('.filter-chip').forEach(c=> c.classList.toggle('active', c.dataset.filter==='all'));
+      document.querySelectorAll('.filter-chip').forEach(c=> c.classList.toggle('active', c.dataset.filter===savedFilter));
+      updateFilterUI();
     }
 
     closePatientModal();
@@ -4168,7 +4494,14 @@ async function editWardHandover(){
 /* ---------------- PRESENTATION MODE ---------------- */
 
 function getPresentationList(){
-  let list = getActiveRoundsItems();
+  let list;
+  if(isPgScopeMine() && currentFilter === 'all'){
+    list = getPgScopedPatients(getActiveRoundsItems());
+  }else if(currentFilter !== 'all'){
+    list = getFilteredRoundsItems();
+  }else{
+    list = getActiveRoundsItems();
+  }
   if(presentationUnpresentedOnly){
     list = list.filter(p => !isPresented(p.id));
   }
@@ -4233,6 +4566,10 @@ function openPresentationMode(){
     }
     return;
   }
+  if(!localStorage.getItem(LS_TIP_PRESENT)){
+    localStorage.setItem(LS_TIP_PRESENT, '1');
+    showToast('Tip: → next patient · Space marks presented', { duration: 6000 });
+  }
   presentationIndex = 0;
   document.getElementById('presentationOverlay').classList.add('active');
   renderPresentationSlide();
@@ -4260,13 +4597,28 @@ function closePresentationMode(){
 function stepPresentation(delta, autoMark){
   const list = getPresentationList();
   if(!list.length) return;
+  const curId = list[presentationIndex]?.id;
   if(autoMark && delta > 0){
     const p = list[presentationIndex];
-    if(p && !isPresented(p.id)) markPresented(p.id);
+    if(p && !isPresented(p.id)) void markPresented(p.id);
   }
   const body = document.getElementById('presentationContent');
   const doStep = ()=>{
-    presentationIndex = Math.max(0, Math.min(list.length - 1, presentationIndex + delta));
+    const fresh = getPresentationList();
+    if(!fresh.length){
+      closePresentationMode();
+      showToast('All patients presented');
+      return;
+    }
+    if(delta > 0 && autoMark && presentationUnpresentedOnly){
+      presentationIndex = Math.min(presentationIndex, fresh.length - 1);
+    }else if(curId){
+      const idx = fresh.findIndex(p => p.id === curId);
+      const base = idx >= 0 ? idx : presentationIndex;
+      presentationIndex = Math.max(0, Math.min(fresh.length - 1, base + delta));
+    }else{
+      presentationIndex = Math.max(0, Math.min(fresh.length - 1, presentationIndex + delta));
+    }
     renderPresentationSlide(true);
     if(presentationReadAloud) speakCurrentPresentation();
   };
@@ -4287,12 +4639,20 @@ function markCurrentPresented(){
   const list = getPresentationList();
   const p = list[presentationIndex];
   if(!p) return;
-  markPresented(p.id);
-  renderPresentationSlide();
-  showToast('Marked as presented');
-  if(presentationUnpresentedOnly && presentationIndex >= list.length - 1){
-    showToast('All done — queue complete');
-  }
+  void markPresented(p.id).then(()=>{
+    renderPresentationSlide();
+    showToast('Marked as presented');
+    if(presentationUnpresentedOnly){
+      const fresh = getPresentationList();
+      if(!fresh.length){
+        showToast('All done — queue complete');
+        closePresentationMode();
+        return;
+      }
+      presentationIndex = Math.min(presentationIndex, fresh.length - 1);
+      renderPresentationSlide();
+    }
+  });
 }
 
 function speakCurrentPresentation(){
@@ -4344,7 +4704,8 @@ function renderPresentationSlide(animating){
   const flags = getPatientFlags(p);
   const presented = isPresented(p.id);
   const dayLabel = dayInfo ? ` · ${dayInfo.prefix} ${dayInfo.day}` : (p.status === 'conservative' ? ' · Conservative' : '');
-  document.getElementById('presentationCounter').textContent = `${presentationIndex + 1} / ${list.length}`;
+  const scopeLabel = isPgScopeMine() ? 'My patients' : (currentFilter !== 'all' ? (FILTER_LABELS[currentFilter] || 'Filtered') : 'Whole ward');
+  document.getElementById('presentationCounter').textContent = `${presentationIndex + 1} / ${list.length} · ${scopeLabel}`;
   document.getElementById('presentationWard').textContent = `Ward ${getPatientWard(p)} · ${p.bed || '—'}`;
 
   const wardJump = document.getElementById('presentationWardJump');
@@ -4386,7 +4747,7 @@ function bindPresentationSwipe(){
     if(!overlay.classList.contains('active')) return;
     const dx = e.changedTouches[0].screenX - startX;
     if(dx > 60) stepPresentation(-1);
-    if(dx < -60) stepPresentation(1);
+    if(dx < -60) stepPresentation(1, true);
   }, { passive: true });
 }
 
@@ -4659,19 +5020,31 @@ function bindTemplateManagerEvents(){
 
 /* ---------------- handover / roster / bulk ---------------- */
 
+function updateBulkBar(){
+  const bar = document.getElementById('bulkPlanBar');
+  if(!bar) return;
+  if(bulkSelectMode && bulkSelectedIds.size){
+    bar.classList.add('active');
+    bar.querySelector('.bulk-plan-count').textContent = String(bulkSelectedIds.size);
+  }else{
+    bar.classList.remove('active');
+  }
+}
+
 function toggleBulkSelectMode(){
   bulkSelectMode = !bulkSelectMode;
   if(!bulkSelectMode) bulkSelectedIds.clear();
   const btn = document.getElementById('bulkPlanBtn');
   if(btn) btn.classList.toggle('active', bulkSelectMode);
+  updateBulkBar();
   renderRounds();
-  if(bulkSelectMode) showToast('Select patients, then use Bulk plan in More menu');
+  if(bulkSelectMode) showToast('Tap patients to select, then Apply plan');
 }
 
 async function applyBulkPlan(){
   if(!bulkSelectedIds.size){ showToast('Select patients first'); return; }
   const fields = await showPromptFields('Bulk plan', [
-    { id: 'plan', label: 'Plan for all selected patients', value: '', placeholder: 'Same instruction for everyone' }
+    { id: 'plan', label: `Plan for ${bulkSelectedIds.size} selected patient(s)`, value: '', placeholder: 'Same instruction for everyone' }
   ]);
   if(!fields || !fields.plan?.trim()) return;
   const text = fields.plan.trim();
@@ -4685,6 +5058,7 @@ async function applyBulkPlan(){
   bulkSelectMode = false;
   bulkSelectedIds.clear();
   document.getElementById('bulkPlanBtn')?.classList.remove('active');
+  updateBulkBar();
   renderAll();
   showToast(`Plan applied to ${count} patient(s)`);
 }

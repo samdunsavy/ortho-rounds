@@ -1291,6 +1291,30 @@
     animation:spin 0.7s linear infinite;
   }
   @keyframes spin{to{transform:rotate(360deg);}}
+
+  .pg-scope-btn, .pg-scope-btn-mobile{font-size:11px;padding:4px 8px;border-radius:999px;border:1px solid var(--border);background:var(--surface);color:var(--text-muted);}
+  .pg-scope-btn.active, .pg-scope-btn-mobile.active{background:var(--accent-soft);color:var(--accent);border-color:var(--accent);}
+  .worklist-toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
+  .bulk-plan-bar{
+    display:none;position:fixed;left:12px;right:12px;bottom:calc(76px + env(safe-area-inset-bottom));
+    z-index:90;padding:10px 14px;border-radius:12px;background:var(--surface);border:1px solid var(--border);
+    box-shadow:var(--shadow-md);align-items:center;gap:10px;justify-content:space-between;
+  }
+  .bulk-plan-bar.active{display:flex;}
+  .work-plan-input{width:100%;font-size:13px;padding:6px 8px;border-radius:8px;border:1px solid var(--border);}
+  .work-inv-chips{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;}
+  .work-inv-chip{font-size:10px !important;padding:2px 6px !important;}
+  .card-copy-plan .copy-plan-icon{display:none;}
+  @media (max-width:680px){
+    .pg-scope-btn{display:none;}
+    .card-copy-plan .copy-plan-label{display:inline;}
+    .card-copy-plan .copy-plan-icon{display:none;}
+  }
+  @media (min-width:681px){
+    .pg-scope-btn-mobile{display:none;}
+    .card-copy-plan .copy-plan-label{display:none;}
+    .card-copy-plan .copy-plan-icon{display:inline;}
+  }
 </style>
 </head>
 <body class="has-bottom-nav">
@@ -1304,6 +1328,7 @@
   </div>
   <div class="topbar-actions">
     <input type="text" class="pg-initials" id="pgInitialsInput" placeholder="PG" title="Your initials (for plan attribution)" maxlength="6">
+    <button type="button" class="ibtn pg-scope-btn" id="pgScopeBtn" title="Toggle my patients / whole ward">My work</button>
     <div class="sync-chip-wrap">
       <span class="sync-chip" id="syncChip" title="Tap for sync details" role="button" tabindex="0"><span class="dot"></span><span id="syncChipText">…</span></span>
       <div class="sync-panel" id="syncPanel">
@@ -1383,8 +1408,9 @@
 
 <!-- WORKLIST VIEW -->
 <div class="view" id="view-worklist">
-  <div class="toolbar">
+  <div class="toolbar worklist-toolbar">
     <button type="button" class="btn" id="worklistWardHandoverBtn">Unit handover note</button>
+    <button type="button" class="btn pg-scope-btn-mobile" id="pgScopeBtnMobile">My work</button>
   </div>
   <div id="worklistContent"></div>
 </div>
@@ -1398,6 +1424,12 @@
 </div>
 
 <button class="fab" id="addPatientFab" title="Add patient">+</button>
+
+<div class="bulk-plan-bar" id="bulkPlanBar">
+  <span><strong class="bulk-plan-count">0</strong> selected</span>
+  <button type="button" class="btn primary pressable" id="bulkBarApplyBtn">Apply plan</button>
+  <button type="button" class="btn pressable" id="bulkBarCancelBtn">Cancel</button>
+</div>
 
 <!-- FILTER BOTTOM SHEET -->
 <div class="sheet-overlay" id="filterSheetOverlay">
