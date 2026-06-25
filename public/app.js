@@ -3092,15 +3092,19 @@ function handleCardAction(action, id, el){
       p.statusUpdatedAt = Date.now();
       if(!p.surgeryDate) p.surgeryDate = todayISO();
       if(!p.postOpChecks || !p.postOpChecks.length){
+        if(!shouldAutoApplyPostOp()){
+          // leave milestones empty — user applies template manually
+        }else{
         const suggestions = suggestTemplatesForPatient(p, 'postop_pathway', 3);
         if(suggestions.length){
           const pick = suggestions[0];
           const names = suggestions.map(t=>'• ' + t.name).join('\n');
+          const defaultLabel = getDefaultPostOpTemplateLabel(p);
           const choice = await showAppDialog({
             title: 'Apply post-op pathway?',
             message: `Suggested for this patient:\n${names}`,
             buttons: [
-              { label: 'Default template', value: 'default' },
+              { label: `Ward default (${defaultLabel})`, value: 'default' },
               { label: `Apply "${pick.name}"`, value: 'suggested', primary: true }
             ]
           });
@@ -3108,6 +3112,7 @@ function handleCardAction(action, id, el){
           else applyPostOpTemplate(p);
         }else{
           applyPostOpTemplate(p);
+        }
         }
       }
       await persistAndRerender(p);
@@ -4780,10 +4785,65 @@ function bindPresentationSwipe(){
 
 let editingTemplateId = null;
 
+const TEMPLATE_TYPE_OPTIONS = [
+  { value: 'postop_pathway', label: 'Post-op pathway' },
+  { value: 'conservative_pathway', label: 'Conservative pathway' },
+  { value: 'discharge', label: 'Discharge' },
+  { value: 'preop', label: 'Pre-op' }
+];
+
+function renderTemplateTypeSelect(selected, attrs){
+  attrs = attrs || '';
+  return `<select id="te_type" ${attrs}>${TEMPLATE_TYPE_OPTIONS.map(o =>
+    `<option value="${o.value}" ${selected === o.value ? 'selected' : ''}>${o.label}</option>`
+  ).join('')}</select>`;
+}
+
 function openTemplateManager(){
   editingTemplateId = null;
   document.getElementById('templateManagerModal').classList.add('active');
+  renderTemplateWardSettings();
   renderTemplateManagerList();
+}
+
+function renderTemplateWardSettings(){
+  const cb = document.getElementById('templateAutoApplyPostOp');
+  const hint = document.getElementById('templateDefaultPostOpHint');
+  const clearBtn = document.getElementById('templateClearDefaultBtn');
+  if(!cb || !hint) return;
+  cb.checked = shouldAutoApplyPostOp();
+  const defaultId = wardTemplateLibrary.defaultPostOpTemplateId;
+  const defaultTpl = defaultId ? getTemplateById(defaultId) : null;
+  if(defaultTpl){
+    hint.textContent = `Ward default pathway: ${defaultTpl.name}. Use ★ Default on any post-op template to change.`;
+    if(clearBtn) clearBtn.style.display = '';
+  }else{
+    hint.textContent = shouldAutoApplyPostOp()
+      ? 'No ward default — matches procedure/diagnosis when possible, otherwise ORIF upper limb. Set ★ Default on your usual post-op template.'
+      : 'Auto-apply is off — milestones stay empty until you pick a template on the patient.';
+    if(clearBtn) clearBtn.style.display = 'none';
+  }
+}
+
+async function setDefaultPostOpTemplate(id){
+  const tpl = getTemplateById(id);
+  if(!tpl || tpl.type !== 'postop_pathway'){
+    showToast('Only post-op pathways can be the ward default');
+    return;
+  }
+  wardTemplateLibrary.defaultPostOpTemplateId = id;
+  await saveTemplateLibrary();
+  renderTemplateWardSettings();
+  renderTemplateManagerList();
+  showToast(`Default post-op pathway: ${tpl.name}`);
+}
+
+async function clearDefaultPostOpTemplate(){
+  wardTemplateLibrary.defaultPostOpTemplateId = null;
+  await saveTemplateLibrary();
+  renderTemplateWardSettings();
+  renderTemplateManagerList();
+  showToast('Ward default cleared');
 }
 
 function closeTemplateManager(){
@@ -4796,77 +4856,87 @@ function renderTemplateManagerList(){
   const search = (document.getElementById('templateSearchInput').value || '').toLowerCase();
   let list = getMergedTemplates();
   if(search) list = list.filter(t => (t.name||'').toLowerCase().includes(search) || (t.tags||[]).some(tag=>tag.includes(search)));
+  const wardDefaultId = wardTemplateLibrary.defaultPostOpTemplateId;
   el.innerHTML = list.map(t=>`
     <div class="template-row" data-tid="${escapeHTML(t.id)}">
       <div>
         <strong>${escapeHTML(t.name)}</strong>
         ${t.builtin ? '<span class="small-muted"> (built-in)</span>' : ''}
+        ${wardDefaultId === t.id ? '<span class="small-muted"> · ★ ward default</span>' : ''}
         <div class="small-muted">${escapeHTML(t.type)} · ${(t.items||[]).length} items · ${(t.tags||[]).slice(0,4).join(', ')}</div>
       </div>
-      <div style="display:flex;gap:4px;flex-shrink:0;">
-        <button type="button" class="btn" data-tpl-edit="${escapeHTML(t.id)}">Edit</button>
+      <div style="display:flex;gap:4px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end;">
+        ${t.type === 'postop_pathway' ? `<button type="button" class="btn${wardDefaultId === t.id ? ' primary' : ''}" data-tpl-default="${escapeHTML(t.id)}">${wardDefaultId === t.id ? '★ Default' : 'Set default'}</button>` : ''}
+        <button type="button" class="btn" data-tpl-edit="${escapeHTML(t.id)}">${t.builtin ? 'View' : 'Edit'}</button>
         <button type="button" class="btn" data-tpl-dup="${escapeHTML(t.id)}">Dup</button>
         ${t.builtin ? `<button type="button" class="btn" data-tpl-hide="${escapeHTML(t.id)}">Hide</button>` : `<button type="button" class="btn danger" data-tpl-del="${escapeHTML(t.id)}">Del</button>`}
       </div>
     </div>`).join('') || `<div class="empty-state compact"><div class="msg">No templates match your search.</div></div>`;
 
+  el.querySelectorAll('[data-tpl-default]').forEach(btn=>{
+    btn.addEventListener('click', ()=> setDefaultPostOpTemplate(btn.getAttribute('data-tpl-default')));
+  });
   el.querySelectorAll('[data-tpl-edit]').forEach(btn=>{
-    btn.addEventListener('click', ()=> openTemplateEditor(btn.dataset.tplEdit));
+    btn.addEventListener('click', ()=> openTemplateEditor(btn.getAttribute('data-tpl-edit')));
   });
   el.querySelectorAll('[data-tpl-dup]').forEach(btn=>{
-    btn.addEventListener('click', ()=> duplicateWardTemplate(btn.dataset.tplDup));
+    btn.addEventListener('click', ()=> duplicateWardTemplate(btn.getAttribute('data-tpl-dup')));
   });
   el.querySelectorAll('[data-tpl-hide]').forEach(btn=>{
-    btn.addEventListener('click', ()=> hideBuiltinTemplate(btn.dataset.tplHide));
+    btn.addEventListener('click', ()=> hideBuiltinTemplate(btn.getAttribute('data-tpl-hide')));
   });
   el.querySelectorAll('[data-tpl-del]').forEach(btn=>{
-    btn.addEventListener('click', ()=> deleteWardTemplate(btn.dataset.tplDel));
+    btn.addEventListener('click', ()=> deleteWardTemplate(btn.getAttribute('data-tpl-del')));
   });
 }
 
 function openTemplateEditor(id){
-  const tpl = getTemplateById(id) || getBuiltinTemplates().find(t=>t.id===id);
+  if(!id) return;
+  const wardRec = getWardTemplateRecord(id);
+  const merged = getTemplateById(id) || getBuiltinTemplates().find(t=>t.id===id);
+  const tpl = wardRec || merged;
   if(!tpl) return;
-  editingTemplateId = tpl.builtin ? null : id;
-  const isNew = !tpl.builtin && !wardTemplateLibrary.templates.find(t=>t.id===id);
+  const readOnly = !wardRec && !!merged?.builtin;
+  editingTemplateId = readOnly ? null : id;
   const body = document.getElementById('templateEditorBody');
-  document.getElementById('templateEditorTitle').textContent = tpl.builtin ? `View / duplicate: ${tpl.name}` : (editingTemplateId ? `Edit: ${tpl.name}` : 'New template');
+  document.getElementById('templateEditorTitle').textContent = readOnly
+    ? `View / duplicate: ${tpl.name}`
+    : `Edit: ${tpl.name}`;
   const items = tpl.items || [];
+  const isDischarge = tpl.type === 'discharge';
   body.innerHTML = `
-    <div class="form-row"><label>Name</label><input id="te_name" value="${escapeHTML(tpl.name)}" ${tpl.builtin?'readonly':''}></div>
+    <div class="form-row"><label>Name</label><input id="te_name" value="${escapeHTML(tpl.name)}" ${readOnly?'readonly':''}></div>
     <div class="form-row two">
       <div><label>Type</label>
-        <select id="te_type" ${tpl.builtin?'disabled':''}>
-          <option value="postop_pathway" ${tpl.type==='postop_pathway'?'selected':''}>Post-op pathway</option>
-          <option value="discharge" ${tpl.type==='discharge'?'selected':''}>Discharge</option>
-          <option value="preop" ${tpl.type==='preop'?'selected':''}>Pre-op</option>
-        </select>
+        ${renderTemplateTypeSelect(tpl.type, readOnly ? 'disabled' : '')}
       </div>
-      <div><label>Tags (comma-separated)</label><input id="te_tags" value="${escapeHTML((tpl.tags||[]).join(', '))}" ${tpl.builtin?'readonly':''}></div>
+      <div><label>Tags (comma-separated)</label><input id="te_tags" value="${escapeHTML((tpl.tags||[]).join(', '))}" ${readOnly?'readonly':''}></div>
     </div>
     <div class="form-row"><label>Items (label | duePod | duePodEnd | exact | category)</label>
       <div id="te_items">${items.map((it,i)=>`
         <div class="check-row te-item-row" style="margin-bottom:4px;flex-wrap:wrap;gap:4px;">
-          <input data-te-label="${i}" value="${escapeHTML(it.label)}" style="flex:2;min-width:120px;" ${tpl.builtin?'readonly':''}>
-          ${tpl.type!=='discharge' ? `<input data-te-due="${i}" type="number" value="${it.duePod??0}" style="width:48px;" ${tpl.builtin?'readonly':''} title="due POD">
-          <input data-te-end="${i}" type="number" value="${it.duePodEnd??''}" placeholder="end" style="width:48px;" ${tpl.builtin?'readonly':''}>
-          <label><input type="checkbox" data-te-exact="${i}" ${it.exactPod?'checked':''} ${tpl.builtin?'disabled':''}> Exact</label>` : ''}
-          <select data-te-cat="${i}" ${tpl.builtin?'disabled':''}>${CHECKLIST_CATEGORIES.map(c=>`<option value="${c}" ${it.category===c?'selected':''}>${c}</option>`).join('')}</select>
-          ${!tpl.builtin ? `<button type="button" class="btn danger te-rm-item" style="padding:2px 8px;">✕</button>` : ''}
+          <input data-te-id="${escapeHTML(it.id || '')}" data-te-label="${i}" value="${escapeHTML(it.label)}" style="flex:2;min-width:120px;" ${readOnly?'readonly':''}>
+          ${!isDischarge ? `<input data-te-due="${i}" type="number" value="${it.duePod??0}" style="width:48px;" ${readOnly?'readonly':''} title="due POD">
+          <input data-te-end="${i}" type="number" value="${it.duePodEnd??''}" placeholder="end" style="width:48px;" ${readOnly?'readonly':''}>
+          <label><input type="checkbox" data-te-exact="${i}" ${it.exactPod?'checked':''} ${readOnly?'disabled':''}> Exact</label>` : ''}
+          <select data-te-cat="${i}" ${readOnly?'disabled':''}>${CHECKLIST_CATEGORIES.map(c=>`<option value="${c}" ${it.category===c?'selected':''}>${c}</option>`).join('')}</select>
+          ${!readOnly ? `<button type="button" class="btn danger te-rm-item" style="padding:2px 8px;">✕</button>` : ''}
         </div>`).join('')}</div>
-      ${!tpl.builtin ? '<button type="button" class="btn" id="te_addItem" style="margin-top:6px;">+ Item</button>' : ''}
+      ${!readOnly ? '<button type="button" class="btn" id="te_addItem" style="margin-top:6px;">+ Item</button>' : ''}
     </div>
-    ${tpl.builtin ? '<p class="form-hint">Built-in templates are read-only. Use Duplicate to create an editable copy.</p>' : ''}
+    ${readOnly ? '<p class="form-hint">Built-in templates are read-only. Use Duplicate to create an editable copy.</p>' : ''}
   `;
-  document.getElementById('templateEditorPanel').style.display = 'block';
-  if(!tpl.builtin){
+  const panel = document.getElementById('templateEditorPanel');
+  panel.style.display = 'block';
+  panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  if(!readOnly){
     document.getElementById('te_addItem').addEventListener('click', ()=>{
       const box = document.getElementById('te_items');
       const i = box.querySelectorAll('[data-te-label]').length;
       const div = document.createElement('div');
       div.className = 'check-row te-item-row';
       div.style.cssText = 'margin-bottom:4px;flex-wrap:wrap;gap:4px;';
-      div.innerHTML = `<input data-te-label="${i}" value="New item" style="flex:2;min-width:120px;">
+      div.innerHTML = `<input data-te-id="" data-te-label="${i}" value="New item" style="flex:2;min-width:120px;">
         <input data-te-due="${i}" type="number" value="0" style="width:48px;">
         <input data-te-end="${i}" type="number" placeholder="end" style="width:48px;">
         <label><input type="checkbox" data-te-exact="${i}"> Exact</label>
@@ -4901,14 +4971,16 @@ function collectTemplateEditorData(){
     if(!label) return;
     if(type === 'discharge'){
       const cat = row.querySelector('[data-te-cat]');
-      items.push(dischargeItemDef('item_' + uid(), label, { category: cat ? cat.value : 'other' }));
+      const itemId = (labelInp.dataset.teId || '').trim() || ('item_' + uid());
+      items.push(dischargeItemDef(itemId, label, { category: cat ? cat.value : 'other' }));
     }else{
       const dueEl = row.querySelector('[data-te-due]');
       const endEl = row.querySelector('[data-te-end]');
       const exactEl = row.querySelector('[data-te-exact]');
       const catEl = row.querySelector('[data-te-cat]');
       const endVal = endEl && endEl.value !== '' ? +endEl.value : null;
-      items.push(itemDef('item_' + uid(), label, dueEl ? (+dueEl.value || 0) : 0, {
+      const itemId = (labelInp.dataset.teId || '').trim() || ('item_' + uid());
+      items.push(itemDef(itemId, label, dueEl ? (+dueEl.value || 0) : 0, {
         duePodEnd: endVal,
         exactPod: exactEl && exactEl.checked,
         category: catEl ? catEl.value : 'other'
@@ -4919,7 +4991,12 @@ function collectTemplateEditorData(){
 }
 
 async function saveTemplateEditor(){
-  if(document.getElementById('te_name').readOnly) return;
+  const nameEl = document.getElementById('te_name');
+  if(!nameEl) return;
+  if(nameEl.readOnly){
+    showToast('Built-in templates are read-only — use Duplicate');
+    return;
+  }
   const data = collectTemplateEditorData();
   if(!data.name){ showToast('Enter template name'); return; }
   wardTemplateLibrary.templates = wardTemplateLibrary.templates || [];
@@ -4953,7 +5030,9 @@ async function duplicateWardTemplate(id){
 async function hideBuiltinTemplate(id){
   wardTemplateLibrary.disabledIds = wardTemplateLibrary.disabledIds || [];
   if(!wardTemplateLibrary.disabledIds.includes(id)) wardTemplateLibrary.disabledIds.push(id);
+  if(wardTemplateLibrary.defaultPostOpTemplateId === id) wardTemplateLibrary.defaultPostOpTemplateId = null;
   await saveTemplateLibrary();
+  renderTemplateWardSettings();
   renderTemplateManagerList();
   showToast('Template hidden');
 }
@@ -4962,7 +5041,9 @@ async function deleteWardTemplate(id){
   const ok = await showConfirm('Delete template?', 'Delete this ward template? Built-in templates cannot be deleted.', { confirmLabel: 'Delete', danger: true });
   if(!ok) return;
   wardTemplateLibrary.templates = (wardTemplateLibrary.templates || []).filter(t=>t.id!==id);
+  if(wardTemplateLibrary.defaultPostOpTemplateId === id) wardTemplateLibrary.defaultPostOpTemplateId = null;
   await saveTemplateLibrary();
+  renderTemplateWardSettings();
   renderTemplateManagerList();
   showToast('Deleted');
 }
@@ -4997,7 +5078,10 @@ async function importTemplatePack(e){
         wardTemplateLibrary.templates = incoming.map(t=>Object.assign({}, t, { builtin: false }));
       }
       if(Array.isArray(payload.disabledIds)) wardTemplateLibrary.disabledIds = payload.disabledIds;
+      if(payload.defaultPostOpTemplateId) wardTemplateLibrary.defaultPostOpTemplateId = payload.defaultPostOpTemplateId;
+      if(payload.autoApplyPostOp === false) wardTemplateLibrary.autoApplyPostOp = false;
       await saveTemplateLibrary();
+      renderTemplateWardSettings();
       renderTemplateManagerList();
       showToast('Templates imported');
     }catch(err){
@@ -5011,6 +5095,13 @@ async function importTemplatePack(e){
 function bindTemplateManagerEvents(){
   document.getElementById('templateManagerClose').addEventListener('click', closeTemplateManager);
   document.getElementById('templateSearchInput').addEventListener('input', renderTemplateManagerList);
+  document.getElementById('templateAutoApplyPostOp').addEventListener('change', async (e)=>{
+    wardTemplateLibrary.autoApplyPostOp = e.target.checked;
+    await saveTemplateLibrary();
+    renderTemplateWardSettings();
+    showToast(e.target.checked ? 'Auto-apply on' : 'Auto-apply off — pick template per patient');
+  });
+  document.getElementById('templateClearDefaultBtn').addEventListener('click', clearDefaultPostOpTemplate);
   document.getElementById('templateNewBtn').addEventListener('click', ()=>{
     editingTemplateId = null;
     const body = document.getElementById('templateEditorBody');
@@ -5018,17 +5109,18 @@ function bindTemplateManagerEvents(){
     body.innerHTML = `
       <div class="form-row"><label>Name</label><input id="te_name" value=""></div>
       <div class="form-row two">
-        <div><label>Type</label><select id="te_type"><option value="postop_pathway">Post-op pathway</option><option value="discharge">Discharge</option></select></div>
+        <div><label>Type</label>${renderTemplateTypeSelect('postop_pathway')}</div>
         <div><label>Tags</label><input id="te_tags" placeholder="orif, radius"></div>
       </div>
       <div class="form-row"><div id="te_items"></div><button type="button" class="btn" id="te_addItem">+ Item</button></div>`;
     document.getElementById('templateEditorPanel').style.display = 'block';
+    document.getElementById('templateEditorPanel').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     document.getElementById('te_addItem').addEventListener('click', ()=>{
       const box = document.getElementById('te_items');
       const i = box.querySelectorAll('[data-te-label]').length;
       const div = document.createElement('div');
       div.className = 'check-row te-item-row';
-      div.innerHTML = `<input data-te-label="${i}" value="New item" style="flex:2;"><input data-te-due="${i}" type="number" value="0" style="width:48px;">
+      div.innerHTML = `<input data-te-id="" data-te-label="${i}" value="New item" style="flex:2;"><input data-te-due="${i}" type="number" value="0" style="width:48px;">
         <button type="button" class="btn danger te-rm-item" style="padding:2px 8px;">✕</button>`;
       box.appendChild(div);
       bindTemplateItemRemoveButtons();

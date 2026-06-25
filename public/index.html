@@ -1616,6 +1616,14 @@
         <button type="button" class="btn" id="templateExportBtn">Export pack</button>
         <button type="button" class="btn" id="templateImportBtn">Import pack</button>
       </div>
+      <div id="templateWardSettings" class="form-row" style="margin-bottom:12px;padding:10px 12px;border:1px solid var(--line-soft);border-radius:8px;background:var(--card);">
+        <label style="display:flex;align-items:flex-start;gap:8px;margin-bottom:6px;cursor:pointer;">
+          <input type="checkbox" id="templateAutoApplyPostOp" checked style="margin-top:3px;">
+          <span>Auto-apply post-op milestones when a patient becomes post-op</span>
+        </label>
+        <div class="small-muted" id="templateDefaultPostOpHint"></div>
+        <button type="button" class="btn" id="templateClearDefaultBtn" style="margin-top:8px;display:none;">Clear ward default pathway</button>
+      </div>
       <div id="templateManagerList"></div>
       <div class="template-editor-panel" id="templateEditorPanel" style="display:none;">
         <h3 id="templateEditorTitle" style="margin:0 0 10px;font-size:15px;">Edit template</h3>
