@@ -41,6 +41,8 @@ const LS_MORNING_VIEW = "ortho_morningView";
 const LS_TIP_MINE_EMPTY = "ortho_tipMineEmpty";
 const LS_TIP_WORKLIST = "ortho_tipWorklist";
 const LS_TIP_PRESENT = "ortho_tipPresent";
+const LS_TIP_AI_DRAFT = "ortho_tipAiDraft";
+const BULK_DRAFT_MAX = 20;
 const WARD_META_ID = "__ward_meta__";
 const FILTER_LABELS = {
   all: 'All',
@@ -414,6 +416,126 @@ async function generateWardHandoverNote(){
   return text;
 }
 
+function openBulkDraftModal(){
+  document.getElementById('bulkDraftModal')?.classList.add('active');
+}
+
+function closeBulkDraftModal(){
+  document.getElementById('bulkDraftModal')?.classList.remove('active');
+  const list = document.getElementById('bulkDraftList');
+  const progress = document.getElementById('bulkDraftProgress');
+  const saveBtn = document.getElementById('bulkDraftSaveBtn');
+  if(list) list.innerHTML = '';
+  if(progress){
+    progress.textContent = '';
+    progress.classList.remove('busy');
+  }
+  if(saveBtn) saveBtn.disabled = true;
+}
+
+function renderBulkDraftReviewRow(p, draft){
+  const failed = !draft.ok;
+  const checked = draft.ok ? 'checked' : '';
+  const disabled = failed ? 'disabled' : '';
+  return `<div class="bulk-draft-item${failed ? ' failed' : ''}" data-bulk-draft-id="${escapeHTML(p.id)}">
+    <div class="bulk-draft-item-head">
+      <label><input type="checkbox" class="bulk-draft-check" data-bulk-draft-check="${escapeHTML(p.id)}" ${checked} ${disabled}> ${escapeHTML(p.name)} <span class="small-muted">· ${escapeHTML(p.bed||'—')}</span></label>
+    </div>
+    <textarea class="bulk-draft-text" data-bulk-draft-text="${escapeHTML(p.id)}" rows="2" ${disabled}>${escapeHTML(draft.text || '')}</textarea>
+    ${failed ? `<div class="bulk-draft-err">${escapeHTML(draft.error || 'Draft failed')}</div>` : ''}
+  </div>`;
+}
+
+let bulkDraftRunning = false;
+
+async function runBulkDraftPlans(){
+  if(bulkDraftRunning) return;
+  if(!canUseAi()){
+    showToast('AI not available — check server key or connection');
+    return;
+  }
+  const items = collectWorklistData().planMissingItems;
+  if(!items.length){
+    showToast('No missing plans');
+    return;
+  }
+  const capped = items.slice(0, BULK_DRAFT_MAX);
+  const extra = items.length - capped.length;
+  let msg = `Draft plans for ${capped.length} patient(s)? You can review and edit before saving.`;
+  if(extra > 0) msg += `\n\n(${extra} more skipped — run again after saving.)`;
+  const ok = await showConfirm('Draft all missing plans', msg, { confirmLabel: 'Draft all' });
+  if(!ok) return;
+
+  bulkDraftRunning = true;
+  openBulkDraftModal();
+  const progressEl = document.getElementById('bulkDraftProgress');
+  const listEl = document.getElementById('bulkDraftList');
+  const saveBtn = document.getElementById('bulkDraftSaveBtn');
+  if(listEl) listEl.innerHTML = '';
+  if(saveBtn) saveBtn.disabled = true;
+
+  const drafts = [];
+  for(let i = 0; i < capped.length; i++){
+    const { p } = capped[i];
+    if(progressEl){
+      progressEl.textContent = `Drafting ${i + 1} / ${capped.length}…`;
+      progressEl.classList.add('busy');
+    }
+    try{
+      const { text } = await callAi('draft-plan', { patient: buildPatientAiSnapshot(p) });
+      drafts.push({ p, ok: true, text });
+    }catch(err){
+      drafts.push({ p, ok: false, text: '', error: err.message || 'Failed' });
+    }
+  }
+
+  if(progressEl){
+    progressEl.classList.remove('busy');
+    progressEl.textContent = `Review ${drafts.filter(d => d.ok).length} draft(s) — uncheck any you don't want to save.`;
+  }
+  if(listEl) listEl.innerHTML = drafts.map(d => renderBulkDraftReviewRow(d.p, d)).join('');
+  if(saveBtn) saveBtn.disabled = !drafts.some(d => d.ok);
+  bulkDraftRunning = false;
+}
+
+async function saveBulkDraftPlans(){
+  const rows = document.querySelectorAll('[data-bulk-draft-id]');
+  const toSave = [];
+  rows.forEach(row => {
+    const id = row.dataset.bulkDraftId;
+    const cb = row.querySelector('[data-bulk-draft-check]');
+    const ta = row.querySelector('[data-bulk-draft-text]');
+    if(!cb?.checked || !ta) return;
+    const text = ta.value.trim();
+    if(!text) return;
+    const p = patients.find(x => x.id === id);
+    if(p) toSave.push({ p, text });
+  });
+  if(!toSave.length){
+    showToast('Nothing selected to save');
+    return;
+  }
+  const saveBtn = document.getElementById('bulkDraftSaveBtn');
+  if(saveBtn){
+    saveBtn.disabled = true;
+    saveBtn.classList.add('ai-btn-busy');
+  }
+  try{
+    for(const { p, text } of toSave){
+      saveCardPlan(p, text);
+      await savePatient(p);
+    }
+    closeBulkDraftModal();
+    renderAll();
+    showToast(`Plans saved for ${toSave.length} patient(s)`, { success: true });
+  }finally{
+    if(saveBtn){
+      saveBtn.disabled = false;
+      saveBtn.classList.remove('ai-btn-busy');
+    }
+  }
+}
+
 function aiDraftPlanButtonHtml(patientId, target){
   if(!canUseAi()) return '';
   const targetAttr = target ? ` data-target="${escapeHTML(target)}"` : '';
@@ -523,6 +645,10 @@ function bindAiEvents(){
       }
     }
   });
+
+  document.getElementById('bulkDraftClose')?.addEventListener('click', closeBulkDraftModal);
+  document.getElementById('bulkDraftCancelBtn')?.addEventListener('click', closeBulkDraftModal);
+  document.getElementById('bulkDraftSaveBtn')?.addEventListener('click', ()=> void saveBulkDraftPlans());
 }
 
 /* ---------------- sync engine ---------------- */
@@ -3541,7 +3667,9 @@ function renderWorklist(){
   }
 
   const planHeaderAction = planMissingItems.length
-    ? ` <button type="button" class="btn btn-sm work-bulk-plan-entry" id="worklistBulkPlanBtn">Bulk plan</button>`
+    ? ` <button type="button" class="btn btn-sm work-bulk-plan-entry" id="worklistBulkPlanBtn">Bulk plan</button>${
+        canUseAi() ? ' <button type="button" class="btn btn-sm ai-btn" id="worklistBulkDraftBtn">✨ Draft all</button>' : ''
+      }`
     : '';
 
   const html = [
@@ -3569,12 +3697,21 @@ function renderWorklist(){
     localStorage.setItem(LS_TIP_WORKLIST, '1');
     showToast('Tip: tap Done inline — no need to open each patient', { duration: 6000 });
   }
+  if(canUseAi() && planMissingItems.length && !localStorage.getItem(LS_TIP_AI_DRAFT)){
+    localStorage.setItem(LS_TIP_AI_DRAFT, '1');
+    showToast('Tip: tap ✨ Draft all to auto-write missing plans', { duration: 6000 });
+  }
 
   document.getElementById('worklistBulkPlanBtn')?.addEventListener('click', (e)=>{
     e.stopPropagation();
     if(!bulkSelectMode) toggleBulkSelectMode();
     switchView('rounds');
     showToast('Select patients, then Apply plan in the bar below');
+  });
+
+  document.getElementById('worklistBulkDraftBtn')?.addEventListener('click', (e)=>{
+    e.stopPropagation();
+    void runBulkDraftPlans();
   });
 
   const clearBtn = document.getElementById('clearWardHandoverBtn');

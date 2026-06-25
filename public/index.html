@@ -541,6 +541,17 @@
   .work-plan-row{display:flex;align-items:center;gap:6px;flex:1;min-width:0;}
   .work-plan-row .work-plan-input{flex:1;min-width:0;}
   .pres-revert-btn{margin-top:6px;padding:2px 8px;font-size:11px;}
+  .bulk-draft-modal{max-width:640px;}
+  .bulk-draft-progress{font-size:13px;color:var(--ink-soft);margin-bottom:12px;}
+  .bulk-draft-progress.busy{color:var(--accent);}
+  .bulk-draft-item{
+    border:1px solid var(--line-soft);border-radius:8px;padding:10px 12px;margin-bottom:10px;background:var(--bg);
+  }
+  .bulk-draft-item.failed{border-color:var(--bad);background:var(--bad-bg);}
+  .bulk-draft-item-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px;}
+  .bulk-draft-item-head label{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:600;margin:0;}
+  .bulk-draft-item textarea{width:100%;min-height:56px;font-size:13px;}
+  .bulk-draft-item .bulk-draft-err{font-size:12px;color:var(--bad);margin-top:4px;}
   .btn.linkish{background:none;border:none;color:var(--accent);font-size:12px;padding:0;}
   .btn.linkish:hover{text-decoration:underline;}
 
@@ -1595,6 +1606,24 @@
     <input type="password" id="loginPassword" autocomplete="current-password" placeholder="Ward password">
     <div class="login-error" id="loginError"></div>
     <button type="button" class="btn primary" id="loginBtn">Unlock</button>
+  </div>
+</div>
+
+<!-- BULK AI DRAFT REVIEW -->
+<div class="modal-overlay" id="bulkDraftModal">
+  <div class="modal bulk-draft-modal">
+    <div class="modal-head">
+      <h2>Review AI drafts</h2>
+      <button type="button" class="modal-close" id="bulkDraftClose">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div id="bulkDraftProgress" class="bulk-draft-progress"></div>
+      <div id="bulkDraftList"></div>
+    </div>
+    <div class="modal-foot">
+      <button type="button" class="btn" id="bulkDraftCancelBtn">Cancel</button>
+      <button type="button" class="btn primary" id="bulkDraftSaveBtn" disabled>Save all</button>
+    </div>
   </div>
 </div>
 

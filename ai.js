@@ -4,7 +4,7 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 const OPENAI_MAX_TOKENS = Number(process.env.OPENAI_MAX_TOKENS) || 350;
 const OPENAI_TIMEOUT_MS = 25000;
-const RATE_LIMIT_MAX = 30;
+const RATE_LIMIT_MAX = 60;
 const RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000;
 
 const rateBuckets = new Map();
