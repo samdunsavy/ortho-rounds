@@ -265,7 +265,17 @@ function readBody(req){
 
 function getBearerToken(req){
   const h = req.headers['authorization'] || '';
-  return h.startsWith('Bearer ') ? h.slice(7) : null;
+  if(h.startsWith('Bearer ')) return h.slice(7);
+  // Fallback: token in query string. Browsers can't attach an Authorization
+  // header to plain <img>/<a> requests, so server-hosted X-ray images are
+  // fetched as /api/images/<id>.jpg?token=<token>.
+  const qIdx = req.url.indexOf('?');
+  if(qIdx >= 0){
+    const params = new URLSearchParams(req.url.slice(qIdx + 1));
+    const t = params.get('token');
+    if(t) return t;
+  }
+  return null;
 }
 
 const CONTENT_TYPES = {
