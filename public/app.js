@@ -472,8 +472,11 @@ function hideLogin(){
 async function attemptLogin(){
   const pw = document.getElementById('loginPassword').value;
   const errEl = document.getElementById('loginError');
+  const btn = document.getElementById('loginBtn');
   errEl.textContent = '';
   if(!pw){ errEl.textContent = 'Enter the password'; return; }
+  btn.disabled = true;
+  btn.classList.add('btn-busy');
   try{
     const res = await fetch('/api/login', {
       method:'POST',
@@ -487,6 +490,9 @@ async function attemptLogin(){
     await syncNow({ fullReconcile: true });
   }catch{
     errEl.textContent = 'Cannot reach the server';
+  }finally{
+    btn.disabled = false;
+    btn.classList.remove('btn-busy');
   }
 }
 
@@ -571,9 +577,9 @@ function showToast(msg, opts){
       opts.onClick();
     };
   }else{
-    t.textContent = msg;
-    t.onclick = null;
+    t.innerHTML = `<span class="toast-msg">${escapeHTML(msg)}</span>`;
     t.style.cursor = '';
+    t.onclick = null;
   }
   t.classList.add('show');
   t._timer = setTimeout(()=>{
@@ -1860,7 +1866,10 @@ function applyFilter(filter){
 function updateFilterUI(){
   const label = FILTER_LABELS[currentFilter] || 'All';
   const pill = document.getElementById('filterPillBtn');
-  if(pill) pill.textContent = label + ' ▾';
+  if(pill){
+    pill.textContent = label + ' ▾';
+    pill.classList.toggle('active', currentFilter !== 'all');
+  }
   document.querySelectorAll('#filterSheetBody .filter-chip').forEach(c=>{
     c.classList.toggle('active', c.dataset.filter === currentFilter);
   });
@@ -2235,9 +2244,9 @@ function renderRounds(){
     const hasActive = patients.some(p=>p.status!=='discharged');
     if(!hasActive && !isConsultantMode()){
       list.innerHTML = `<div class="empty-state"><div class="big">${emptyStateSvg('bed')}</div><div class="msg">${escapeHTML(msg)}</div>
-        <div style="display:flex;gap:8px;justify-content:center;margin-top:12px;flex-wrap:wrap;">
-          <button type="button" class="btn primary" data-empty-action="add">Add first patient</button>
-          <button type="button" class="btn" data-empty-action="import">Import backup</button>
+        <div class="empty-actions">
+          <button type="button" class="btn primary pressable" data-empty-action="add">Add first patient</button>
+          <button type="button" class="btn pressable" data-empty-action="import">Import backup</button>
         </div></div>`;
       list.querySelector('[data-empty-action="add"]')?.addEventListener('click', ()=> openPatientModal(null));
       list.querySelector('[data-empty-action="import"]')?.addEventListener('click', ()=> document.getElementById('hiddenImportInput').click());
@@ -2274,11 +2283,21 @@ function renderRounds(){
   `).join('');
 
   list.querySelectorAll('.card-head').forEach(head=>{
-    head.addEventListener('click', (e)=>{
+    if(!head.classList.contains('card-head-static')){
+      head.setAttribute('tabindex', '0');
+      head.setAttribute('role', 'button');
+      const card = head.closest('.card');
+      head.setAttribute('aria-expanded', card?.classList.contains('open') ? 'true' : 'false');
+    }
+    const toggle = (e)=>{
+      if(e.type === 'keydown' && e.key !== 'Enter' && e.key !== ' ') return;
+      if(e.type === 'keydown') e.preventDefault();
       if(e.target.closest('.card-quick-bar, .card-quick-footer, .bulk-check, [data-action]')) return;
       const card = head.closest('.card');
       toggleCardOpen(card.dataset.id);
-    });
+    };
+    head.addEventListener('click', toggle);
+    head.addEventListener('keydown', toggle);
   });
 
   bindCardListEvents(list);
@@ -2356,6 +2375,13 @@ function patchCardHeadGlance(p, collapsed){
   bindCardListEvents(card);
 }
 
+function syncCardHeadAria(card, open){
+  const head = card?.querySelector('.card-head');
+  if(head && !head.classList.contains('card-head-static')){
+    head.setAttribute('aria-expanded', open ? 'true' : 'false');
+  }
+}
+
 function toggleCardOpen(id){
   const p = patients.find(x => x.id === id);
   if(!p) return;
@@ -2364,6 +2390,7 @@ function toggleCardOpen(id){
     const card = document.querySelector(`.card[data-id="${id}"]`);
     if(card){
       card.classList.remove('open');
+      syncCardHeadAria(card, false);
       const body = card.querySelector('.card-body');
       if(body) body.innerHTML = '';
     }
@@ -2377,6 +2404,7 @@ function toggleCardOpen(id){
     const prevCard = document.querySelector(`.card[data-id="${prevId}"]`);
     if(prevCard){
       prevCard.classList.remove('open');
+      syncCardHeadAria(prevCard, false);
       const prevBody = prevCard.querySelector('.card-body');
       if(prevBody) prevBody.innerHTML = '';
       const prevP = patients.find(x => x.id === prevId);
@@ -2395,6 +2423,7 @@ function toggleCardOpen(id){
     if(c.dataset.id !== id) c.classList.remove('open');
   });
   card.classList.add('open');
+  syncCardHeadAria(card, true);
   patchCardHeadGlance(p, false);
   const dayInfo = getClinicalDayInfo(p);
   const body = card.querySelector('.card-body');
@@ -2459,7 +2488,7 @@ function renderCard(p){
 
   return `
   <div class="card status-rail ${isOpen?'open':''}${statusClass}${bulkOn?' bulk-selected':''}" data-id="${p.id}">
-    <div class="card-head">
+    <div class="card-head" aria-expanded="${isOpen?'true':'false'}">
       ${bulkSelectMode ? `<input type="checkbox" class="bulk-check" data-action="bulk-toggle" data-id="${p.id}" ${bulkOn?'checked':''}>` : ''}
       <div class="card-head-top">
         <div class="bed-chip">${escapeHTML(p.bed||'—')}</div>
@@ -3031,7 +3060,7 @@ function renderWorklist(){
   }
 
   const html = [
-    hasUnitHandover ? `<div class="work-section work-warn ward-meta-handover"><h3>Unit handover</h3><div class="notes-box">${escapeHTML(wardMeta.handoverNote)}</div><button type="button" class="btn" id="clearWardHandoverBtn" style="margin-top:8px;">Clear unit handover</button></div>` : '',
+    hasUnitHandover ? `<div class="work-section work-warn ward-meta-handover"><h3>Unit handover</h3><div class="notes-box">${escapeHTML(wardMeta.handoverNote)}</div><button type="button" class="btn section-action" id="clearWardHandoverBtn">Clear unit handover</button></div>` : '',
     section('Handover flags', handoverItems, '↪', 'warn'),
     section('Antibiotics — stop today', abxLastDayItems, '💊', 'urgent'),
     section('Antibiotics — stop overdue', abxOverdueItems, '💊', 'urgent'),
@@ -3152,18 +3181,20 @@ function renderDischarged(){
   }
 
   list.innerHTML = items.map(p=>`
-    <div class="card" data-id="${p.id}">
-      <div class="card-head" style="cursor:default;">
-        <div class="bed-chip" style="background:var(--line-soft);color:var(--ink-soft);">${escapeHTML(p.bed||'—')}</div>
-        <div class="card-main">
-          <div class="card-name-row">
-            <span class="card-name">${escapeHTML(p.name)}</span>
-            <span class="card-meta">${escapeHTML(p.age)}${p.sex?'/'+p.sex:''}</span>
+    <div class="card card-discharged" data-id="${p.id}">
+      <div class="card-head card-head-static">
+        <div class="card-head-top">
+          <div class="bed-chip bed-chip-muted">${escapeHTML(p.bed||'—')}</div>
+          <div class="card-main">
+            <div class="card-name-row">
+              <span class="card-name">${escapeHTML(p.name)}</span>
+              <span class="card-meta">${escapeHTML(p.age)}${p.sex?'/'+p.sex:''}</span>
+            </div>
+            <div class="card-dx">${escapeHTML(p.diagnosis)}</div>
+            <div class="card-proc">${escapeHTML(p.procedure||'')} · Discharged ${fmtDate(p.dischargeDate)}</div>
           </div>
-          <div class="card-dx">${escapeHTML(p.diagnosis)}</div>
-          <div class="card-proc">${escapeHTML(p.procedure||'')} · Discharged ${fmtDate(p.dischargeDate)}</div>
+          <button type="button" class="btn btn-sm pressable" data-action="reopen" data-id="${p.id}">Reopen</button>
         </div>
-        <button class="btn" data-action="reopen" data-id="${p.id}">Reopen</button>
       </div>
     </div>
   `).join('');
@@ -4391,7 +4422,7 @@ function renderTemplateManagerList(){
         <button type="button" class="btn" data-tpl-dup="${escapeHTML(t.id)}">Dup</button>
         ${t.builtin ? `<button type="button" class="btn" data-tpl-hide="${escapeHTML(t.id)}">Hide</button>` : `<button type="button" class="btn danger" data-tpl-del="${escapeHTML(t.id)}">Del</button>`}
       </div>
-    </div>`).join('') || '<div class="small-muted">No templates match.</div>';
+    </div>`).join('') || `<div class="empty-state compact"><div class="msg">No templates match your search.</div></div>`;
 
   el.querySelectorAll('[data-tpl-edit]').forEach(btn=>{
     btn.addEventListener('click', ()=> openTemplateEditor(btn.dataset.tplEdit));
