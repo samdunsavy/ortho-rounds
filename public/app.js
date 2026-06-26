@@ -43,6 +43,9 @@ const LS_TIP_WORKLIST = "ortho_tipWorklist";
 const LS_TIP_PRESENT = "ortho_tipPresent";
 const LS_TIP_AI_DRAFT = "ortho_tipAiDraft";
 const LS_TIP_VOICE_PLAN = "ortho_tipVoicePlan";
+const LS_TIP_START_HERE = "ortho_tipStartHere";
+const START_HERE_LIMIT = 3;
+const START_HERE_MIN_SCORE = 30;
 const BULK_DRAFT_MAX = 20;
 const WARD_META_ID = "__ward_meta__";
 const FILTER_LABELS = {
@@ -2886,6 +2889,123 @@ function collectWorklistData(){
   };
 }
 
+/** Rank inpatients by urgency — top picks for morning worklist triage. */
+function scorePatientForStartHere(p){
+  let score = 0;
+  const reasons = [];
+
+  const abx = getAntibioticsCourse(p);
+  if(abx){
+    if(abx.status === 'overdue'){
+      score = Math.max(score, 100);
+      reasons.push({ score: 100, text: 'Antibiotics stop overdue' });
+    }else if(abx.status === 'last_day'){
+      score = Math.max(score, 95);
+      reasons.push({ score: 95, text: 'Antibiotics stop today' });
+    }else if(abx.status === 'ending_soon'){
+      score = Math.max(score, 50);
+      reasons.push({ score: 50, text: 'Antibiotics ending tomorrow' });
+    }
+  }
+
+  const handoverPin = (p.handoverPin || '').trim();
+  const handoverNote = (p.handoverNote || '').trim();
+  if(handoverPin || handoverNote){
+    score = Math.max(score, 90);
+    reasons.push({ score: 90, text: handoverPin ? `Pin: ${handoverPin}` : 'Handover flag' });
+  }
+
+  const overduePostOp = getOverduePostOpChecks(p);
+  if(overduePostOp.length){
+    score = Math.max(score, 85);
+    reasons.push({ score: 85, text: `${overduePostOp[0].label} overdue` });
+  }
+
+  const abnormalInv = (p.investigations || []).filter(i => i.status === 'abnormal');
+  if(abnormalInv.length){
+    score = Math.max(score, 80);
+    const inv = abnormalInv[0];
+    reasons.push({ score: 80, text: `${inv.name} abnormal${inv.value ? ' — ' + inv.value : ''}` });
+  }
+
+  const labs = p.labs || {};
+  for(const key of ['hb', 'crp', 'wcc', 'creatinine']){
+    const val = labs[key];
+    if(val && labValueClass(key, val)){
+      score = Math.max(score, 75);
+      reasons.push({ score: 75, text: `Abnormal ${key === 'wcc' ? 'TLC' : key === 'creatinine' ? 'Cr' : key.toUpperCase()} ${formatLabWithUnit(key, val)}` });
+      break;
+    }
+  }
+
+  if(!hasPlanToday(p)){
+    const planScore = p.dailyPlan ? 35 : 40;
+    score = Math.max(score, planScore);
+    reasons.push({
+      score: planScore,
+      text: p.dailyPlan ? `Plan outdated (last ${fmtDate(p.dailyPlanDate) || 'earlier'})` : 'No plan entered for today'
+    });
+  }
+
+  const duePostOp = getDuePostOpChecks(p);
+  if(duePostOp.length){
+    score = Math.max(score, 45);
+    reasons.push({ score: 45, text: `${duePostOp[0].label} due today` });
+  }
+
+  const pendingInv = (p.investigations || []).filter(i => i.status === 'pending');
+  if(pendingInv.length){
+    score = Math.max(score, 30);
+    reasons.push({ score: 30, text: `Pending ${pendingInv[0].name}` });
+  }
+
+  const pendingFit = (p.fitness || []).filter(f => f.status === 'pending');
+  if(pendingFit.length && score < 30){
+    score = Math.max(score, 25);
+    reasons.push({ score: 25, text: `Pending ${pendingFit[0].dept} clearance` });
+  }
+
+  if(score < START_HERE_MIN_SCORE) return null;
+  reasons.sort((a, b) => b.score - a.score);
+  return { p, score, text: reasons[0].text };
+}
+
+function collectStartHereItems(){
+  const active = getPgScopedPatients(patients.filter(p => p.status !== 'discharged'));
+  const ranked = active.map(scorePatientForStartHere).filter(Boolean);
+  ranked.sort((a, b) => {
+    if(b.score !== a.score) return b.score - a.score;
+    return (a.p.bed || '').localeCompare(b.p.bed || '', undefined, { numeric: true });
+  });
+  return ranked.slice(0, START_HERE_LIMIT).map((r, idx) => ({
+    p: r.p,
+    text: r.text,
+    kind: 'starthere',
+    rank: idx + 1,
+    score: r.score
+  }));
+}
+
+function renderStartHereSection(items){
+  if(!items.length) return '';
+  return `<div class="work-section work-start-here">
+    <h3>→ Start here <span class="small-muted">(top ${items.length})</span></h3>
+    ${items.map(it => {
+      const pgAvatar = it.p.assignedPg
+        ? `<span class="work-pg-avatar" title="PG ${escapeHTML(it.p.assignedPg)}">${escapeHTML(it.p.assignedPg)}</span>`
+        : '';
+      return `<div class="work-item pressable start-here-item" data-jump="${escapeHTML(it.p.id)}" data-jump-kind="starthere">
+        <span class="work-item-icon start-here-rank">${it.rank}</span>
+        <div class="work-item-main">
+          <div class="who">${escapeHTML(it.p.name)} <span class="small-muted">· ${escapeHTML(it.p.bed || '—')}</span></div>
+          <div class="what">${escapeHTML(it.text)}</div>
+        </div>
+        ${pgAvatar}
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+
 /* ---------------- flags / derived info ---------------- */
 
 function getPatientFlags(p){
@@ -3785,7 +3905,10 @@ function renderWorklist(){
       }`
     : '';
 
+  const startHereItems = collectStartHereItems();
+
   const html = [
+    renderStartHereSection(startHereItems),
     hasUnitHandover ? `<div class="work-section work-warn ward-meta-handover"><h3>Unit handover</h3><div class="notes-box">${escapeHTML(wardMeta.handoverNote)}</div><button type="button" class="btn section-action" id="clearWardHandoverBtn">Clear unit handover</button></div>` : '',
     section('Handover flags', handoverItems.map(it => Object.assign({}, it, { kind: 'handover' })), '↪', 'warn'),
     section('Antibiotics — stop today', abxLastDayItems, '💊', 'urgent'),
@@ -3817,6 +3940,10 @@ function renderWorklist(){
   if(isVoicePlanSupported() && planMissingItems.length && !localStorage.getItem(LS_TIP_VOICE_PLAN)){
     localStorage.setItem(LS_TIP_VOICE_PLAN, '1');
     setTimeout(()=> showToast('Tip: tap 🎤 to dictate today\'s plan', { duration: 6000 }), 6500);
+  }
+  if(startHereItems.length && !localStorage.getItem(LS_TIP_START_HERE)){
+    localStorage.setItem(LS_TIP_START_HERE, '1');
+    showToast('Tip: Start here shows who to see first — tap to jump to patient', { duration: 6000 });
   }
 
   document.getElementById('worklistBulkPlanBtn')?.addEventListener('click', (e)=>{
