@@ -17,6 +17,7 @@ let editingPatientId = null; // null = adding new
 let modalWorkingData = null; // in-memory draft while add/edit modal is open
 let modalSuppressAutoTemplate = false; // user removed milestones — don't refill on save
 let pendingImageSlot = null;  // {type: 'preop'|'postop'|'followup'}
+let viewingImageContext = null; // { patientId, imgId }
 
 /* ---------------- storage / sync keys ---------------- */
 
@@ -35,6 +36,18 @@ const LS_CONSULTANT_MODE = "ortho_consultantMode";
 const LS_LAST_EXPORT = "ortho_lastExport";
 const LS_BACKUP_NUDGE = "ortho_backupNudge";
 const LS_DARK_MODE = "ortho_darkMode";
+const LS_PG_SCOPE = "ortho_pgScope";
+const LS_READ_ALOUD = "ortho_readAloud";
+const LS_MORNING_VIEW = "ortho_morningView";
+const LS_TIP_MINE_EMPTY = "ortho_tipMineEmpty";
+const LS_TIP_WORKLIST = "ortho_tipWorklist";
+const LS_TIP_PRESENT = "ortho_tipPresent";
+const LS_TIP_AI_DRAFT = "ortho_tipAiDraft";
+const LS_TIP_VOICE_PLAN = "ortho_tipVoicePlan";
+const LS_TIP_START_HERE = "ortho_tipStartHere";
+const START_HERE_LIMIT = 3;
+const START_HERE_MIN_SCORE = 30;
+const BULK_DRAFT_MAX = 20;
 const WARD_META_ID = "__ward_meta__";
 const FILTER_LABELS = {
   all: 'All',
@@ -49,14 +62,21 @@ const FILTER_LABELS = {
   ottoday: 'OT today',
   mine: 'My patients'
 };
-const LAB_THRESHOLDS = { hb: 100, crp: 10, wcc: 11, creatinine: 120 };
+// Indian lab report units (g/dL, mg/L, cells/cu.mm, mg/dL)
+const LAB_SPEC = {
+  hb:         { unit: 'g/dL',        low: 12,    siLow: 100,   siIfAbove: 25 },
+  crp:        { unit: 'mg/L',        high: 10 },
+  wcc:        { unit: 'cells/cu.mm', high: 11000, siHigh: 11, siIfBelow: 100 },
+  creatinine: { unit: 'mg/dL',       high: 1.3,  siHigh: 120,  siIfAbove: 20 }
+};
 const PLAN_HISTORY_MAX = 14;
 const FULL_RECONCILE_INTERVAL_MS = 5 * 60 * 1000; // periodic full reconcile
 let idb = null;
-let wardMeta = { handoverNote: '', pgRoster: [], updatedAt: 0 };
+let wardMeta = { handoverNote: '', pgRoster: [], presentedToday: { date: '', ids: [] }, updatedAt: 0 };
 let syncing = false;
 let presentationUnpresentedOnly = localStorage.getItem(LS_PRESENT_UNPRESENTED) === '1';
-let presentationReadAloud = false;
+let presentationReadAloud = localStorage.getItem(LS_READ_ALOUD) === '1';
+let modalBaselineJson = null;
 let bulkSelectMode = false;
 let bulkSelectedIds = new Set();
 let pendingSyncConflicts = [];
@@ -67,6 +87,10 @@ let expandedPlanHistory = {}; // patientId -> bool
 const LS_LAST_SYNC_OK = 'ortho_lastSyncOk';
 let syncChipState = 'offline';
 let lastSyncSuccessAt = Number(localStorage.getItem(LS_LAST_SYNC_OK) || 0);
+let aiAvailable = false;
+const presentationAiCache = new Map();
+let activeVoiceRecognition = null;
+let voiceDictationKey = '';
 
 /* ---------------- IndexedDB cache layer ---------------- */
 
@@ -148,12 +172,80 @@ function stripClientFields(rec){
   return out;
 }
 
+function normalizePresentedToday(pt){
+  const today = todayISO();
+  if(!pt || pt.date !== today) return { date: today, ids: [] };
+  return { date: today, ids: Array.isArray(pt.ids) ? [...pt.ids] : [] };
+}
+
+function parseWardMetaFromRecord(metaRec){
+  if(!metaRec) return { handoverNote: '', pgRoster: [], presentedToday: normalizePresentedToday(null), updatedAt: 0 };
+  return {
+    handoverNote: metaRec.handoverNote || '',
+    pgRoster: Array.isArray(metaRec.pgRoster) ? metaRec.pgRoster : [],
+    presentedToday: normalizePresentedToday(metaRec.presentedToday),
+    updatedAt: metaRec.updatedAt || 0
+  };
+}
+
+function mergePresentedToday(a, b){
+  const today = todayISO();
+  const norm = (pt)=> (!pt || pt.date !== today) ? { date: today, ids: [] } : { date: today, ids: [...(pt.ids || [])] };
+  const left = norm(a);
+  const right = norm(b);
+  return { date: today, ids: [...new Set([...left.ids, ...right.ids])] };
+}
+
+function mergeWardMetaFields(local, remote){
+  const lt = Number(local.updatedAt) || 0;
+  const rt = Number(remote.updatedAt) || 0;
+  const base = lt >= rt ? local : remote;
+  const other = lt >= rt ? remote : local;
+  return {
+    handoverNote: (base.handoverNote || '').trim() ? base.handoverNote : (other.handoverNote || ''),
+    pgRoster: (base.pgRoster && base.pgRoster.length) ? base.pgRoster : (other.pgRoster || []),
+    presentedToday: mergePresentedToday(local.presentedToday, remote.presentedToday),
+    updatedAt: Math.max(lt, rt)
+  };
+}
+
+async function mergeWardMetaRecord(remote){
+  const cur = await cacheGet(WARD_META_ID);
+  let merged;
+  if(!cur){
+    merged = parseWardMetaFromRecord(remote);
+    merged._dirty = false;
+  }else if(cur._dirty){
+    merged = mergeWardMetaFields(parseWardMetaFromRecord(cur), parseWardMetaFromRecord(remote));
+    merged._dirty = true;
+  }else if(Number(remote.updatedAt) >= (Number(cur.updatedAt) || 0)){
+    merged = mergeWardMetaFields(parseWardMetaFromRecord(cur), parseWardMetaFromRecord(remote));
+    merged._dirty = false;
+  }else return;
+  const rec = Object.assign({ id: WARD_META_ID, deleted: false }, merged);
+  await cachePutRaw(rec);
+  wardMeta = parseWardMetaFromRecord(rec);
+}
+
+function migratePresentedFromLocalStorage(){
+  try{
+    const raw = JSON.parse(localStorage.getItem(LS_PRESENTED) || '{}');
+    if(raw.date === todayISO() && Array.isArray(raw.ids) && raw.ids.length){
+      const cur = normalizePresentedToday(wardMeta.presentedToday);
+      wardMeta.presentedToday = mergePresentedToday(cur, raw);
+      void saveWardMeta({ presentedToday: wardMeta.presentedToday });
+    }
+    localStorage.removeItem(LS_PRESENTED);
+  }catch{ /* ignore */ }
+}
+
 async function reloadFromCache(){
   const all = await cacheGetAll();
   const metaRec = all.find(r => r && r.id === WARD_META_ID);
-  wardMeta = metaRec
-    ? { handoverNote: metaRec.handoverNote || '', updatedAt: metaRec.updatedAt || 0 }
-    : { handoverNote: '', updatedAt: 0 };
+  wardMeta = parseWardMetaFromRecord(metaRec);
+  migratePresentedFromLocalStorage();
+  const prevModalUpdatedAt = modalWorkingData?.updatedAt;
+  const editingId = editingPatientId;
   patients = all
     .filter(r => r && r.id && !r.deleted && !String(r.id).startsWith('__'))
     .map(r => { const o = Object.assign({}, r); delete o._dirty; return o; });
@@ -163,6 +255,20 @@ async function reloadFromCache(){
     normalizePatientChecklists(p);
     normalizeAntibioticCourses(p);
   });
+  if(editingId && modalWorkingData){
+    const fresh = patients.find(p => p.id === editingId);
+    if(fresh && Number(fresh.updatedAt) > Number(prevModalUpdatedAt || 0)){
+      modalWorkingData = JSON.parse(JSON.stringify(fresh));
+      normalizeAntibioticCourses(modalWorkingData);
+      const body = document.getElementById('modalBody');
+      if(body && document.getElementById('patientModal')?.classList.contains('active')){
+        body.innerHTML = renderModalForm(modalWorkingData);
+        bindModalDynamicLists();
+        snapshotModalBaseline();
+        showToast('Patient updated elsewhere — form refreshed', { duration: 5000 });
+      }
+    }
+  }
 }
 
 // One-time migration: stamp old local-only records so they sync to the server.
@@ -213,6 +319,457 @@ async function pingServer(){
   }catch{
     return false;
   }
+}
+
+async function refreshAiStatus(){
+  try{
+    const ctrl = new AbortController();
+    const t = setTimeout(()=> ctrl.abort(), 2500);
+    const res = await fetch('/api/health', { signal: ctrl.signal });
+    clearTimeout(t);
+    if(!res.ok){ aiAvailable = false; return false; }
+    const data = await res.json();
+    aiAvailable = !!(data.ai && data.ai.enabled);
+    updateAiButtonsVisibility();
+    return aiAvailable;
+  }catch{
+    aiAvailable = false;
+    updateAiButtonsVisibility();
+    return false;
+  }
+}
+
+function canUseAi(){
+  return aiAvailable && !isConsultantMode() && navigator.onLine;
+}
+
+async function callAi(endpoint, body){
+  return api('/api/ai/' + endpoint, { method: 'POST', body: JSON.stringify(body) });
+}
+
+function setAiButtonBusy(btn, busy){
+  if(!btn) return;
+  btn.disabled = busy;
+  btn.classList.toggle('ai-btn-busy', busy);
+}
+
+function buildPatientAiSnapshot(p){
+  const dayInfo = getClinicalDayInfo(p);
+  const abx = getAntibioticsCourse(p);
+  const yPlan = getYesterdayPlan(p);
+  const history = (p.planHistory || []).slice(-2).map(h => ({ date: h.date, text: h.text }));
+  const dvtName = (p.dvtProphylaxis || '').trim();
+  const dvtDays = parseTherapyDays(p.dvtDays);
+  const snapshot = {
+    bed: p.bed,
+    ward: p.ward || getPatientWard(p),
+    name: p.name,
+    age: p.age,
+    sex: p.sex,
+    status: p.status,
+    diagnosis: p.diagnosis,
+    procedure: p.procedure,
+    surgeon: p.surgeon,
+    implant: p.implant,
+    surgeryDate: p.surgeryDate,
+    admissionDate: p.admissionDate,
+    clinicalDay: dayInfo ? `${dayInfo.prefix} ${dayInfo.day}` : null,
+    pod: getPatientPod(p),
+    dailyPlan: p.dailyPlan,
+    dailyPlanDate: p.dailyPlanDate,
+    yesterdayPlan: yPlan ? yPlan.text : null,
+    planHistory: history,
+    labsLine: formatLabsLine(p) || null,
+    investigations: (p.investigations || []).map(i => ({
+      name: i.name,
+      status: i.status,
+      value: i.value || null
+    })),
+    fitness: (p.fitness || []).map(f => ({ dept: f.dept, status: f.status })),
+    milestonesOverdue: getOverduePostOpChecks(p).slice(0, 4).map(c => c.label),
+    milestonesDue: getDuePostOpChecks(p).slice(0, 4).map(c => c.label),
+    therapy: getTherapyBadges(p).map(b => b.label),
+    antibioticsDay: abx && abx.status !== 'stopped' ? abx.label : null,
+    handoverPin: (p.handoverPin || '').trim() || null,
+    handoverNote: (p.handoverNote || '').trim() || null,
+    complications: (p.complications || []).map(c => c.type + (c.note ? ': ' + c.note : '')),
+    notes: (p.notes || '').trim() || null
+  };
+  if(dvtName) snapshot.dvtProphylaxis = dvtName;
+  if(dvtDays) snapshot.dvtDays = dvtDays;
+  return snapshot;
+}
+
+function collectHandoverAiPatients(){
+  const w = collectWorklistData();
+  const ids = new Set();
+  const out = [];
+  const add = (p) => {
+    if(!p || ids.has(p.id)) return;
+    ids.add(p.id);
+    out.push(p);
+  };
+  w.handoverItems.forEach(it => add(it.p));
+  getPgScopedPatients(patients.filter(p => p.status !== 'discharged')).forEach(p => {
+    if((p.handoverPin || '').trim()) add(p);
+  });
+  w.abxLastDayItems.forEach(it => add(it.p));
+  w.abxOverdueItems.forEach(it => add(it.p));
+  w.postOpOverdueItems.forEach(it => add(it.p));
+  return out.slice(0, 25);
+}
+
+async function generateWardHandoverNote(){
+  const flagged = collectHandoverAiPatients();
+  if(!flagged.length){
+    showToast('No handover flags — add pins or notes first');
+    return null;
+  }
+  const { text } = await callAi('handover-summary', {
+    patients: flagged.map(buildPatientAiSnapshot),
+    wardNote: wardMeta.handoverNote || ''
+  });
+  return text;
+}
+
+function openBulkDraftModal(){
+  document.getElementById('bulkDraftModal')?.classList.add('active');
+}
+
+function closeBulkDraftModal(){
+  document.getElementById('bulkDraftModal')?.classList.remove('active');
+  const list = document.getElementById('bulkDraftList');
+  const progress = document.getElementById('bulkDraftProgress');
+  const saveBtn = document.getElementById('bulkDraftSaveBtn');
+  if(list) list.innerHTML = '';
+  if(progress){
+    progress.textContent = '';
+    progress.classList.remove('busy');
+  }
+  if(saveBtn) saveBtn.disabled = true;
+}
+
+function renderBulkDraftReviewRow(p, draft){
+  const failed = !draft.ok;
+  const checked = draft.ok ? 'checked' : '';
+  const disabled = failed ? 'disabled' : '';
+  return `<div class="bulk-draft-item${failed ? ' failed' : ''}" data-bulk-draft-id="${escapeHTML(p.id)}">
+    <div class="bulk-draft-item-head">
+      <label><input type="checkbox" class="bulk-draft-check" data-bulk-draft-check="${escapeHTML(p.id)}" ${checked} ${disabled}> ${escapeHTML(p.name)} <span class="small-muted">· ${escapeHTML(p.bed||'—')}</span></label>
+    </div>
+    <textarea class="bulk-draft-text" data-bulk-draft-text="${escapeHTML(p.id)}" rows="2" ${disabled}>${escapeHTML(draft.text || '')}</textarea>
+    ${failed ? `<div class="bulk-draft-err">${escapeHTML(draft.error || 'Draft failed')}</div>` : ''}
+  </div>`;
+}
+
+let bulkDraftRunning = false;
+
+async function runBulkDraftPlans(){
+  if(bulkDraftRunning) return;
+  if(!canUseAi()){
+    showToast('AI not available — check server key or connection');
+    return;
+  }
+  const items = collectWorklistData().planMissingItems;
+  if(!items.length){
+    showToast('No missing plans');
+    return;
+  }
+  const capped = items.slice(0, BULK_DRAFT_MAX);
+  const extra = items.length - capped.length;
+  let msg = `Draft plans for ${capped.length} patient(s)? You can review and edit before saving.`;
+  if(extra > 0) msg += `\n\n(${extra} more skipped — run again after saving.)`;
+  const ok = await showConfirm('Draft all missing plans', msg, { confirmLabel: 'Draft all' });
+  if(!ok) return;
+
+  bulkDraftRunning = true;
+  openBulkDraftModal();
+  const progressEl = document.getElementById('bulkDraftProgress');
+  const listEl = document.getElementById('bulkDraftList');
+  const saveBtn = document.getElementById('bulkDraftSaveBtn');
+  if(listEl) listEl.innerHTML = '';
+  if(saveBtn) saveBtn.disabled = true;
+
+  const drafts = [];
+  for(let i = 0; i < capped.length; i++){
+    const { p } = capped[i];
+    if(progressEl){
+      progressEl.textContent = `Drafting ${i + 1} / ${capped.length}…`;
+      progressEl.classList.add('busy');
+    }
+    try{
+      const { text } = await callAi('draft-plan', { patient: buildPatientAiSnapshot(p) });
+      drafts.push({ p, ok: true, text });
+    }catch(err){
+      drafts.push({ p, ok: false, text: '', error: err.message || 'Failed' });
+    }
+  }
+
+  if(progressEl){
+    progressEl.classList.remove('busy');
+    progressEl.textContent = `Review ${drafts.filter(d => d.ok).length} draft(s) — uncheck any you don't want to save.`;
+  }
+  if(listEl) listEl.innerHTML = drafts.map(d => renderBulkDraftReviewRow(d.p, d)).join('');
+  if(saveBtn) saveBtn.disabled = !drafts.some(d => d.ok);
+  bulkDraftRunning = false;
+}
+
+async function saveBulkDraftPlans(){
+  const rows = document.querySelectorAll('[data-bulk-draft-id]');
+  const toSave = [];
+  rows.forEach(row => {
+    const id = row.dataset.bulkDraftId;
+    const cb = row.querySelector('[data-bulk-draft-check]');
+    const ta = row.querySelector('[data-bulk-draft-text]');
+    if(!cb?.checked || !ta) return;
+    const text = ta.value.trim();
+    if(!text) return;
+    const p = patients.find(x => x.id === id);
+    if(p) toSave.push({ p, text });
+  });
+  if(!toSave.length){
+    showToast('Nothing selected to save');
+    return;
+  }
+  const saveBtn = document.getElementById('bulkDraftSaveBtn');
+  if(saveBtn){
+    saveBtn.disabled = true;
+    saveBtn.classList.add('ai-btn-busy');
+  }
+  try{
+    for(const { p, text } of toSave){
+      saveCardPlan(p, text);
+      await savePatient(p);
+    }
+    closeBulkDraftModal();
+    renderAll();
+    showToast(`Plans saved for ${toSave.length} patient(s)`, { success: true });
+  }finally{
+    if(saveBtn){
+      saveBtn.disabled = false;
+      saveBtn.classList.remove('ai-btn-busy');
+    }
+  }
+}
+
+function aiDraftPlanButtonHtml(patientId, target){
+  if(!canUseAi()) return '';
+  const targetAttr = target ? ` data-target="${escapeHTML(target)}"` : '';
+  return `<button type="button" class="btn btn-sm ai-btn" data-ai-draft-plan data-patient-id="${escapeHTML(patientId)}"${targetAttr} title="Draft plan with AI">✨ Draft</button>`;
+}
+
+function isVoicePlanSupported(){
+  return !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+}
+
+function planInputForVoiceTarget(patientId, target){
+  if(target === 'modal') return document.getElementById('f_dailyPlan');
+  if(target === 'work') return document.querySelector(`[data-work-plan="${patientId}"]`);
+  return document.querySelector(`.card-plan-edit[data-id="${patientId}"]`);
+}
+
+function stopVoicePlanDictation(){
+  if(activeVoiceRecognition){
+    try{ activeVoiceRecognition.stop(); }catch{ /* ignore */ }
+    activeVoiceRecognition = null;
+  }
+  voiceDictationKey = '';
+  document.querySelectorAll('[data-voice-plan].listening').forEach(btn=>{
+    btn.classList.remove('listening');
+  });
+}
+
+function appendVoiceTranscript(input, transcript, target){
+  const piece = (transcript || '').trim();
+  if(!piece) return;
+  const cur = (input.value || '').trim();
+  const sep = cur && !/[.!?]$/.test(cur) ? ' ' : (cur ? '\n' : '');
+  input.value = cur ? cur + sep + piece : piece;
+  if(target === 'modal') renderPlanStatus();
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function startVoicePlanDictation(patientId, target, btn){
+  if(!isVoicePlanSupported()){
+    showToast('Voice input not supported in this browser');
+    return;
+  }
+  const key = `${patientId}:${target || 'card'}`;
+  if(activeVoiceRecognition && voiceDictationKey === key){
+    stopVoicePlanDictation();
+    showToast('Stopped');
+    return;
+  }
+  const input = planInputForVoiceTarget(patientId, target || 'card');
+  if(!input){
+    showToast('Open the plan field first');
+    return;
+  }
+  stopVoicePlanDictation();
+  if(window.speechSynthesis) window.speechSynthesis.cancel();
+
+  const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const rec = new Recognition();
+  rec.lang = 'en-IN';
+  rec.interimResults = false;
+  rec.continuous = true;
+  rec.maxAlternatives = 1;
+
+  activeVoiceRecognition = rec;
+  voiceDictationKey = key;
+  btn.classList.add('listening');
+
+  rec.onresult = (e)=>{
+    for(let i = e.resultIndex; i < e.results.length; i++){
+      if(!e.results[i].isFinal) continue;
+      appendVoiceTranscript(input, e.results[i][0].transcript, target || 'card');
+    }
+  };
+
+  rec.onerror = (e)=>{
+    stopVoicePlanDictation();
+    if(e.error === 'not-allowed') showToast('Microphone permission denied');
+    else if(e.error !== 'aborted') showToast('Voice input failed — try again');
+  };
+
+  rec.onend = ()=>{
+    if(activeVoiceRecognition === rec) stopVoicePlanDictation();
+  };
+
+  try{
+    rec.start();
+    showToast('Listening… tap mic to stop', { duration: 3500 });
+  }catch{
+    stopVoicePlanDictation();
+    showToast('Could not start microphone');
+  }
+}
+
+function voicePlanButtonHtml(patientId, target){
+  if(!isVoicePlanSupported() || isConsultantMode()) return '';
+  const targetAttr = target ? ` data-voice-target="${escapeHTML(target)}"` : '';
+  return `<button type="button" class="btn btn-sm voice-plan-btn" data-voice-plan data-patient-id="${escapeHTML(patientId)}"${targetAttr} title="Dictate plan" aria-label="Dictate plan">🎤</button>`;
+}
+
+function planActionButtonsHtml(patientId, target){
+  return `<span class="plan-action-btns">${voicePlanButtonHtml(patientId, target)}${aiDraftPlanButtonHtml(patientId, target)}</span>`;
+}
+
+function updateAiButtonsVisibility(){
+  const genBtn = document.getElementById('worklistGenerateHandoverBtn');
+  if(genBtn) genBtn.style.display = canUseAi() ? '' : 'none';
+}
+
+function bindAiEvents(){
+  if(window._aiBound) return;
+  window._aiBound = true;
+
+  document.addEventListener('click', async (e) => {
+    const voiceBtn = e.target.closest('[data-voice-plan]');
+    if(voiceBtn){
+      e.stopPropagation();
+      e.preventDefault();
+      startVoicePlanDictation(voiceBtn.dataset.patientId, voiceBtn.dataset.voiceTarget || 'card', voiceBtn);
+      return;
+    }
+
+    const draftBtn = e.target.closest('[data-ai-draft-plan]');
+    if(draftBtn){
+      e.stopPropagation();
+      e.preventDefault();
+      const pid = draftBtn.dataset.patientId;
+      const p = patients.find(x => x.id === pid);
+      if(!p) return;
+      if(!canUseAi()){
+        showToast('AI not available — check server key or connection');
+        return;
+      }
+      let input = null;
+      if(draftBtn.dataset.target === 'modal'){
+        input = document.getElementById('f_dailyPlan');
+      }else if(draftBtn.dataset.target === 'work'){
+        input = document.querySelector(`[data-work-plan="${pid}"]`);
+      }else{
+        input = document.querySelector(`.card-plan-edit[data-id="${pid}"]`);
+      }
+      setAiButtonBusy(draftBtn, true);
+      try{
+        const { text } = await callAi('draft-plan', { patient: buildPatientAiSnapshot(p) });
+        if(input) input.value = text;
+        if(draftBtn.dataset.target === 'modal') renderPlanStatus();
+        showToast('Draft ready — review and save');
+      }catch(err){
+        showToast(err.message || 'AI draft failed');
+      }finally{
+        setAiButtonBusy(draftBtn, false);
+      }
+      return;
+    }
+
+    const polishBtn = e.target.closest('[data-ai-polish]');
+    if(polishBtn){
+      e.stopPropagation();
+      const pid = polishBtn.dataset.patientId;
+      const style = polishBtn.dataset.style === 'compact' ? 'compact' : 'full';
+      const p = patients.find(x => x.id === pid);
+      if(!p || !canUseAi()) return;
+      setAiButtonBusy(polishBtn, true);
+      try{
+        const seed = style === 'compact'
+          ? generateCompactPresentationScript(p).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
+          : generatePresentationScript(p);
+        const { text } = await callAi('polish-presentation', {
+          patient: buildPatientAiSnapshot(p),
+          style,
+          seedScript: seed
+        });
+        presentationAiCache.set(`${pid}:${style}`, text);
+        renderPresentationSlide();
+        if(presentationReadAloud) speakCurrentPresentation();
+        showToast('Script polished');
+      }catch(err){
+        showToast(err.message || 'AI polish failed');
+      }finally{
+        setAiButtonBusy(polishBtn, false);
+      }
+      return;
+    }
+
+    const revertBtn = e.target.closest('[data-ai-revert-polish]');
+    if(revertBtn){
+      e.stopPropagation();
+      presentationAiCache.delete(`${revertBtn.dataset.patientId}:${revertBtn.dataset.style}`);
+      renderPresentationSlide();
+      return;
+    }
+
+    const genHandoverBtn = e.target.closest('#worklistGenerateHandoverBtn');
+    if(genHandoverBtn){
+      e.stopPropagation();
+      if(!canUseAi()){
+        showToast('AI not available — check server key or connection');
+        return;
+      }
+      setAiButtonBusy(genHandoverBtn, true);
+      try{
+        const text = await generateWardHandoverNote();
+        if(!text) return;
+        await saveWardMeta({ handoverNote: text.trim() });
+        renderWardHandoverBanner();
+        renderWorklist();
+        updateCounts();
+        showToast('Handover generated — review on worklist');
+      }catch(err){
+        showToast(err.message || 'AI handover failed');
+      }finally{
+        setAiButtonBusy(genHandoverBtn, false);
+      }
+    }
+  });
+
+  document.getElementById('bulkDraftClose')?.addEventListener('click', closeBulkDraftModal);
+  document.getElementById('bulkDraftCancelBtn')?.addEventListener('click', closeBulkDraftModal);
+  document.getElementById('bulkDraftSaveBtn')?.addEventListener('click', ()=> void saveBulkDraftPlans());
 }
 
 /* ---------------- sync engine ---------------- */
@@ -297,6 +854,10 @@ function shouldFullReconcile(force){
 async function mergeServerRecords(serverRecords){
   for(const rec of serverRecords){
     if(!rec || typeof rec.id !== 'string') continue;
+    if(rec.id === WARD_META_ID){
+      await mergeWardMetaRecord(rec);
+      continue;
+    }
     const cur = await cacheGet(rec.id);
     if(!cur){
       rec._dirty = false;
@@ -305,6 +866,9 @@ async function mergeServerRecords(serverRecords){
     }
     if(cur._dirty){
       const merged = mergePatientRecords(cur, rec);
+      // Unsynced local edits (including removed milestones) must not be resurrected from server.
+      merged.postOpChecks = (cur.postOpChecks || []).map(c => Object.assign({}, c));
+      merged.dischargeChecks = (cur.dischargeChecks || []).map(c => Object.assign({}, c));
       merged._dirty = true;
       merged.updatedAt = Math.max(Number(cur.updatedAt) || 0, Number(rec.updatedAt) || 0);
       const conflicts = detectPatientConflicts(cur, rec);
@@ -338,13 +902,23 @@ async function reconcileWithSnapshot(serverRecords){
   await mergeServerRecords(serverRecords);
 
   const local = await cacheGetAll();
+  let resurrected = 0;
   for(const localRec of local){
     if(!localRec || !localRec.id || String(localRec.id).startsWith('__')) continue;
     if(localRec._dirty) continue;
 
     const serverRec = serverById.get(localRec.id);
     if(!serverRec){
-      await cacheDelete(localRec.id);
+      // The server has no row for this id at all. Because the app only ever
+      // soft-deletes (an intentionally removed patient stays in the snapshot
+      // flagged deleted=true), a record that is *missing* from a full snapshot
+      // means the server lost its database — e.g. a redeploy without a
+      // persistent disk. Re-upload our local copy instead of deleting it, so
+      // the first device to sync repopulates the server rather than every
+      // device wiping its own records to match an empty server.
+      localRec._dirty = true;
+      await cachePutRaw(localRec);
+      resurrected++;
       continue;
     }
     if(serverRec.deleted){
@@ -353,6 +927,8 @@ async function reconcileWithSnapshot(serverRecords){
   }
 
   localStorage.setItem(LS_LAST_FULL_SYNC, String(Date.now()));
+  // Push the resurrected records back up on the next sync cycle.
+  if(resurrected) scheduleSync();
 }
 
 async function syncNow(opts){
@@ -460,8 +1036,11 @@ function hideLogin(){
 async function attemptLogin(){
   const pw = document.getElementById('loginPassword').value;
   const errEl = document.getElementById('loginError');
+  const btn = document.getElementById('loginBtn');
   errEl.textContent = '';
   if(!pw){ errEl.textContent = 'Enter the password'; return; }
+  btn.disabled = true;
+  btn.classList.add('btn-busy');
   try{
     const res = await fetch('/api/login', {
       method:'POST',
@@ -472,9 +1051,13 @@ async function attemptLogin(){
     const data = await res.json();
     localStorage.setItem(LS_TOKEN, data.token);
     hideLogin();
+    await refreshAiStatus();
     await syncNow({ fullReconcile: true });
   }catch{
     errEl.textContent = 'Cannot reach the server';
+  }finally{
+    btn.disabled = false;
+    btn.classList.remove('btn-busy');
   }
 }
 
@@ -559,9 +1142,9 @@ function showToast(msg, opts){
       opts.onClick();
     };
   }else{
-    t.textContent = msg;
-    t.onclick = null;
+    t.innerHTML = `<span class="toast-msg">${escapeHTML(msg)}</span>`;
     t.style.cursor = '';
+    t.onclick = null;
   }
   t.classList.add('show');
   t._timer = setTimeout(()=>{
@@ -623,6 +1206,26 @@ function showAppDialog(opts){
 
     const btnRow = document.getElementById('appDialogButtons');
     btnRow.innerHTML = '';
+    (opts.extraButtons || []).forEach(b => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn ai-btn' + (b.primary ? ' primary' : '');
+      btn.textContent = b.label;
+      btn.addEventListener('click', async ()=>{
+        const out = { fields: {} };
+        for(const f of (opts.fields || [])){
+          const el = document.getElementById('adf_' + f.id);
+          if(el) out.fields[f.id] = el.value;
+        }
+        setAiButtonBusy(btn, true);
+        try{
+          await b.onClick(out);
+        }finally{
+          setAiButtonBusy(btn, false);
+        }
+      });
+      btnRow.appendChild(btn);
+    });
     (opts.buttons || [{ label: 'OK', value: true, primary: true }]).forEach(b => {
       const btn = document.createElement('button');
       btn.type = 'button';
@@ -729,6 +1332,7 @@ function downloadJSON(obj, filename){
 /* ---------------- patient data shape (defaults) ---------------- */
 
 function blankPatient(){
+  const ini = getPgInitials();
   return {
     id: uid(),
     name: '', age: '', sex: 'M', bed: '', ward: '', uhid: '',
@@ -743,7 +1347,7 @@ function blankPatient(){
     dailyPlanDate: '',   // ISO date the current plan applies to
     planHistory: [],     // { date, text, by }
     handoverNote: '',
-    assignedPg: '',
+    assignedPg: ini || '',
     postOpChecks: [],    // { id, label, duePod, status, doneAt }
     dischargeChecks: [], // { id, label, status, doneAt }
     complications: [],   // { type, date, note }
@@ -948,6 +1552,7 @@ function isConsultantMode(){
 
 function setConsultantMode(on){
   localStorage.setItem(LS_CONSULTANT_MODE, on ? '1' : '0');
+  if(!on && location.hash === '#consultant') history.replaceState(null, '', location.pathname + location.search);
   document.body.classList.toggle('consultant-mode', on);
   const btn = document.getElementById('consultantModeBtn');
   if(btn) btn.classList.toggle('active', on);
@@ -1131,13 +1736,13 @@ function getActiveAntibioticCourseStatuses(p){
 function getDvtCourse(p){
   const name = (p.dvtProphylaxis || '').trim();
   const duration = parseTherapyDays(p.dvtDays);
+  if(!name && !duration) return null;
   const day = computeTherapyDay(p, 'dvtStart');
-  if(!name && day == null) return null;
   const drug = name || 'LMWH';
   if(!duration){
     return day != null
       ? { label: `${drug} day ${day}`, flagType: 'good' }
-      : null;
+      : { label: `${drug} — set start date`, flagType: 'warn' };
   }
   if(day == null) return { label: `${drug} — set start (${duration}d)`, flagType: 'warn' };
   if(day > duration) return { label: `${drug} day ${day}/${duration} — stop overdue`, flagType: 'bad' };
@@ -1173,21 +1778,40 @@ async function markAntibioticStopped(p, courseId){
 function labValueClass(key, val){
   const n = parseFloat(val);
   if(isNaN(n)) return '';
-  const th = LAB_THRESHOLDS[key];
-  if(th == null) return '';
-  if(key === 'hb' && n < th) return 'lab-low';
-  if(key === 'creatinine' && n > th) return 'lab-high';
-  if((key === 'crp' || key === 'wcc') && n > th) return 'lab-high';
+  const spec = LAB_SPEC[key];
+  if(!spec) return '';
+  if(key === 'hb'){
+    const limit = n > spec.siIfAbove ? spec.siLow : spec.low;
+    return n < limit ? 'lab-low' : '';
+  }
+  if(key === 'wcc'){
+    const limit = n < spec.siIfBelow ? spec.siHigh * 1000 : spec.high;
+    const compare = n < spec.siIfBelow ? n * 1000 : n;
+    return compare > limit ? 'lab-high' : '';
+  }
+  if(key === 'creatinine'){
+    const limit = n > spec.siIfAbove ? spec.siHigh : spec.high;
+    return n > limit ? 'lab-high' : '';
+  }
+  if(key === 'crp'){
+    return n > spec.high ? 'lab-high' : '';
+  }
   return '';
+}
+
+function formatLabWithUnit(key, val){
+  if(val === '' || val == null) return '';
+  const unit = LAB_SPEC[key]?.unit || '';
+  return unit ? `${val} ${unit}` : String(val);
 }
 
 function formatLabsLine(p){
   const labs = p.labs || {};
   const parts = [];
-  if(labs.hb) parts.push(`Hb ${labs.hb}`);
-  if(labs.crp) parts.push(`CRP ${labs.crp}`);
-  if(labs.wcc) parts.push(`WCC ${labs.wcc}`);
-  if(labs.creatinine) parts.push(`Cr ${labs.creatinine}`);
+  if(labs.hb) parts.push(`Hb ${formatLabWithUnit('hb', labs.hb)}`);
+  if(labs.crp) parts.push(`CRP ${formatLabWithUnit('crp', labs.crp)}`);
+  if(labs.wcc) parts.push(`TLC ${formatLabWithUnit('wcc', labs.wcc)}`);
+  if(labs.creatinine) parts.push(`Cr ${formatLabWithUnit('creatinine', labs.creatinine)}`);
   return parts.join(' · ');
 }
 
@@ -1227,8 +1851,17 @@ function mergePatientRecords(local, remote){
   if(!local) return Object.assign({}, remote);
   if(!remote) return Object.assign({}, local);
   const merged = Object.assign({}, remote, local);
-  merged.postOpChecks = mergeChecklistById(local.postOpChecks, remote.postOpChecks);
-  merged.dischargeChecks = mergeChecklistById(local.dischargeChecks, remote.dischargeChecks);
+  const localTs = Number(local.updatedAt) || 0;
+  const remoteTs = Number(remote.updatedAt) || 0;
+  // Newer patient snapshot wins the full checklist (so deletions persist).
+  // Per-item merge only when remote is strictly newer at the patient level.
+  if(localTs >= remoteTs){
+    merged.postOpChecks = (local.postOpChecks || []).map(c => Object.assign({}, c));
+    merged.dischargeChecks = (local.dischargeChecks || []).map(c => Object.assign({}, c));
+  }else{
+    merged.postOpChecks = mergeChecklistById(local.postOpChecks, remote.postOpChecks);
+    merged.dischargeChecks = mergeChecklistById(local.dischargeChecks, remote.dischargeChecks);
+  }
   merged.planHistory = mergePlanHistory(local.planHistory, remote.planHistory);
   merged.labs = Object.assign({}, remote.labs || {}, local.labs || {});
 
@@ -1301,8 +1934,43 @@ function showConflictCompare(patientId, conflict){
         localP.statusUpdatedAt = Date.now();
       }
       void persistAndRerender(localP);
+    }else if(choice.action === 'local'){
+      localP.updatedAt = Date.now();
+      void persistAndRerender(localP).then(()=> showToast('Kept your version — will sync'));
     }
   });
+}
+
+function isPgScopeMine(){
+  const scope = localStorage.getItem(LS_PG_SCOPE);
+  if(scope === 'all') return false;
+  if(scope === 'mine') return true;
+  return !!getPgInitials();
+}
+
+function setPgScope(mine){
+  localStorage.setItem(LS_PG_SCOPE, mine ? 'mine' : 'all');
+  if(mine && getPgInitials()) applyFilter('mine');
+  updatePgScopeUI();
+  renderAll();
+}
+
+function updatePgScopeUI(){
+  const mine = isPgScopeMine();
+  ['pgScopeBtn', 'pgScopeBtnMobile'].forEach(id=>{
+    const btn = document.getElementById(id);
+    if(!btn) return;
+    btn.textContent = mine ? 'My work' : 'Whole ward';
+    btn.classList.toggle('active', mine);
+    btn.title = mine ? 'Showing your patients — tap for whole ward' : 'Showing whole ward — tap for your patients';
+  });
+}
+
+function getPgScopedPatients(items){
+  if(!isPgScopeMine()) return items;
+  const ini = getPgInitials();
+  if(!ini) return items;
+  return items.filter(p => (p.assignedPg || '').toUpperCase() === ini);
 }
 
 function patientNeedsAttention(p){
@@ -1311,7 +1979,8 @@ function patientNeedsAttention(p){
   return inList(w.pendingInvItems) || inList(w.abnormalItems) || inList(w.pendingFitItems)
     || inList(w.handoverItems) || inList(w.postOpOverdueItems) || inList(w.postOpDueItems)
     || inList(w.planMissingItems) || inList(w.dischargeIncompleteItems)
-    || inList(w.abxLastDayItems) || inList(w.abxOverdueItems);
+    || inList(w.labAbnormalItems)
+    || inList(w.abxLastDayItems) || inList(w.abxOverdueItems) || inList(w.abxEndingSoonItems);
 }
 
 function getNextDueMilestones(p, limit){
@@ -1396,9 +2065,13 @@ function restoreSavedFilter(){
     });
   }else if(getPgInitials()){
     currentFilter = 'mine';
+    localStorage.setItem(LS_FILTER, 'mine');
     document.querySelectorAll('.filter-chip').forEach(c=>{
       c.classList.toggle('active', c.dataset.filter === 'mine');
     });
+  }
+  if(!localStorage.getItem(LS_PG_SCOPE) && getPgInitials()){
+    localStorage.setItem(LS_PG_SCOPE, 'mine');
   }
   updateFilterUI();
 }
@@ -1407,7 +2080,14 @@ function maybeAutoSwitchWorklist(){
   const today = todayISO();
   if(localStorage.getItem(LS_AUTO_WORKLIST) === today) return;
   localStorage.setItem(LS_AUTO_WORKLIST, today);
-  switchView('worklist');
+  const pending = countPendingItems();
+  if(pending > 0){
+    switchView('worklist');
+    return;
+  }
+  const saved = localStorage.getItem(LS_MORNING_VIEW);
+  if(saved === 'worklist') switchView('worklist');
+  else if(saved === 'rounds') switchView('rounds');
 }
 
 async function runOnboarding(){
@@ -1424,13 +2104,31 @@ async function runOnboarding(){
   if(filterChoice && filterChoice.action !== 'cancel'){
     currentFilter = filterChoice.action;
     localStorage.setItem(LS_FILTER, currentFilter);
+    if(filterChoice.action === 'mine') localStorage.setItem(LS_PG_SCOPE, 'mine');
     document.querySelectorAll('.filter-chip').forEach(c=>{
       c.classList.toggle('active', c.dataset.filter === currentFilter);
     });
   }else if(ini){
     currentFilter = 'mine';
     localStorage.setItem(LS_FILTER, 'mine');
+    localStorage.setItem(LS_PG_SCOPE, 'mine');
   }
+  const morningChoice = await showAppDialog({
+    title: 'Morning start',
+    message: 'Where do you usually begin your day?',
+    buttons: [
+      { label: 'Worklist (inbox)', value: 'worklist', primary: true },
+      { label: 'Rounds list', value: 'rounds' }
+    ]
+  });
+  if(morningChoice && morningChoice.action !== 'cancel'){
+    localStorage.setItem(LS_MORNING_VIEW, morningChoice.action);
+  }
+  await showAppDialog({
+    title: 'Quick tips',
+    message: '• Worklist tab — clear tasks inline (Done, plan, labs)\n• Collapsed card — type plan, tap milestones & PG chip\n• Long-press + to clone last patient\n• Present — ward rounds mode',
+    buttons: [{ label: 'Got it', value: 'ok', primary: true }]
+  });
   await showAppDialog({
     title: 'Tip: use on your phone',
     message: 'Open the network URL printed when the server starts, then Add to Home Screen for quick access offline.',
@@ -1460,7 +2158,17 @@ function maybeNudgeBackup(){
 
 function imageSrc(img){
   if(!img) return '';
-  if(img.url) return img.url;
+  if(img.url){
+    // Server-hosted images are auth-protected. An <img> tag can't send the
+    // Authorization header, so pass the token as a query param instead.
+    if(img.url.startsWith('/api/images/')){
+      const token = localStorage.getItem(LS_TOKEN);
+      if(token){
+        return img.url + (img.url.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(token);
+      }
+    }
+    return img.url;
+  }
   return img.dataURL || '';
 }
 
@@ -1473,20 +2181,44 @@ async function uploadPatientImage(patientId, dataURL){
   }
 }
 
+function imageStorageName(img){
+  if(!img?.url) return null;
+  const m = String(img.url).match(/\/api\/images\/([a-f0-9]+\.(jpg|png|webp))$/i);
+  return m ? m[1] : null;
+}
+
+async function deletePatientImageFile(img){
+  const name = imageStorageName(img);
+  if(!name) return;
+  try{
+    await api('/api/images/' + encodeURIComponent(name), { method: 'DELETE' });
+  }catch(err){
+    console.warn('Could not delete image file:', err);
+  }
+}
+
 async function saveWardMeta(partial){
   wardMeta = Object.assign({}, wardMeta, partial, { updatedAt: Date.now() });
+  if(wardMeta.presentedToday) wardMeta.presentedToday = normalizePresentedToday(wardMeta.presentedToday);
   const rec = Object.assign({ id: WARD_META_ID, deleted: false, handoverNote: wardMeta.handoverNote || '' }, wardMeta);
   await cachePut(rec, true);
   scheduleSync();
 }
 
-async function loadWardMetaFromCache(){
-  const rec = await cacheGet(WARD_META_ID);
-  if(rec) wardMeta = {
-    handoverNote: rec.handoverNote || '',
-    pgRoster: Array.isArray(rec.pgRoster) ? rec.pgRoster : [],
-    updatedAt: rec.updatedAt || 0
-  };
+function getPresentedState(){
+  const pt = normalizePresentedToday(wardMeta.presentedToday);
+  return new Set(pt.ids || []);
+}
+
+async function markPresented(id){
+  const pt = normalizePresentedToday(wardMeta.presentedToday);
+  if(!pt.ids.includes(id)) pt.ids.push(id);
+  wardMeta.presentedToday = pt;
+  await saveWardMeta({ presentedToday: pt });
+}
+
+function isPresented(id){
+  return getPresentedState().has(id);
 }
 
 function getFilteredRoundsItems(){
@@ -1550,13 +2282,15 @@ function updateStickyHeaderOffset(){
 
 function buildExportPatientList(){
   const list = patients.map(p => Object.assign({}, p));
-  if((wardMeta.handoverNote || '').trim()){
-    list.push({
+  const hasWardMeta = (wardMeta.handoverNote || '').trim()
+    || (wardMeta.pgRoster || []).length
+    || (wardMeta.presentedToday?.ids || []).length;
+  if(hasWardMeta){
+    list.push(Object.assign({
       id: WARD_META_ID,
-      handoverNote: wardMeta.handoverNote,
-      updatedAt: wardMeta.updatedAt || Date.now(),
-      deleted: false
-    });
+      deleted: false,
+      updatedAt: wardMeta.updatedAt || Date.now()
+    }, wardMeta));
   }
   if((wardTemplateLibrary.templates || []).length || (wardTemplateLibrary.disabledIds || []).length){
     list.push(Object.assign({
@@ -1587,23 +2321,6 @@ function groupPatientsByWard(items){
     groups.get(w).push(p);
   }
   return [...groups.entries()].sort((a,b)=> a[0].localeCompare(b[0], undefined, {numeric:true}));
-}
-
-function getPresentedState(){
-  try{
-    const raw = JSON.parse(localStorage.getItem(LS_PRESENTED) || '{}');
-    if(raw.date === todayISO()) return new Set(raw.ids || []);
-  }catch{ /* ignore */ }
-  return new Set();
-}
-
-function markPresented(id){
-  const ids = [...getPresentedState(), id];
-  localStorage.setItem(LS_PRESENTED, JSON.stringify({ date: todayISO(), ids: [...ids] }));
-}
-
-function isPresented(id){
-  return getPresentedState().has(id);
 }
 
 /* ---------------- writes (cache + sync) ---------------- */
@@ -1639,6 +2356,7 @@ async function init(){
   document.body.classList.toggle('consultant-mode', isConsultantMode());
   bindEvents();
   bindAuthEvents();
+  bindAiEvents();
   updateStorageNotice();
   updatePgInitialsUI();
   renderWardHandoverBanner();
@@ -1657,6 +2375,8 @@ async function init(){
   }
 
   const reachable = await pingServer();
+  await refreshAiStatus();
+  renderAll();
   if(reachable){
     if(hasToken()){
       try{
@@ -1678,7 +2398,7 @@ async function init(){
 
   setInterval(()=>{ if(hasToken() && navigator.onLine) syncNow({}); }, 20000);
   setInterval(()=>{ refreshSyncChipLabel(); }, 30000);
-  window.addEventListener('online', ()=>{ if(hasToken()) syncNow({}); });
+  window.addEventListener('online', ()=>{ refreshAiStatus(); if(hasToken()) syncNow({}); });
   window.addEventListener('focus', ()=>{ if(hasToken()) syncNow({}); });
 }
 
@@ -1756,8 +2476,8 @@ function bindEvents(){
   });
   document.getElementById('addPatientFab').addEventListener('mouseup', ()=>{ if(fabTimer){ clearTimeout(fabTimer); fabTimer = null; }});
   document.getElementById('addPatientFab').addEventListener('mouseleave', ()=>{ if(fabTimer){ clearTimeout(fabTimer); fabTimer = null; }});
-  document.getElementById('modalCloseBtn').addEventListener('click', closePatientModal);
-  document.getElementById('cancelModalBtn').addEventListener('click', closePatientModal);
+  document.getElementById('modalCloseBtn').addEventListener('click', ()=> void closePatientModal());
+  document.getElementById('cancelModalBtn').addEventListener('click', ()=> void closePatientModal());
   document.getElementById('savePatientBtn').addEventListener('click', savePatientFromModal);
   document.getElementById('deletePatientBtn').addEventListener('click', deleteCurrentPatient);
   document.getElementById('exportBtn').addEventListener('click', exportData);
@@ -1779,17 +2499,34 @@ function bindEvents(){
     document.getElementById('moreMenuPanel')?.classList.toggle('open');
   });
   document.addEventListener('click', ()=> document.getElementById('moreMenuPanel')?.classList.remove('open'));
+  document.getElementById('pgScopeBtn')?.addEventListener('click', ()=> setPgScope(!isPgScopeMine()));
+  document.getElementById('pgScopeBtnMobile')?.addEventListener('click', ()=> setPgScope(!isPgScopeMine()));
+  document.getElementById('bulkBarApplyBtn')?.addEventListener('click', ()=> void applyBulkPlan());
+  document.getElementById('bulkBarCancelBtn')?.addEventListener('click', ()=>{
+    bulkSelectMode = false;
+    bulkSelectedIds.clear();
+    document.getElementById('bulkPlanBtn')?.classList.remove('active');
+    updateBulkBar();
+    renderRounds();
+  });
   document.getElementById('presentUnpresentedOnly')?.addEventListener('change', (e)=>{
     presentationUnpresentedOnly = e.target.checked;
     localStorage.setItem(LS_PRESENT_UNPRESENTED, presentationUnpresentedOnly ? '1' : '0');
+    if(document.getElementById('presentationOverlay')?.classList.contains('active')){
+      presentationIndex = 0;
+      renderPresentationSlide();
+    }
   });
   const unpresCb = document.getElementById('presentUnpresentedOnly');
   if(unpresCb) unpresCb.checked = presentationUnpresentedOnly;
   document.getElementById('presentationReadAloud')?.addEventListener('change', (e)=>{
     presentationReadAloud = e.target.checked;
+    localStorage.setItem(LS_READ_ALOUD, presentationReadAloud ? '1' : '0');
     if(presentationReadAloud) speakCurrentPresentation();
     else if(window.speechSynthesis) window.speechSynthesis.cancel();
   });
+  const readAloudCb = document.getElementById('presentationReadAloud');
+  if(readAloudCb) readAloudCb.checked = presentationReadAloud;
   document.getElementById('pgInitialsInput').addEventListener('change', (e)=>{
     localStorage.setItem(LS_PG_INITIALS, (e.target.value || '').trim().toUpperCase().slice(0, 6));
     updatePgInitialsUI();
@@ -1815,6 +2552,11 @@ function bindEvents(){
   bindTemplateManagerEvents();
   bindSyncPanelEvents();
   document.getElementById('imgViewerClose').addEventListener('click', closeImgViewer);
+  document.getElementById('imgViewerDelete').addEventListener('click', (e)=>{
+    e.stopPropagation();
+    if(!viewingImageContext) return;
+    void removePatientImage(viewingImageContext.patientId, viewingImageContext.imgId);
+  });
   document.getElementById('imgViewer').addEventListener('click', (e)=>{ if(e.target.id==='imgViewer') closeImgViewer(); });
   document.getElementById('hiddenFileInput').addEventListener('change', handleImageFileSelected);
   document.getElementById('imgTypeCloseBtn').addEventListener('click', closeImageTypeModal);
@@ -1839,6 +2581,8 @@ function switchView(name){
 
 function renderAll(){
   updateFilterUI();
+  updatePgScopeUI();
+  updateBulkBar();
   renderSummaryStrip();
   renderRounds();
   renderWorklist();
@@ -1846,6 +2590,14 @@ function renderAll(){
   updateCounts();
   renderWardHandoverBanner();
   updateStickyHeaderOffset();
+  maybeShowContextualTips();
+}
+
+function maybeShowContextualTips(){
+  if(currentFilter === 'mine' && !getFilteredRoundsItems().length && getPgInitials() && !localStorage.getItem(LS_TIP_MINE_EMPTY)){
+    localStorage.setItem(LS_TIP_MINE_EMPTY, '1');
+    showToast('Tap the PG chip on any card to assign yourself', { duration: 7000 });
+  }
 }
 
 function updateCounts(){
@@ -1858,10 +2610,8 @@ function updateCounts(){
 
 function getSummaryCounts(){
   const w = collectWorklistData();
-  const active = patients.filter(p => p.status !== 'discharged');
-  const urgentIds = new Set();
-  [...w.postOpOverdueItems, ...w.abxOverdueItems, ...w.abxLastDayItems, ...w.labAbnormalItems, ...w.abnormalItems]
-    .forEach(it => urgentIds.add(it.p.id));
+  const active = getPgScopedPatients(patients.filter(p => p.status !== 'discharged'));
+  const urgent = active.filter(p => patientNeedsAttention(p)).length;
   const t = todayISO();
   const otToday = active.filter(p =>
     p.surgeryDate === t || (p.status === 'postop' && p.surgeryDate && calcPOD(p.surgeryDate) === 0)
@@ -1869,7 +2619,7 @@ function getSummaryCounts(){
   const unpresented = active.filter(p => !isPresented(p.id)).length;
   return {
     needsPlan: w.planMissingItems.length,
-    urgent: urgentIds.size,
+    urgent,
     otToday,
     unpresented
   };
@@ -1889,7 +2639,10 @@ function applyFilter(filter){
 function updateFilterUI(){
   const label = FILTER_LABELS[currentFilter] || 'All';
   const pill = document.getElementById('filterPillBtn');
-  if(pill) pill.textContent = label + ' ▾';
+  if(pill){
+    pill.textContent = label + ' ▾';
+    pill.classList.toggle('active', currentFilter !== 'all');
+  }
   document.querySelectorAll('#filterSheetBody .filter-chip').forEach(c=>{
     c.classList.toggle('active', c.dataset.filter === currentFilter);
   });
@@ -2125,18 +2878,18 @@ function countPendingItems(){
     + w.handoverItems.length
     + w.postOpOverdueItems.length
     + w.postOpDueItems.length
-    + w.postOpUpcomingItems.length
     + w.dischargeIncompleteItems.length
     + w.planMissingItems.length
     + w.labAbnormalItems.length
     + w.abxLastDayItems.length
     + w.abxOverdueItems.length
+    + w.abxEndingSoonItems.length
     + (w.hasUnitHandover ? 1 : 0);
 }
 
 /** Shared worklist buckets — keep tab badge and worklist view in sync. */
 function collectWorklistData(){
-  const active = patients.filter(p=>p.status!=='discharged');
+  const active = getPgScopedPatients(patients.filter(p=>p.status!=='discharged'));
 
   const pendingInvItems = [];
   const abnormalItems = [];
@@ -2184,7 +2937,7 @@ function collectWorklistData(){
     for(const key of ['hb','crp','wcc','creatinine']){
       const val = labs[key];
       if(val && labValueClass(key, val)){
-        labAbnormalItems.push({ p, text: `${key.toUpperCase()} ${val}`, kind: 'lab', labKey: key, labVal: val });
+        labAbnormalItems.push({ p, text: formatLabWithUnit(key, val), kind: 'lab', labKey: key, labVal: val });
       }
     }
     getActiveAntibioticCourseStatuses(p).forEach(abx => {
@@ -2220,6 +2973,123 @@ function collectWorklistData(){
     abxEndingSoonItems,
     hasUnitHandover: !!(wardMeta.handoverNote || '').trim()
   };
+}
+
+/** Rank inpatients by urgency — top picks for morning worklist triage. */
+function scorePatientForStartHere(p){
+  let score = 0;
+  const reasons = [];
+
+  const abx = getAntibioticsCourse(p);
+  if(abx){
+    if(abx.status === 'overdue'){
+      score = Math.max(score, 100);
+      reasons.push({ score: 100, text: 'Antibiotics stop overdue' });
+    }else if(abx.status === 'last_day'){
+      score = Math.max(score, 95);
+      reasons.push({ score: 95, text: 'Antibiotics stop today' });
+    }else if(abx.status === 'ending_soon'){
+      score = Math.max(score, 50);
+      reasons.push({ score: 50, text: 'Antibiotics ending tomorrow' });
+    }
+  }
+
+  const handoverPin = (p.handoverPin || '').trim();
+  const handoverNote = (p.handoverNote || '').trim();
+  if(handoverPin || handoverNote){
+    score = Math.max(score, 90);
+    reasons.push({ score: 90, text: handoverPin ? `Pin: ${handoverPin}` : 'Handover flag' });
+  }
+
+  const overduePostOp = getOverduePostOpChecks(p);
+  if(overduePostOp.length){
+    score = Math.max(score, 85);
+    reasons.push({ score: 85, text: `${overduePostOp[0].label} overdue` });
+  }
+
+  const abnormalInv = (p.investigations || []).filter(i => i.status === 'abnormal');
+  if(abnormalInv.length){
+    score = Math.max(score, 80);
+    const inv = abnormalInv[0];
+    reasons.push({ score: 80, text: `${inv.name} abnormal${inv.value ? ' — ' + inv.value : ''}` });
+  }
+
+  const labs = p.labs || {};
+  for(const key of ['hb', 'crp', 'wcc', 'creatinine']){
+    const val = labs[key];
+    if(val && labValueClass(key, val)){
+      score = Math.max(score, 75);
+      reasons.push({ score: 75, text: `Abnormal ${key === 'wcc' ? 'TLC' : key === 'creatinine' ? 'Cr' : key.toUpperCase()} ${formatLabWithUnit(key, val)}` });
+      break;
+    }
+  }
+
+  if(!hasPlanToday(p)){
+    const planScore = p.dailyPlan ? 35 : 40;
+    score = Math.max(score, planScore);
+    reasons.push({
+      score: planScore,
+      text: p.dailyPlan ? `Plan outdated (last ${fmtDate(p.dailyPlanDate) || 'earlier'})` : 'No plan entered for today'
+    });
+  }
+
+  const duePostOp = getDuePostOpChecks(p);
+  if(duePostOp.length){
+    score = Math.max(score, 45);
+    reasons.push({ score: 45, text: `${duePostOp[0].label} due today` });
+  }
+
+  const pendingInv = (p.investigations || []).filter(i => i.status === 'pending');
+  if(pendingInv.length){
+    score = Math.max(score, 30);
+    reasons.push({ score: 30, text: `Pending ${pendingInv[0].name}` });
+  }
+
+  const pendingFit = (p.fitness || []).filter(f => f.status === 'pending');
+  if(pendingFit.length && score < 30){
+    score = Math.max(score, 25);
+    reasons.push({ score: 25, text: `Pending ${pendingFit[0].dept} clearance` });
+  }
+
+  if(score < START_HERE_MIN_SCORE) return null;
+  reasons.sort((a, b) => b.score - a.score);
+  return { p, score, text: reasons[0].text };
+}
+
+function collectStartHereItems(){
+  const active = getPgScopedPatients(patients.filter(p => p.status !== 'discharged'));
+  const ranked = active.map(scorePatientForStartHere).filter(Boolean);
+  ranked.sort((a, b) => {
+    if(b.score !== a.score) return b.score - a.score;
+    return (a.p.bed || '').localeCompare(b.p.bed || '', undefined, { numeric: true });
+  });
+  return ranked.slice(0, START_HERE_LIMIT).map((r, idx) => ({
+    p: r.p,
+    text: r.text,
+    kind: 'starthere',
+    rank: idx + 1,
+    score: r.score
+  }));
+}
+
+function renderStartHereSection(items){
+  if(!items.length) return '';
+  return `<div class="work-section work-start-here">
+    <h3>→ Start here <span class="small-muted">(top ${items.length})</span></h3>
+    ${items.map(it => {
+      const pgAvatar = it.p.assignedPg
+        ? `<span class="work-pg-avatar" title="PG ${escapeHTML(it.p.assignedPg)}">${escapeHTML(it.p.assignedPg)}</span>`
+        : '';
+      return `<div class="work-item pressable start-here-item" data-jump="${escapeHTML(it.p.id)}" data-jump-kind="starthere">
+        <span class="work-item-icon start-here-rank">${it.rank}</span>
+        <div class="work-item-main">
+          <div class="who">${escapeHTML(it.p.name)} <span class="small-muted">· ${escapeHTML(it.p.bed || '—')}</span></div>
+          <div class="what">${escapeHTML(it.text)}</div>
+        </div>
+        ${pgAvatar}
+      </div>`;
+    }).join('')}
+  </div>`;
 }
 
 /* ---------------- flags / derived info ---------------- */
@@ -2264,9 +3134,9 @@ function renderRounds(){
     const hasActive = patients.some(p=>p.status!=='discharged');
     if(!hasActive && !isConsultantMode()){
       list.innerHTML = `<div class="empty-state"><div class="big">${emptyStateSvg('bed')}</div><div class="msg">${escapeHTML(msg)}</div>
-        <div style="display:flex;gap:8px;justify-content:center;margin-top:12px;flex-wrap:wrap;">
-          <button type="button" class="btn primary" data-empty-action="add">Add first patient</button>
-          <button type="button" class="btn" data-empty-action="import">Import backup</button>
+        <div class="empty-actions">
+          <button type="button" class="btn primary pressable" data-empty-action="add">Add first patient</button>
+          <button type="button" class="btn pressable" data-empty-action="import">Import backup</button>
         </div></div>`;
       list.querySelector('[data-empty-action="add"]')?.addEventListener('click', ()=> openPatientModal(null));
       list.querySelector('[data-empty-action="import"]')?.addEventListener('click', ()=> document.getElementById('hiddenImportInput').click());
@@ -2275,9 +3145,20 @@ function renderRounds(){
     if(currentFilter==='mine'){
       const ini = getPgInitials();
       msg = ini
-        ? `No patients assigned to ${ini}. Open a patient → Edit → Assigned PG.`
+        ? `No patients assigned to ${ini} yet.`
         : 'Set your PG initials in the top bar, then assign patients to yourself.';
-    }else if(currentFilter==='needsplan'){
+      list.innerHTML = `<div class="empty-state"><div class="big">${emptyStateSvg('bed')}</div><div class="msg">${escapeHTML(msg)}</div>
+        <div class="empty-actions">
+          <button type="button" class="btn primary pressable" data-empty-action="showall">Show whole ward</button>
+          <button type="button" class="btn pressable" data-empty-action="tip-pg">How to assign patients</button>
+        </div></div>`;
+      list.querySelector('[data-empty-action="showall"]')?.addEventListener('click', ()=> applyFilter('all'));
+      list.querySelector('[data-empty-action="tip-pg"]')?.addEventListener('click', ()=>{
+        showToast('Tap the PG chip on any patient card to assign yourself');
+      });
+      return;
+    }
+    if(currentFilter==='needsplan'){
       msg = 'All patients have a plan for today.';
     }else if(currentFilter==='attention'){
       msg = 'No patients need attention right now.';
@@ -2303,11 +3184,21 @@ function renderRounds(){
   `).join('');
 
   list.querySelectorAll('.card-head').forEach(head=>{
-    head.addEventListener('click', (e)=>{
+    if(!head.classList.contains('card-head-static')){
+      head.setAttribute('tabindex', '0');
+      head.setAttribute('role', 'button');
+      const card = head.closest('.card');
+      head.setAttribute('aria-expanded', card?.classList.contains('open') ? 'true' : 'false');
+    }
+    const toggle = (e)=>{
+      if(e.type === 'keydown' && e.key !== 'Enter' && e.key !== ' ') return;
+      if(e.type === 'keydown') e.preventDefault();
       if(e.target.closest('.card-quick-bar, .card-quick-footer, .bulk-check, [data-action]')) return;
       const card = head.closest('.card');
       toggleCardOpen(card.dataset.id);
-    });
+    };
+    head.addEventListener('click', toggle);
+    head.addEventListener('keydown', toggle);
   });
 
   bindCardListEvents(list);
@@ -2315,12 +3206,15 @@ function renderRounds(){
 
 function bindCardListEvents(root){
   if(!root) return;
-  root.querySelectorAll('.card-plan-input').forEach(inp=>{
+  root.querySelectorAll('.card-plan-input, .card-plan-edit').forEach(inp=>{
     if(inp._bound) return;
     inp._bound = true;
+    const isTextarea = inp.tagName === 'TEXTAREA';
     inp.addEventListener('click', e=> e.stopPropagation());
     inp.addEventListener('keydown', (e)=>{
-      if(e.key === 'Enter'){
+      // One-line input saves on Enter; multi-line plan textarea keeps
+      // newlines and saves on Ctrl/Cmd+Enter (or when focus leaves).
+      if(e.key === 'Enter' && (!isTextarea || e.metaKey || e.ctrlKey)){
         e.preventDefault();
         inp.blur();
       }
@@ -2382,6 +3276,13 @@ function patchCardHeadGlance(p, collapsed){
   bindCardListEvents(card);
 }
 
+function syncCardHeadAria(card, open){
+  const head = card?.querySelector('.card-head');
+  if(head && !head.classList.contains('card-head-static')){
+    head.setAttribute('aria-expanded', open ? 'true' : 'false');
+  }
+}
+
 function toggleCardOpen(id){
   const p = patients.find(x => x.id === id);
   if(!p) return;
@@ -2390,6 +3291,7 @@ function toggleCardOpen(id){
     const card = document.querySelector(`.card[data-id="${id}"]`);
     if(card){
       card.classList.remove('open');
+      syncCardHeadAria(card, false);
       const body = card.querySelector('.card-body');
       if(body) body.innerHTML = '';
     }
@@ -2403,6 +3305,7 @@ function toggleCardOpen(id){
     const prevCard = document.querySelector(`.card[data-id="${prevId}"]`);
     if(prevCard){
       prevCard.classList.remove('open');
+      syncCardHeadAria(prevCard, false);
       const prevBody = prevCard.querySelector('.card-body');
       if(prevBody) prevBody.innerHTML = '';
       const prevP = patients.find(x => x.id === prevId);
@@ -2421,6 +3324,7 @@ function toggleCardOpen(id){
     if(c.dataset.id !== id) c.classList.remove('open');
   });
   card.classList.add('open');
+  syncCardHeadAria(card, true);
   patchCardHeadGlance(p, false);
   const dayInfo = getClinicalDayInfo(p);
   const body = card.querySelector('.card-body');
@@ -2431,7 +3335,7 @@ function toggleCardOpen(id){
         <div class="small-muted">${escapeHTML(p.bed||'—')}${dayInfo ? ' · '+dayInfo.prefix+' '+dayInfo.day : ''}</div>
       </div>
       ${renderCardBody(p)}
-      <div class="card-quick-footer">${renderCardQuickBar(p)}</div>
+      <div class="card-quick-footer">${renderCardQuickBar(p, false)}</div>
     </div>`;
   bindCardListEvents(card);
   patchCardHeadGlance(p, false);
@@ -2440,17 +3344,19 @@ function toggleCardOpen(id){
   });
 }
 
-function renderCardQuickBar(p){
+function renderCardQuickBar(p, includePlan = true){
   if(isConsultantMode()) return '';
   const dueMs = getNextDueMilestones(p, 2);
   const planVal = escapeHTML(p.dailyPlan || '');
   const planStale = p.dailyPlan && !hasPlanToday(p);
   const pgLabel = p.assignedPg || 'PG';
   const statusLabel = STATUS_LABELS[p.status] || 'Status';
+  const yPlan = getYesterdayPlan(p);
+  const copyLabel = planStale && yPlan ? 'Use yesterday' : 'Copy yesterday';
   return `
     <div class="card-quick-bar" data-id="${p.id}">
-      <input type="text" class="card-plan-input ${planStale ? 'stale' : ''}" data-action="save-plan" data-id="${p.id}"
-        value="${planVal}" placeholder="Today's plan…" title="Enter plan and press Enter">
+      ${includePlan ? `<input type="text" class="card-plan-input ${planStale ? 'stale' : ''}" data-action="save-plan" data-id="${p.id}"
+        value="${planVal}" placeholder="Today's plan…" title="Enter plan and press Enter">` : ''}
       <div class="card-quick-milestones">
         ${dueMs.length ? dueMs.map(c=>`
           <button type="button" class="card-ms-btn ${isItemOverdue(c, getPatientPod(p)) ? 'overdue' : ''}"
@@ -2459,7 +3365,7 @@ function renderCardQuickBar(p){
       </div>
       <button type="button" class="status-badge clickable ${p.status||'preop'}" data-action="cycle-status" data-id="${p.id}">${statusLabel}</button>
       <button type="button" class="pg-chip" data-action="cycle-pg" data-id="${p.id}">${escapeHTML(pgLabel)}</button>
-      <button type="button" class="btn card-copy-plan" data-action="copy-yesterday-plan" data-id="${p.id}" title="Copy yesterday's plan">↶</button>
+      ${yPlan ? `<button type="button" class="btn card-copy-plan" data-action="copy-yesterday-plan" data-id="${p.id}" title="Copy yesterday's plan"><span class="copy-plan-label">${copyLabel}</span><span class="copy-plan-icon">↶</span></button>` : ''}
       ${renderAbxQuickChip(p)}
     </div>`;
 }
@@ -2485,7 +3391,7 @@ function renderCard(p){
 
   return `
   <div class="card status-rail ${isOpen?'open':''}${statusClass}${bulkOn?' bulk-selected':''}" data-id="${p.id}">
-    <div class="card-head">
+    <div class="card-head" aria-expanded="${isOpen?'true':'false'}">
       ${bulkSelectMode ? `<input type="checkbox" class="bulk-check" data-action="bulk-toggle" data-id="${p.id}" ${bulkOn?'checked':''}>` : ''}
       <div class="card-head-top">
         <div class="bed-chip">${escapeHTML(p.bed||'—')}</div>
@@ -2515,7 +3421,7 @@ function renderCard(p){
           <div class="small-muted">${escapeHTML(p.bed||'—')}${dayInfo ? ' · '+dayInfo.prefix+' '+dayInfo.day : ''}</div>
         </div>
         ${renderCardBody(p)}
-        <div class="card-quick-footer">${renderCardQuickBar(p)}</div>
+        <div class="card-quick-footer">${renderCardQuickBar(p, true)}</div>
       </div>` : ''}</div>
   </div>`;
 }
@@ -2554,8 +3460,10 @@ function renderCardBody(p){
 
     ${(p.handoverNote||'').trim() ? `<div class="section-label">Handover note</div><div class="notes-box handover-box">${escapeHTML(p.handoverNote.trim())}</div><button type="button" class="btn" data-action="clear-handover" data-id="${p.id}" style="margin-top:6px;">Clear handover</button>` : ''}
 
-    <div class="section-label">Today's plan</div>
-    <div class="notes-box">${escapeHTML(p.dailyPlan) || '<span class="text-muted">No plan entered for today</span>'}</div>
+    <div class="section-label plan-section-header"><span>Today's plan</span>${planActionButtonsHtml(p.id)}</div>
+    ${isConsultantMode()
+      ? `<div class="notes-box">${escapeHTML(p.dailyPlan) || '<span class="text-muted">No plan entered for today</span>'}</div>`
+      : `<textarea class="notes-box card-plan-edit ${p.dailyPlan && !hasPlanToday(p) ? 'stale' : ''}" data-id="${p.id}" rows="3" placeholder="Type today's plan here… (saved automatically when you tap away)">${escapeHTML(p.dailyPlan)}</textarea>`}
     ${renderPlanHistoryBlock(p) ? `<div class="section-label" style="margin-top:10px;">Plan history</div><div class="plan-history">${renderPlanHistoryBlock(p)}</div>` : ''}
 
     ${(p.postOpChecks||[]).length ? `
@@ -2600,6 +3508,7 @@ function renderCardBody(p){
     <div class="xray-row">
       ${(p.images||[]).map(img=>`
         <div class="xray-thumb" data-action="view-img" data-id="${p.id}" data-imgid="${img.id}">
+          <button type="button" class="xray-del" data-action="delete-img" data-id="${p.id}" data-imgid="${img.id}" title="Delete X-ray" aria-label="Delete X-ray">&times;</button>
           <img src="${imageSrc(img)}">
           <div class="tag">${img.type.toUpperCase()}</div>
         </div>`).join('')}
@@ -2758,6 +3667,7 @@ function handleCardAction(action, id, el){
   if(action==='bulk-toggle'){
     if(bulkSelectedIds.has(id)) bulkSelectedIds.delete(id);
     else bulkSelectedIds.add(id);
+    updateBulkBar();
     renderRounds();
     return;
   }
@@ -2822,6 +3732,7 @@ function handleCardAction(action, id, el){
     if(p.status !== 'fordischarge'){
       p.statusBeforeDischarge = p.status;
       p.status = 'fordischarge';
+      p.statusUpdatedAt = Date.now();
       applyDischargeTemplate(p);
       persistAndRerender(p);
       showToast('Marked for discharge');
@@ -2830,6 +3741,7 @@ function handleCardAction(action, id, el){
   if(action==='unmark-fordischarge'){
     p.status = p.statusBeforeDischarge || (p.surgeryDate ? 'postop' : 'preop');
     if(!p.statusBeforeDischarge && !p.surgeryDate && (p.postOpChecks||[]).length) p.status = 'conservative';
+    p.statusUpdatedAt = Date.now();
     delete p.statusBeforeDischarge;
     persistAndRerender(p);
     showToast('Removed from discharge list');
@@ -2866,17 +3778,22 @@ function handleCardAction(action, id, el){
   if(action==='mark-postop'){
     void (async ()=>{
       p.status='postop';
+      p.statusUpdatedAt = Date.now();
       if(!p.surgeryDate) p.surgeryDate = todayISO();
       if(!p.postOpChecks || !p.postOpChecks.length){
+        if(!shouldAutoApplyPostOp()){
+          // leave milestones empty — user applies template manually
+        }else{
         const suggestions = suggestTemplatesForPatient(p, 'postop_pathway', 3);
         if(suggestions.length){
           const pick = suggestions[0];
           const names = suggestions.map(t=>'• ' + t.name).join('\n');
+          const defaultLabel = getDefaultPostOpTemplateLabel(p);
           const choice = await showAppDialog({
             title: 'Apply post-op pathway?',
             message: `Suggested for this patient:\n${names}`,
             buttons: [
-              { label: 'Default template', value: 'default' },
+              { label: `Ward default (${defaultLabel})`, value: 'default' },
               { label: `Apply "${pick.name}"`, value: 'suggested', primary: true }
             ]
           });
@@ -2884,6 +3801,7 @@ function handleCardAction(action, id, el){
           else applyPostOpTemplate(p);
         }else{
           applyPostOpTemplate(p);
+        }
         }
       }
       await persistAndRerender(p);
@@ -2931,7 +3849,10 @@ function handleCardAction(action, id, el){
   }
   if(action==='view-img'){
     const img = p.images.find(i=>i.id===el.dataset.imgid);
-    if(img) openImgViewer(img);
+    if(img) openImgViewer(p.id, img);
+  }
+  if(action==='delete-img'){
+    void removePatientImage(p.id, el.dataset.imgid);
   }
 }
 
@@ -2952,9 +3873,8 @@ async function clonePatientRecord(p){
     const tpl = suggestTemplatesForPatient(copy, 'postop_pathway', 1)[0];
     if(tpl) applyTemplateToPatient(copy, tpl.id, { merge: false, fillPlan: 'none' });
   }
-  await savePatient(copy);
   openPatientModal(copy);
-  showToast('Patient cloned — update bed/name');
+  showToast('Cloned — update bed/name and Save');
 }
 
 async function persistAndRerender(p){
@@ -2993,9 +3913,13 @@ async function confirmImageType(type){
   if(!pendingImageData) return;
   const p = patients.find(x=>x.id===pendingImageData.patientId);
   if(!p){ closeImageTypeModal(); return; }
-  const img = { id: uid(), type, dataURL: pendingImageData.compressed, date: todayISO() };
   const url = await uploadPatientImage(p.id, pendingImageData.compressed);
-  if(url){ img.url = url; delete img.dataURL; }
+  if(!url){
+    showToast('Image upload failed — check connection');
+    closeImageTypeModal();
+    return;
+  }
+  const img = { id: uid(), type, url, date: todayISO() };
   p.images = p.images || [];
   p.images.push(img);
   try{
@@ -3009,12 +3933,58 @@ async function confirmImageType(type){
   }
 }
 
-function openImgViewer(img){
+function openImgViewer(patientId, img){
+  viewingImageContext = { patientId, imgId: img.id };
   document.getElementById('imgViewerImg').src = imageSrc(img);
   document.getElementById('imgViewerLabel').textContent = `${img.type.toUpperCase()} · ${fmtDate(img.date)}`;
   document.getElementById('imgViewer').classList.add('active');
 }
-function closeImgViewer(){ document.getElementById('imgViewer').classList.remove('active'); }
+function closeImgViewer(){
+  document.getElementById('imgViewer').classList.remove('active');
+  viewingImageContext = null;
+}
+
+async function removePatientImage(patientId, imgId){
+  const p = patients.find(x => x.id === patientId);
+  if(!p || !p.images) return;
+  const idx = p.images.findIndex(i => i.id === imgId);
+  if(idx < 0) return;
+  const removed = p.images[idx];
+  const ok = await showConfirm(
+    'Delete X-ray?',
+    `Remove this ${removed.type} X-ray from the patient record?`,
+    { confirmLabel: 'Delete', danger: true }
+  );
+  if(!ok) return;
+  const snapshot = { patientId, img: Object.assign({}, removed), index: idx };
+  p.images.splice(idx, 1);
+  if(viewingImageContext?.patientId === patientId && viewingImageContext?.imgId === imgId){
+    closeImgViewer();
+  }
+  try{
+    await savePatient(p);
+    void deletePatientImageFile(removed);
+    renderAll();
+    if(document.getElementById('presentationOverlay')?.classList.contains('active')){
+      renderPresentationSlide();
+    }
+    showToast('X-ray deleted', {
+      undo: async ()=>{
+        const target = patients.find(x => x.id === snapshot.patientId);
+        if(!target) return;
+        target.images = target.images || [];
+        if(target.images.some(i => i.id === snapshot.img.id)) return;
+        target.images.splice(Math.min(snapshot.index, target.images.length), 0, snapshot.img);
+        await persistAndRerender(target);
+        showToast('X-ray restored');
+      }
+    });
+  }catch(err){
+    p.images.splice(idx, 0, removed);
+    console.error(err);
+    showToast('Could not delete X-ray — ' + (err.message || 'error'));
+  }
+}
 
 /* ---------------- WORKLIST ---------------- */
 
@@ -3028,25 +3998,36 @@ function renderWorklist(){
     abxLastDayItems, abxOverdueItems, abxEndingSoonItems, hasUnitHandover
   } = w;
 
-  function section(title, items, emoji, urgency){
+  function section(title, items, emoji, urgency, opts){
+    opts = opts || {};
     if(!items.length) return '';
     const urgClass = urgency ? ` work-${urgency}` : '';
-    return `<div class="work-section${urgClass}"><h3>${emoji} ${title} <span class="small-muted">(${items.length})</span></h3>
+    const headerExtra = opts.headerAction || '';
+    return `<div class="work-section${urgClass}"><h3>${emoji} ${title} <span class="small-muted">(${items.length})</span>${headerExtra}</h3>
       ${items.map(it=>{
         const doneBtn = (it.kind === 'postop' && it.checkId)
           ? `<button type="button" class="btn primary work-done-btn pressable" data-work-done="${escapeHTML(it.p.id)}" data-check-id="${escapeHTML(it.checkId)}">Done</button>`
           : (it.kind === 'abx' && it.abxAction === 'stop')
           ? `<button type="button" class="btn primary work-abx-stop pressable" data-abx-stop="${escapeHTML(it.p.id)}" data-abx-course-id="${escapeHTML(it.abxCourseId || '')}">Stopped</button>`
+          : (it.kind === 'handover')
+          ? `<button type="button" class="btn work-clear-handover pressable" data-clear-handover="${escapeHTML(it.p.id)}">Clear</button>`
           : '';
         const labEdit = (it.kind === 'lab')
           ? `<input type="text" class="work-lab-input ${labValueClass(it.labKey, it.labVal)}" data-lab-edit="${escapeHTML(it.p.id)}" data-lab-key="${escapeHTML(it.labKey)}" value="${escapeHTML(it.labVal||'')}" inputmode="decimal">`
           : '';
+        const planEdit = (it.kind === 'plan')
+          ? `<span class="work-plan-row">${planActionButtonsHtml(it.p.id, 'work')}<input type="text" class="work-plan-input" data-work-plan="${escapeHTML(it.p.id)}" placeholder="Today's plan…" value=""></span>`
+          : '';
+        const invChips = (it.kind === 'inv')
+          ? `<span class="work-inv-chips">${COMMON_INVESTIGATIONS.slice(0,6).map(n=>`<button type="button" class="btn work-inv-chip" data-add-inv="${escapeHTML(it.p.id)}" data-inv-name="${escapeHTML(n)}">${escapeHTML(n)}</button>`).join('')}</span>`
+          : '';
         const pg = (it.p.assignedPg || '').trim();
         const pgAvatar = pg ? `<span class="work-pg-avatar" title="PG ${escapeHTML(pg)}">${escapeHTML(pg.slice(0,2).toUpperCase())}</span>` : '';
-        return `<div class="work-item pressable" data-jump="${it.p.id}">
+        const whatContent = labEdit || planEdit || invChips || escapeHTML(it.text);
+        return `<div class="work-item pressable" data-jump="${it.p.id}" data-jump-kind="${it.kind || ''}">
           <span class="work-item-icon">${workItemIcon(it.kind, urgency)}</span>
-          <div class="work-item-main"><div class="who">${escapeHTML(it.p.name)} <span class="small-muted">· Ward ${escapeHTML(it.p.bed||'—')}</span></div>
-          <div class="what">${labEdit || escapeHTML(it.text)}</div></div>
+          <div class="work-item-main"><div class="who">${escapeHTML(it.p.name)} <span class="small-muted">· ${escapeHTML(it.p.bed||'—')}</span></div>
+          <div class="what">${whatContent}</div></div>
           ${pgAvatar}
           ${doneBtn}
         </div>`;
@@ -3054,26 +4035,64 @@ function renderWorklist(){
     </div>`;
   }
 
+  const planHeaderAction = planMissingItems.length
+    ? ` <button type="button" class="btn btn-sm work-bulk-plan-entry" id="worklistBulkPlanBtn">Bulk plan</button>${
+        canUseAi() ? ' <button type="button" class="btn btn-sm ai-btn" id="worklistBulkDraftBtn">✨ Draft all</button>' : ''
+      }`
+    : '';
+
+  const startHereItems = collectStartHereItems();
+
   const html = [
-    hasUnitHandover ? `<div class="work-section work-warn ward-meta-handover"><h3>Unit handover</h3><div class="notes-box">${escapeHTML(wardMeta.handoverNote)}</div><button type="button" class="btn" id="clearWardHandoverBtn" style="margin-top:8px;">Clear unit handover</button></div>` : '',
-    section('Handover flags', handoverItems, '↪', 'warn'),
+    renderStartHereSection(startHereItems),
+    hasUnitHandover ? `<div class="work-section work-warn ward-meta-handover"><h3>Unit handover</h3><div class="notes-box">${escapeHTML(wardMeta.handoverNote)}</div><button type="button" class="btn section-action" id="clearWardHandoverBtn">Clear unit handover</button></div>` : '',
+    section('Handover flags', handoverItems.map(it => Object.assign({}, it, { kind: 'handover' })), '↪', 'warn'),
     section('Antibiotics — stop today', abxLastDayItems, '💊', 'urgent'),
     section('Antibiotics — stop overdue', abxOverdueItems, '💊', 'urgent'),
     section('Antibiotics — ending tomorrow', abxEndingSoonItems, '💊', 'warn'),
     section('Abnormal labs (structured)', labAbnormalItems, '🧪', 'urgent'),
     section('Abnormal results — needs review', abnormalItems, '△', 'urgent'),
-    section('Pending investigations', pendingInvItems, '⚠', 'warn'),
+    section('Pending investigations', pendingInvItems.map(it => Object.assign({}, it, { kind: 'inv' })), '⚠', 'warn'),
     section('Pending fitness clearance', pendingFitItems, '⚠', 'warn'),
     section('Post-op milestones overdue', postOpOverdueItems, '⏱', 'urgent'),
     section('Post-op milestones due', postOpDueItems, '◷', 'warn'),
     section('Post-op milestones upcoming', postOpUpcomingItems, '○', 'info'),
     section('Discharge checklist incomplete', dischargeIncompleteItems, '☐', 'warn'),
-    section('Plan not entered for today', planMissingItems, '📝', 'warn'),
+    section('Plan not entered for today', planMissingItems.map(it => Object.assign({}, it, { kind: 'plan' })), '📝', 'warn', { headerAction: planHeaderAction }),
     section("Today's plan", planTodayItems, '🗒️', 'good'),
     section('Ready for discharge', readyForDischarge, '✓', 'good'),
   ].join('');
 
   el.innerHTML = html || `<div class="empty-state"><div class="big">${emptyStateSvg('check')}</div><div class="msg">Nothing pending. All caught up.</div></div>`;
+
+  if(!localStorage.getItem(LS_TIP_WORKLIST) && html){
+    localStorage.setItem(LS_TIP_WORKLIST, '1');
+    showToast('Tip: tap Done inline — no need to open each patient', { duration: 6000 });
+  }
+  if(canUseAi() && planMissingItems.length && !localStorage.getItem(LS_TIP_AI_DRAFT)){
+    localStorage.setItem(LS_TIP_AI_DRAFT, '1');
+    showToast('Tip: tap ✨ Draft all to auto-write missing plans', { duration: 6000 });
+  }
+  if(isVoicePlanSupported() && planMissingItems.length && !localStorage.getItem(LS_TIP_VOICE_PLAN)){
+    localStorage.setItem(LS_TIP_VOICE_PLAN, '1');
+    setTimeout(()=> showToast('Tip: tap 🎤 to dictate today\'s plan', { duration: 6000 }), 6500);
+  }
+  if(startHereItems.length && !localStorage.getItem(LS_TIP_START_HERE)){
+    localStorage.setItem(LS_TIP_START_HERE, '1');
+    showToast('Tip: Start here shows who to see first — tap to jump to patient', { duration: 6000 });
+  }
+
+  document.getElementById('worklistBulkPlanBtn')?.addEventListener('click', (e)=>{
+    e.stopPropagation();
+    if(!bulkSelectMode) toggleBulkSelectMode();
+    switchView('rounds');
+    showToast('Select patients, then Apply plan in the bar below');
+  });
+
+  document.getElementById('worklistBulkDraftBtn')?.addEventListener('click', (e)=>{
+    e.stopPropagation();
+    void runBulkDraftPlans();
+  });
 
   const clearBtn = document.getElementById('clearWardHandoverBtn');
   if(clearBtn){
@@ -3142,19 +4161,66 @@ function renderWorklist(){
     });
   });
 
+  el.querySelectorAll('[data-work-plan]').forEach(inp=>{
+    inp.addEventListener('click', e=> e.stopPropagation());
+    inp.addEventListener('keydown', (e)=>{
+      if(e.key === 'Enter'){ e.preventDefault(); inp.blur(); }
+    });
+    inp.addEventListener('blur', async ()=>{
+      const p = patients.find(x=>x.id===inp.dataset.workPlan);
+      if(!p) return;
+      const val = inp.value.trim();
+      if(!val) return;
+      saveCardPlan(p, val);
+      await persistAndRerender(p);
+      showToast('Plan saved');
+    });
+  });
+
+  el.querySelectorAll('[data-add-inv]').forEach(btn=>{
+    btn.addEventListener('click', async (e)=>{
+      e.stopPropagation();
+      const p = patients.find(x => x.id === btn.dataset.addInv);
+      if(!p) return;
+      const name = btn.dataset.invName;
+      p.investigations = p.investigations || [];
+      if(!p.investigations.some(i => i.name === name)){
+        p.investigations.push({ name, status: 'pending', value: '' });
+        await persistAndRerender(p);
+        showToast(`Added ${name}`);
+      }
+    });
+  });
+
+  el.querySelectorAll('[data-clear-handover]').forEach(btn=>{
+    btn.addEventListener('click', async (e)=>{
+      e.stopPropagation();
+      const p = patients.find(x => x.id === btn.dataset.clearHandover);
+      if(!p) return;
+      const prev = p.handoverNote || '';
+      p.handoverNote = '';
+      await persistAndRerender(p);
+      showToast('Handover cleared', { undo: async ()=>{ p.handoverNote = prev; await persistAndRerender(p); } });
+    });
+  });
+
   el.querySelectorAll('.work-item').forEach(item=>{
     item.addEventListener('click', (e)=>{
-      if(e.target.closest('[data-work-done]')) return;
+      if(e.target.closest('[data-work-done], [data-abx-stop], [data-lab-edit], [data-work-plan], [data-voice-plan], [data-ai-draft-plan], [data-add-inv], [data-clear-handover]')) return;
       const id = item.dataset.jump;
       switchView('rounds');
-      openCardId = id;
-      currentFilter = 'all';
-      document.querySelectorAll('.filter-chip').forEach(c=>c.classList.toggle('active', c.dataset.filter==='all'));
-      renderRounds();
+      toggleCardOpen(id);
+      updateFilterUI();
       setTimeout(()=>{
         const card = document.querySelector(`.card[data-id="${id}"]`);
-        if(card) card.scrollIntoView({behavior:'smooth', block:'center'});
-      }, 60);
+        if(card){
+          card.scrollIntoView({behavior:'smooth', block:'center'});
+          if(item.dataset.jumpKind === 'plan'){
+            const planInp = card.querySelector('.card-plan-input, .card-plan-edit');
+            if(planInp) planInp.focus();
+          }
+        }
+      }, 80);
     });
   });
 }
@@ -3176,18 +4242,20 @@ function renderDischarged(){
   }
 
   list.innerHTML = items.map(p=>`
-    <div class="card" data-id="${p.id}">
-      <div class="card-head" style="cursor:default;">
-        <div class="bed-chip" style="background:var(--line-soft);color:var(--ink-soft);">${escapeHTML(p.bed||'—')}</div>
-        <div class="card-main">
-          <div class="card-name-row">
-            <span class="card-name">${escapeHTML(p.name)}</span>
-            <span class="card-meta">${escapeHTML(p.age)}${p.sex?'/'+p.sex:''}</span>
+    <div class="card card-discharged" data-id="${p.id}">
+      <div class="card-head card-head-static">
+        <div class="card-head-top">
+          <div class="bed-chip bed-chip-muted">${escapeHTML(p.bed||'—')}</div>
+          <div class="card-main">
+            <div class="card-name-row">
+              <span class="card-name">${escapeHTML(p.name)}</span>
+              <span class="card-meta">${escapeHTML(p.age)}${p.sex?'/'+p.sex:''}</span>
+            </div>
+            <div class="card-dx">${escapeHTML(p.diagnosis)}</div>
+            <div class="card-proc">${escapeHTML(p.procedure||'')} · Discharged ${fmtDate(p.dischargeDate)}</div>
           </div>
-          <div class="card-dx">${escapeHTML(p.diagnosis)}</div>
-          <div class="card-proc">${escapeHTML(p.procedure||'')} · Discharged ${fmtDate(p.dischargeDate)}</div>
+          <button type="button" class="btn btn-sm pressable" data-action="reopen" data-id="${p.id}">Reopen</button>
         </div>
-        <button class="btn" data-action="reopen" data-id="${p.id}">Reopen</button>
       </div>
     </div>
   `).join('');
@@ -3219,12 +4287,53 @@ function openPatientModal(p){
   document.getElementById('modalBody').innerHTML = renderModalForm(modalWorkingData);
   bindModalDynamicLists();
   document.getElementById('patientModal').classList.add('active');
+  requestAnimationFrame(()=> snapshotModalBaseline());
 }
 
-function closePatientModal(){
+function readModalFieldsToObject(){
+  const d = getWorkingData();
+  d.name = document.getElementById('f_name')?.value.trim() || '';
+  d.bed = document.getElementById('f_bed')?.value.trim() || '';
+  d.ward = document.getElementById('f_ward')?.value.trim() || '';
+  d.assignedPg = document.getElementById('f_assignedPg')?.value.trim().toUpperCase() || '';
+  d.diagnosis = document.getElementById('f_diagnosis')?.value.trim() || '';
+  d.status = document.getElementById('f_status')?.value || d.status;
+  d.dailyPlan = document.getElementById('f_dailyPlan')?.value.trim() || '';
+  d.handoverNote = document.getElementById('f_handoverNote')?.value.trim() || '';
+  d.notes = document.getElementById('f_notes')?.value.trim() || '';
+  flushChecklistsFromModal(d);
+  return d;
+}
+
+function snapshotModalBaseline(){
+  try{
+    if(!document.getElementById('patientModal')?.classList.contains('active')) return;
+    modalBaselineJson = JSON.stringify(readModalFieldsToObject());
+  }catch{
+    modalBaselineJson = modalWorkingData ? JSON.stringify(modalWorkingData) : null;
+  }
+}
+
+function isModalDirty(){
+  if(!modalWorkingData || !document.getElementById('patientModal')?.classList.contains('active')) return false;
+  if(!modalBaselineJson) return false;
+  try{
+    return JSON.stringify(readModalFieldsToObject()) !== modalBaselineJson;
+  }catch{
+    return false;
+  }
+}
+
+async function closePatientModal(){
+  if(isModalDirty()){
+    const ok = await showConfirm('Discard changes?', 'You have unsaved edits in this form.', { confirmLabel: 'Discard', danger: true });
+    if(!ok) return;
+  }
+  stopVoicePlanDictation();
   document.getElementById('patientModal').classList.remove('active');
   editingPatientId = null;
   modalWorkingData = null;
+  modalBaselineJson = null;
   modalSuppressAutoTemplate = false;
 }
 
@@ -3349,12 +4458,12 @@ function renderModalForm(d){
     </div>
 
     <div class="form-row">
-      <label>Key labs (optional)</label>
+      <label>Key labs (optional) <span class="small-muted">— Indian report units</span></label>
       <div class="labs-grid">
-        <div><span>Hb</span><input id="f_lab_hb" inputmode="decimal" value="${escapeHTML((d.labs||{}).hb||'')}" class="${labValueClass('hb', (d.labs||{}).hb)}"></div>
-        <div><span>CRP</span><input id="f_lab_crp" inputmode="decimal" value="${escapeHTML((d.labs||{}).crp||'')}" class="${labValueClass('crp', (d.labs||{}).crp)}"></div>
-        <div><span>WCC</span><input id="f_lab_wcc" inputmode="decimal" value="${escapeHTML((d.labs||{}).wcc||'')}" class="${labValueClass('wcc', (d.labs||{}).wcc)}"></div>
-        <div><span>Creatinine</span><input id="f_lab_creatinine" inputmode="decimal" value="${escapeHTML((d.labs||{}).creatinine||'')}" class="${labValueClass('creatinine', (d.labs||{}).creatinine)}"></div>
+        <div><span>Hb (g/dL)</span><input id="f_lab_hb" inputmode="decimal" placeholder="e.g. 12.5" value="${escapeHTML((d.labs||{}).hb||'')}" class="${labValueClass('hb', (d.labs||{}).hb)}"></div>
+        <div><span>CRP (mg/L)</span><input id="f_lab_crp" inputmode="decimal" placeholder="e.g. 5" value="${escapeHTML((d.labs||{}).crp||'')}" class="${labValueClass('crp', (d.labs||{}).crp)}"></div>
+        <div><span>TLC (cells/cu.mm)</span><input id="f_lab_wcc" inputmode="decimal" placeholder="e.g. 8500" value="${escapeHTML((d.labs||{}).wcc||'')}" class="${labValueClass('wcc', (d.labs||{}).wcc)}"></div>
+        <div><span>Creatinine (mg/dL)</span><input id="f_lab_creatinine" inputmode="decimal" placeholder="e.g. 0.9" value="${escapeHTML((d.labs||{}).creatinine||'')}" class="${labValueClass('creatinine', (d.labs||{}).creatinine)}"></div>
       </div>
     </div>
 
@@ -3375,6 +4484,7 @@ function renderModalForm(d){
         </select>
         <button type="button" class="btn" id="insertPlanFromTemplateBtn" title="Insert plan text for current POD only">Insert plan</button>
         <button type="button" class="btn primary" id="applyPathwayTemplateBtn" title="Add milestones + insert today's plan">Apply pathway</button>
+        ${planActionButtonsHtml(d.id, 'modal')}
       </div>
       <div id="templateApplyPreview" class="form-hint"></div>
       <textarea id="f_dailyPlan" placeholder="e.g. Dressing check, wrist mobilization, repeat X-ray">${escapeHTML(d.dailyPlan)}</textarea>
@@ -3790,7 +4900,7 @@ function bindModalDynamicLists(){
   document.getElementById('applyPostOpTemplateBtn').addEventListener('click', ()=>{
     const id = document.getElementById('postOpTemplatePicker').value;
     if(!id){ showToast('Choose a post-op template'); return; }
-    const d = getWorkingData();
+    const d = syncModalFieldsToWorkingData();
     const res = applyTemplateToPatient(d, id, { merge: true, preserveDone: true, fillPlan: 'none' });
     setWorkingData(d);
     renderPostOpList();
@@ -3800,7 +4910,7 @@ function bindModalDynamicLists(){
   document.getElementById('applyDischargeTemplateBtn').addEventListener('click', ()=>{
     const id = document.getElementById('dischargeTemplatePicker').value;
     if(!id){ showToast('Choose a discharge template'); return; }
-    const d = getWorkingData();
+    const d = syncModalFieldsToWorkingData();
     const res = applyTemplateToPatient(d, id, { merge: true, preserveDone: true, fillPlan: 'none' });
     setWorkingData(d);
     renderDischargeList();
@@ -4162,6 +5272,19 @@ async function savePatientFromModal(){
 
     if(isNew && !modalSuppressAutoTemplate && newStatus === 'postop' && !d.postOpChecks?.length) applyPostOpTemplate(d);
     if(isNew && !modalSuppressAutoTemplate && newStatus === 'fordischarge' && !d.dischargeChecks?.length) applyDischargeTemplate(d);
+    if(isNew && !modalSuppressAutoTemplate && newStatus === 'conservative' && !d.postOpChecks?.length) applyConservativeTemplate(d);
+
+    if(!isNew && editingPatientId){
+      const cached = await cacheGet(editingPatientId);
+      if(cached && Number(cached.updatedAt) > Number(modalWorkingData.updatedAt || 0)){
+        const ok = await showConfirm(
+          'Updated elsewhere',
+          'This patient was changed on another device after you opened the form. Save anyway?',
+          { confirmLabel: 'Save anyway', danger: true }
+        );
+        if(!ok) return;
+      }
+    }
 
     const ini = await ensurePgInitials();
     if(prevPlan && (newPlan !== prevPlan || (newPlan && prevPlanDate !== todayISO() && newPlan === prevPlan))){
@@ -4188,9 +5311,11 @@ async function savePatientFromModal(){
     await savePatient(d);
 
     if(isNew){
-      currentFilter = 'all';
+      const savedFilter = localStorage.getItem(LS_FILTER) || (getPgInitials() ? 'mine' : 'all');
+      currentFilter = savedFilter;
       document.getElementById('searchInput').value = '';
-      document.querySelectorAll('.filter-chip').forEach(c=> c.classList.toggle('active', c.dataset.filter==='all'));
+      document.querySelectorAll('.filter-chip').forEach(c=> c.classList.toggle('active', c.dataset.filter===savedFilter));
+      updateFilterUI();
     }
 
     closePatientModal();
@@ -4237,11 +5362,37 @@ function renderWardHandoverBanner(){
 
 async function editWardHandover(){
   const cur = wardMeta.handoverNote || '';
-  const fields = await showPromptFields('Unit handover note', [
-    { id: 'note', label: 'Visible on worklist for all PGs', value: cur, type: 'textarea', rows: 5, placeholder: 'Ward-wide handover for today…' }
-  ]);
-  if(!fields) return;
-  const next = fields.note ?? '';
+  const extraButtons = canUseAi() ? [{
+    label: '✨ Generate from ward',
+    onClick: async (out) => {
+      if(!canUseAi()){
+        showToast('AI not available — check server key or connection');
+        return;
+      }
+      try{
+        const text = await generateWardHandoverNote();
+        if(!text) return;
+        const noteEl = document.getElementById('adf_note');
+        if(noteEl) noteEl.value = text;
+        showToast('Draft ready — review and save');
+      }catch(err){
+        showToast(err.message || 'AI handover failed');
+      }
+    }
+  }] : [];
+  const result = await showAppDialog({
+    title: 'Unit handover note',
+    fields: [
+      { id: 'note', label: 'Visible on worklist for all PGs', value: cur, type: 'textarea', rows: 5, placeholder: 'Ward-wide handover for today…' }
+    ],
+    extraButtons,
+    buttons: [
+      { label: 'Cancel', value: false },
+      { label: 'OK', value: true, primary: true }
+    ]
+  });
+  if(!result || !result.action) return;
+  const next = result.fields?.note ?? '';
   await saveWardMeta({ handoverNote: next.trim() });
   renderWardHandoverBanner();
   renderWorklist();
@@ -4252,7 +5403,14 @@ async function editWardHandover(){
 /* ---------------- PRESENTATION MODE ---------------- */
 
 function getPresentationList(){
-  let list = getActiveRoundsItems();
+  let list;
+  if(isPgScopeMine() && currentFilter === 'all'){
+    list = getPgScopedPatients(getActiveRoundsItems());
+  }else if(currentFilter !== 'all'){
+    list = getFilteredRoundsItems();
+  }else{
+    list = getActiveRoundsItems();
+  }
   if(presentationUnpresentedOnly){
     list = list.filter(p => !isPresented(p.id));
   }
@@ -4317,6 +5475,10 @@ function openPresentationMode(){
     }
     return;
   }
+  if(!localStorage.getItem(LS_TIP_PRESENT)){
+    localStorage.setItem(LS_TIP_PRESENT, '1');
+    showToast('Tip: → next patient · Space marks presented', { duration: 6000 });
+  }
   presentationIndex = 0;
   document.getElementById('presentationOverlay').classList.add('active');
   renderPresentationSlide();
@@ -4338,19 +5500,35 @@ function bindPresentationKeyboard(){
 
 function closePresentationMode(){
   document.getElementById('presentationOverlay').classList.remove('active');
+  stopVoicePlanDictation();
   if(window.speechSynthesis) window.speechSynthesis.cancel();
 }
 
 function stepPresentation(delta, autoMark){
   const list = getPresentationList();
   if(!list.length) return;
+  const curId = list[presentationIndex]?.id;
   if(autoMark && delta > 0){
     const p = list[presentationIndex];
-    if(p && !isPresented(p.id)) markPresented(p.id);
+    if(p && !isPresented(p.id)) void markPresented(p.id);
   }
   const body = document.getElementById('presentationContent');
   const doStep = ()=>{
-    presentationIndex = Math.max(0, Math.min(list.length - 1, presentationIndex + delta));
+    const fresh = getPresentationList();
+    if(!fresh.length){
+      closePresentationMode();
+      showToast('All patients presented');
+      return;
+    }
+    if(delta > 0 && autoMark && presentationUnpresentedOnly){
+      presentationIndex = Math.min(presentationIndex, fresh.length - 1);
+    }else if(curId){
+      const idx = fresh.findIndex(p => p.id === curId);
+      const base = idx >= 0 ? idx : presentationIndex;
+      presentationIndex = Math.max(0, Math.min(fresh.length - 1, base + delta));
+    }else{
+      presentationIndex = Math.max(0, Math.min(fresh.length - 1, presentationIndex + delta));
+    }
     renderPresentationSlide(true);
     if(presentationReadAloud) speakCurrentPresentation();
   };
@@ -4371,12 +5549,20 @@ function markCurrentPresented(){
   const list = getPresentationList();
   const p = list[presentationIndex];
   if(!p) return;
-  markPresented(p.id);
-  renderPresentationSlide();
-  showToast('Marked as presented');
-  if(presentationUnpresentedOnly && presentationIndex >= list.length - 1){
-    showToast('All done — queue complete');
-  }
+  void markPresented(p.id).then(()=>{
+    renderPresentationSlide();
+    showToast('Marked as presented');
+    if(presentationUnpresentedOnly){
+      const fresh = getPresentationList();
+      if(!fresh.length){
+        showToast('All done — queue complete');
+        closePresentationMode();
+        return;
+      }
+      presentationIndex = Math.min(presentationIndex, fresh.length - 1);
+      renderPresentationSlide();
+    }
+  });
 }
 
 function speakCurrentPresentation(){
@@ -4385,7 +5571,8 @@ function speakCurrentPresentation(){
   const p = list[presentationIndex];
   if(!p) return;
   window.speechSynthesis.cancel();
-  const text = generatePresentationScript(p).replace(/<[^>]+>/g, ' ');
+  const polished = presentationAiCache.get(`${p.id}:full`);
+  const text = (polished || generatePresentationScript(p)).replace(/<[^>]+>/g, ' ');
   const u = new SpeechSynthesisUtterance(text);
   u.rate = 1.05;
   window.speechSynthesis.speak(u);
@@ -4411,7 +5598,7 @@ function bindPresentationXrayClicks(container, p){
     btn.addEventListener('click', (e)=>{
       e.stopPropagation();
       const img = (p.images||[]).find(i=>i.id===btn.dataset.presImg);
-      if(img) openImgViewer(img);
+      if(img) openImgViewer(p.id, img);
     });
   });
 }
@@ -4428,13 +5615,25 @@ function renderPresentationSlide(animating){
   const flags = getPatientFlags(p);
   const presented = isPresented(p.id);
   const dayLabel = dayInfo ? ` · ${dayInfo.prefix} ${dayInfo.day}` : (p.status === 'conservative' ? ' · Conservative' : '');
-  document.getElementById('presentationCounter').textContent = `${presentationIndex + 1} / ${list.length}`;
+  const scopeLabel = isPgScopeMine() ? 'My patients' : (currentFilter !== 'all' ? (FILTER_LABELS[currentFilter] || 'Filtered') : 'Whole ward');
+  document.getElementById('presentationCounter').textContent = `${presentationIndex + 1} / ${list.length} · ${scopeLabel}`;
   document.getElementById('presentationWard').textContent = `Ward ${getPatientWard(p)} · ${p.bed || '—'}`;
 
   const wardJump = document.getElementById('presentationWardJump');
   const wards = getPresentationWards(list);
   const curWard = getPatientWard(p);
   wardJump.innerHTML = wards.map(w=>`<option value="${escapeHTML(w)}" ${w===curWard?'selected':''}>Ward ${escapeHTML(w)}</option>`).join('');
+
+  const compactPolished = presentationAiCache.get(`${p.id}:compact`);
+  const fullPolished = presentationAiCache.get(`${p.id}:full`);
+  const compactScript = compactPolished || generateCompactPresentationScript(p);
+  const fullScript = fullPolished || generatePresentationScript(p);
+  const polishBtn = (style) => canUseAi()
+    ? `<button type="button" class="btn btn-sm ai-btn" data-ai-polish data-style="${style}" data-patient-id="${escapeHTML(p.id)}">✨ Polish</button>`
+    : '';
+  const revertBtn = (style) => presentationAiCache.has(`${p.id}:${style}`)
+    ? `<button type="button" class="btn btn-sm pres-revert-btn" data-ai-revert-polish data-style="${style}" data-patient-id="${escapeHTML(p.id)}">Revert to template</button>`
+    : '';
 
   el.innerHTML = `
     <div class="pres-hero-line">Ward ${escapeHTML(getPatientWard(p))} · Bed ${escapeHTML(p.bed||'—')}</div>
@@ -4447,8 +5646,16 @@ function renderPresentationSlide(animating){
     <div class="pres-section"><div class="pres-label">Today's plan</div><div class="pres-plan">${escapeHTML(p.dailyPlan) || '—'}</div></div>
     ${renderPresentationExtras(p)}
     ${renderPresentationXrays(p)}
-    <div class="pres-section"><div class="pres-label">Compact script</div><div class="pres-script pres-compact">${generateCompactPresentationScript(p)}</div></div>
-    <div class="pres-section"><div class="pres-label">Full script</div><div class="pres-script">${generatePresentationScript(p)}</div></div>
+    <div class="pres-section">
+      <div class="pres-label-row"><span class="pres-label">Compact script</span>${polishBtn('compact')}</div>
+      <div class="pres-script pres-compact" data-pres-script="compact">${compactPolished ? escapeHTML(compactPolished) : compactScript}</div>
+      ${revertBtn('compact')}
+    </div>
+    <div class="pres-section">
+      <div class="pres-label-row"><span class="pres-label">Full script</span>${polishBtn('full')}</div>
+      <div class="pres-script" data-pres-script="full">${fullPolished ? escapeHTML(fullPolished) : escapeHTML(fullScript)}</div>
+      ${revertBtn('full')}
+    </div>
   `;
 
   bindPresentationXrayClicks(el, p);
@@ -4470,7 +5677,7 @@ function bindPresentationSwipe(){
     if(!overlay.classList.contains('active')) return;
     const dx = e.changedTouches[0].screenX - startX;
     if(dx > 60) stepPresentation(-1);
-    if(dx < -60) stepPresentation(1);
+    if(dx < -60) stepPresentation(1, true);
   }, { passive: true });
 }
 
@@ -4478,10 +5685,65 @@ function bindPresentationSwipe(){
 
 let editingTemplateId = null;
 
+const TEMPLATE_TYPE_OPTIONS = [
+  { value: 'postop_pathway', label: 'Post-op pathway' },
+  { value: 'conservative_pathway', label: 'Conservative pathway' },
+  { value: 'discharge', label: 'Discharge' },
+  { value: 'preop', label: 'Pre-op' }
+];
+
+function renderTemplateTypeSelect(selected, attrs){
+  attrs = attrs || '';
+  return `<select id="te_type" ${attrs}>${TEMPLATE_TYPE_OPTIONS.map(o =>
+    `<option value="${o.value}" ${selected === o.value ? 'selected' : ''}>${o.label}</option>`
+  ).join('')}</select>`;
+}
+
 function openTemplateManager(){
   editingTemplateId = null;
   document.getElementById('templateManagerModal').classList.add('active');
+  renderTemplateWardSettings();
   renderTemplateManagerList();
+}
+
+function renderTemplateWardSettings(){
+  const cb = document.getElementById('templateAutoApplyPostOp');
+  const hint = document.getElementById('templateDefaultPostOpHint');
+  const clearBtn = document.getElementById('templateClearDefaultBtn');
+  if(!cb || !hint) return;
+  cb.checked = shouldAutoApplyPostOp();
+  const defaultId = wardTemplateLibrary.defaultPostOpTemplateId;
+  const defaultTpl = defaultId ? getTemplateById(defaultId) : null;
+  if(defaultTpl){
+    hint.textContent = `Ward default pathway: ${defaultTpl.name}. Use ★ Default on any post-op template to change.`;
+    if(clearBtn) clearBtn.style.display = '';
+  }else{
+    hint.textContent = shouldAutoApplyPostOp()
+      ? 'No ward default — matches procedure/diagnosis when possible, otherwise ORIF upper limb. Set ★ Default on your usual post-op template.'
+      : 'Auto-apply is off — milestones stay empty until you pick a template on the patient.';
+    if(clearBtn) clearBtn.style.display = 'none';
+  }
+}
+
+async function setDefaultPostOpTemplate(id){
+  const tpl = getTemplateById(id);
+  if(!tpl || tpl.type !== 'postop_pathway'){
+    showToast('Only post-op pathways can be the ward default');
+    return;
+  }
+  wardTemplateLibrary.defaultPostOpTemplateId = id;
+  await saveTemplateLibrary();
+  renderTemplateWardSettings();
+  renderTemplateManagerList();
+  showToast(`Default post-op pathway: ${tpl.name}`);
+}
+
+async function clearDefaultPostOpTemplate(){
+  wardTemplateLibrary.defaultPostOpTemplateId = null;
+  await saveTemplateLibrary();
+  renderTemplateWardSettings();
+  renderTemplateManagerList();
+  showToast('Ward default cleared');
 }
 
 function closeTemplateManager(){
@@ -4494,77 +5756,87 @@ function renderTemplateManagerList(){
   const search = (document.getElementById('templateSearchInput').value || '').toLowerCase();
   let list = getMergedTemplates();
   if(search) list = list.filter(t => (t.name||'').toLowerCase().includes(search) || (t.tags||[]).some(tag=>tag.includes(search)));
+  const wardDefaultId = wardTemplateLibrary.defaultPostOpTemplateId;
   el.innerHTML = list.map(t=>`
     <div class="template-row" data-tid="${escapeHTML(t.id)}">
       <div>
         <strong>${escapeHTML(t.name)}</strong>
         ${t.builtin ? '<span class="small-muted"> (built-in)</span>' : ''}
+        ${wardDefaultId === t.id ? '<span class="small-muted"> · ★ ward default</span>' : ''}
         <div class="small-muted">${escapeHTML(t.type)} · ${(t.items||[]).length} items · ${(t.tags||[]).slice(0,4).join(', ')}</div>
       </div>
-      <div style="display:flex;gap:4px;flex-shrink:0;">
-        <button type="button" class="btn" data-tpl-edit="${escapeHTML(t.id)}">Edit</button>
+      <div style="display:flex;gap:4px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end;">
+        ${t.type === 'postop_pathway' ? `<button type="button" class="btn${wardDefaultId === t.id ? ' primary' : ''}" data-tpl-default="${escapeHTML(t.id)}">${wardDefaultId === t.id ? '★ Default' : 'Set default'}</button>` : ''}
+        <button type="button" class="btn" data-tpl-edit="${escapeHTML(t.id)}">${t.builtin ? 'View' : 'Edit'}</button>
         <button type="button" class="btn" data-tpl-dup="${escapeHTML(t.id)}">Dup</button>
         ${t.builtin ? `<button type="button" class="btn" data-tpl-hide="${escapeHTML(t.id)}">Hide</button>` : `<button type="button" class="btn danger" data-tpl-del="${escapeHTML(t.id)}">Del</button>`}
       </div>
-    </div>`).join('') || '<div class="small-muted">No templates match.</div>';
+    </div>`).join('') || `<div class="empty-state compact"><div class="msg">No templates match your search.</div></div>`;
 
+  el.querySelectorAll('[data-tpl-default]').forEach(btn=>{
+    btn.addEventListener('click', ()=> setDefaultPostOpTemplate(btn.getAttribute('data-tpl-default')));
+  });
   el.querySelectorAll('[data-tpl-edit]').forEach(btn=>{
-    btn.addEventListener('click', ()=> openTemplateEditor(btn.dataset.tplEdit));
+    btn.addEventListener('click', ()=> openTemplateEditor(btn.getAttribute('data-tpl-edit')));
   });
   el.querySelectorAll('[data-tpl-dup]').forEach(btn=>{
-    btn.addEventListener('click', ()=> duplicateWardTemplate(btn.dataset.tplDup));
+    btn.addEventListener('click', ()=> duplicateWardTemplate(btn.getAttribute('data-tpl-dup')));
   });
   el.querySelectorAll('[data-tpl-hide]').forEach(btn=>{
-    btn.addEventListener('click', ()=> hideBuiltinTemplate(btn.dataset.tplHide));
+    btn.addEventListener('click', ()=> hideBuiltinTemplate(btn.getAttribute('data-tpl-hide')));
   });
   el.querySelectorAll('[data-tpl-del]').forEach(btn=>{
-    btn.addEventListener('click', ()=> deleteWardTemplate(btn.dataset.tplDel));
+    btn.addEventListener('click', ()=> deleteWardTemplate(btn.getAttribute('data-tpl-del')));
   });
 }
 
 function openTemplateEditor(id){
-  const tpl = getTemplateById(id) || getBuiltinTemplates().find(t=>t.id===id);
+  if(!id) return;
+  const wardRec = getWardTemplateRecord(id);
+  const merged = getTemplateById(id) || getBuiltinTemplates().find(t=>t.id===id);
+  const tpl = wardRec || merged;
   if(!tpl) return;
-  editingTemplateId = tpl.builtin ? null : id;
-  const isNew = !tpl.builtin && !wardTemplateLibrary.templates.find(t=>t.id===id);
+  const readOnly = !wardRec && !!merged?.builtin;
+  editingTemplateId = readOnly ? null : id;
   const body = document.getElementById('templateEditorBody');
-  document.getElementById('templateEditorTitle').textContent = tpl.builtin ? `View / duplicate: ${tpl.name}` : (editingTemplateId ? `Edit: ${tpl.name}` : 'New template');
+  document.getElementById('templateEditorTitle').textContent = readOnly
+    ? `View / duplicate: ${tpl.name}`
+    : `Edit: ${tpl.name}`;
   const items = tpl.items || [];
+  const isDischarge = tpl.type === 'discharge';
   body.innerHTML = `
-    <div class="form-row"><label>Name</label><input id="te_name" value="${escapeHTML(tpl.name)}" ${tpl.builtin?'readonly':''}></div>
+    <div class="form-row"><label>Name</label><input id="te_name" value="${escapeHTML(tpl.name)}" ${readOnly?'readonly':''}></div>
     <div class="form-row two">
       <div><label>Type</label>
-        <select id="te_type" ${tpl.builtin?'disabled':''}>
-          <option value="postop_pathway" ${tpl.type==='postop_pathway'?'selected':''}>Post-op pathway</option>
-          <option value="discharge" ${tpl.type==='discharge'?'selected':''}>Discharge</option>
-          <option value="preop" ${tpl.type==='preop'?'selected':''}>Pre-op</option>
-        </select>
+        ${renderTemplateTypeSelect(tpl.type, readOnly ? 'disabled' : '')}
       </div>
-      <div><label>Tags (comma-separated)</label><input id="te_tags" value="${escapeHTML((tpl.tags||[]).join(', '))}" ${tpl.builtin?'readonly':''}></div>
+      <div><label>Tags (comma-separated)</label><input id="te_tags" value="${escapeHTML((tpl.tags||[]).join(', '))}" ${readOnly?'readonly':''}></div>
     </div>
     <div class="form-row"><label>Items (label | duePod | duePodEnd | exact | category)</label>
       <div id="te_items">${items.map((it,i)=>`
         <div class="check-row te-item-row" style="margin-bottom:4px;flex-wrap:wrap;gap:4px;">
-          <input data-te-label="${i}" value="${escapeHTML(it.label)}" style="flex:2;min-width:120px;" ${tpl.builtin?'readonly':''}>
-          ${tpl.type!=='discharge' ? `<input data-te-due="${i}" type="number" value="${it.duePod??0}" style="width:48px;" ${tpl.builtin?'readonly':''} title="due POD">
-          <input data-te-end="${i}" type="number" value="${it.duePodEnd??''}" placeholder="end" style="width:48px;" ${tpl.builtin?'readonly':''}>
-          <label><input type="checkbox" data-te-exact="${i}" ${it.exactPod?'checked':''} ${tpl.builtin?'disabled':''}> Exact</label>` : ''}
-          <select data-te-cat="${i}" ${tpl.builtin?'disabled':''}>${CHECKLIST_CATEGORIES.map(c=>`<option value="${c}" ${it.category===c?'selected':''}>${c}</option>`).join('')}</select>
-          ${!tpl.builtin ? `<button type="button" class="btn danger te-rm-item" style="padding:2px 8px;">✕</button>` : ''}
+          <input data-te-id="${escapeHTML(it.id || '')}" data-te-label="${i}" value="${escapeHTML(it.label)}" style="flex:2;min-width:120px;" ${readOnly?'readonly':''}>
+          ${!isDischarge ? `<input data-te-due="${i}" type="number" value="${it.duePod??0}" style="width:48px;" ${readOnly?'readonly':''} title="due POD">
+          <input data-te-end="${i}" type="number" value="${it.duePodEnd??''}" placeholder="end" style="width:48px;" ${readOnly?'readonly':''}>
+          <label><input type="checkbox" data-te-exact="${i}" ${it.exactPod?'checked':''} ${readOnly?'disabled':''}> Exact</label>` : ''}
+          <select data-te-cat="${i}" ${readOnly?'disabled':''}>${CHECKLIST_CATEGORIES.map(c=>`<option value="${c}" ${it.category===c?'selected':''}>${c}</option>`).join('')}</select>
+          ${!readOnly ? `<button type="button" class="btn danger te-rm-item" style="padding:2px 8px;">✕</button>` : ''}
         </div>`).join('')}</div>
-      ${!tpl.builtin ? '<button type="button" class="btn" id="te_addItem" style="margin-top:6px;">+ Item</button>' : ''}
+      ${!readOnly ? '<button type="button" class="btn" id="te_addItem" style="margin-top:6px;">+ Item</button>' : ''}
     </div>
-    ${tpl.builtin ? '<p class="form-hint">Built-in templates are read-only. Use Duplicate to create an editable copy.</p>' : ''}
+    ${readOnly ? '<p class="form-hint">Built-in templates are read-only. Use Duplicate to create an editable copy.</p>' : ''}
   `;
-  document.getElementById('templateEditorPanel').style.display = 'block';
-  if(!tpl.builtin){
+  const panel = document.getElementById('templateEditorPanel');
+  panel.style.display = 'block';
+  panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  if(!readOnly){
     document.getElementById('te_addItem').addEventListener('click', ()=>{
       const box = document.getElementById('te_items');
       const i = box.querySelectorAll('[data-te-label]').length;
       const div = document.createElement('div');
       div.className = 'check-row te-item-row';
       div.style.cssText = 'margin-bottom:4px;flex-wrap:wrap;gap:4px;';
-      div.innerHTML = `<input data-te-label="${i}" value="New item" style="flex:2;min-width:120px;">
+      div.innerHTML = `<input data-te-id="" data-te-label="${i}" value="New item" style="flex:2;min-width:120px;">
         <input data-te-due="${i}" type="number" value="0" style="width:48px;">
         <input data-te-end="${i}" type="number" placeholder="end" style="width:48px;">
         <label><input type="checkbox" data-te-exact="${i}"> Exact</label>
@@ -4599,14 +5871,16 @@ function collectTemplateEditorData(){
     if(!label) return;
     if(type === 'discharge'){
       const cat = row.querySelector('[data-te-cat]');
-      items.push(dischargeItemDef('item_' + uid(), label, { category: cat ? cat.value : 'other' }));
+      const itemId = (labelInp.dataset.teId || '').trim() || ('item_' + uid());
+      items.push(dischargeItemDef(itemId, label, { category: cat ? cat.value : 'other' }));
     }else{
       const dueEl = row.querySelector('[data-te-due]');
       const endEl = row.querySelector('[data-te-end]');
       const exactEl = row.querySelector('[data-te-exact]');
       const catEl = row.querySelector('[data-te-cat]');
       const endVal = endEl && endEl.value !== '' ? +endEl.value : null;
-      items.push(itemDef('item_' + uid(), label, dueEl ? (+dueEl.value || 0) : 0, {
+      const itemId = (labelInp.dataset.teId || '').trim() || ('item_' + uid());
+      items.push(itemDef(itemId, label, dueEl ? (+dueEl.value || 0) : 0, {
         duePodEnd: endVal,
         exactPod: exactEl && exactEl.checked,
         category: catEl ? catEl.value : 'other'
@@ -4617,7 +5891,12 @@ function collectTemplateEditorData(){
 }
 
 async function saveTemplateEditor(){
-  if(document.getElementById('te_name').readOnly) return;
+  const nameEl = document.getElementById('te_name');
+  if(!nameEl) return;
+  if(nameEl.readOnly){
+    showToast('Built-in templates are read-only — use Duplicate');
+    return;
+  }
   const data = collectTemplateEditorData();
   if(!data.name){ showToast('Enter template name'); return; }
   wardTemplateLibrary.templates = wardTemplateLibrary.templates || [];
@@ -4651,7 +5930,9 @@ async function duplicateWardTemplate(id){
 async function hideBuiltinTemplate(id){
   wardTemplateLibrary.disabledIds = wardTemplateLibrary.disabledIds || [];
   if(!wardTemplateLibrary.disabledIds.includes(id)) wardTemplateLibrary.disabledIds.push(id);
+  if(wardTemplateLibrary.defaultPostOpTemplateId === id) wardTemplateLibrary.defaultPostOpTemplateId = null;
   await saveTemplateLibrary();
+  renderTemplateWardSettings();
   renderTemplateManagerList();
   showToast('Template hidden');
 }
@@ -4660,7 +5941,9 @@ async function deleteWardTemplate(id){
   const ok = await showConfirm('Delete template?', 'Delete this ward template? Built-in templates cannot be deleted.', { confirmLabel: 'Delete', danger: true });
   if(!ok) return;
   wardTemplateLibrary.templates = (wardTemplateLibrary.templates || []).filter(t=>t.id!==id);
+  if(wardTemplateLibrary.defaultPostOpTemplateId === id) wardTemplateLibrary.defaultPostOpTemplateId = null;
   await saveTemplateLibrary();
+  renderTemplateWardSettings();
   renderTemplateManagerList();
   showToast('Deleted');
 }
@@ -4695,7 +5978,10 @@ async function importTemplatePack(e){
         wardTemplateLibrary.templates = incoming.map(t=>Object.assign({}, t, { builtin: false }));
       }
       if(Array.isArray(payload.disabledIds)) wardTemplateLibrary.disabledIds = payload.disabledIds;
+      if(payload.defaultPostOpTemplateId) wardTemplateLibrary.defaultPostOpTemplateId = payload.defaultPostOpTemplateId;
+      if(payload.autoApplyPostOp === false) wardTemplateLibrary.autoApplyPostOp = false;
       await saveTemplateLibrary();
+      renderTemplateWardSettings();
       renderTemplateManagerList();
       showToast('Templates imported');
     }catch(err){
@@ -4709,6 +5995,13 @@ async function importTemplatePack(e){
 function bindTemplateManagerEvents(){
   document.getElementById('templateManagerClose').addEventListener('click', closeTemplateManager);
   document.getElementById('templateSearchInput').addEventListener('input', renderTemplateManagerList);
+  document.getElementById('templateAutoApplyPostOp').addEventListener('change', async (e)=>{
+    wardTemplateLibrary.autoApplyPostOp = e.target.checked;
+    await saveTemplateLibrary();
+    renderTemplateWardSettings();
+    showToast(e.target.checked ? 'Auto-apply on' : 'Auto-apply off — pick template per patient');
+  });
+  document.getElementById('templateClearDefaultBtn').addEventListener('click', clearDefaultPostOpTemplate);
   document.getElementById('templateNewBtn').addEventListener('click', ()=>{
     editingTemplateId = null;
     const body = document.getElementById('templateEditorBody');
@@ -4716,17 +6009,18 @@ function bindTemplateManagerEvents(){
     body.innerHTML = `
       <div class="form-row"><label>Name</label><input id="te_name" value=""></div>
       <div class="form-row two">
-        <div><label>Type</label><select id="te_type"><option value="postop_pathway">Post-op pathway</option><option value="discharge">Discharge</option></select></div>
+        <div><label>Type</label>${renderTemplateTypeSelect('postop_pathway')}</div>
         <div><label>Tags</label><input id="te_tags" placeholder="orif, radius"></div>
       </div>
       <div class="form-row"><div id="te_items"></div><button type="button" class="btn" id="te_addItem">+ Item</button></div>`;
     document.getElementById('templateEditorPanel').style.display = 'block';
+    document.getElementById('templateEditorPanel').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     document.getElementById('te_addItem').addEventListener('click', ()=>{
       const box = document.getElementById('te_items');
       const i = box.querySelectorAll('[data-te-label]').length;
       const div = document.createElement('div');
       div.className = 'check-row te-item-row';
-      div.innerHTML = `<input data-te-label="${i}" value="New item" style="flex:2;"><input data-te-due="${i}" type="number" value="0" style="width:48px;">
+      div.innerHTML = `<input data-te-id="" data-te-label="${i}" value="New item" style="flex:2;"><input data-te-due="${i}" type="number" value="0" style="width:48px;">
         <button type="button" class="btn danger te-rm-item" style="padding:2px 8px;">✕</button>`;
       box.appendChild(div);
       bindTemplateItemRemoveButtons();
@@ -4743,19 +6037,31 @@ function bindTemplateManagerEvents(){
 
 /* ---------------- handover / roster / bulk ---------------- */
 
+function updateBulkBar(){
+  const bar = document.getElementById('bulkPlanBar');
+  if(!bar) return;
+  if(bulkSelectMode && bulkSelectedIds.size){
+    bar.classList.add('active');
+    bar.querySelector('.bulk-plan-count').textContent = String(bulkSelectedIds.size);
+  }else{
+    bar.classList.remove('active');
+  }
+}
+
 function toggleBulkSelectMode(){
   bulkSelectMode = !bulkSelectMode;
   if(!bulkSelectMode) bulkSelectedIds.clear();
   const btn = document.getElementById('bulkPlanBtn');
   if(btn) btn.classList.toggle('active', bulkSelectMode);
+  updateBulkBar();
   renderRounds();
-  if(bulkSelectMode) showToast('Select patients, then use Bulk plan in More menu');
+  if(bulkSelectMode) showToast('Tap patients to select, then Apply plan');
 }
 
 async function applyBulkPlan(){
   if(!bulkSelectedIds.size){ showToast('Select patients first'); return; }
   const fields = await showPromptFields('Bulk plan', [
-    { id: 'plan', label: 'Plan for all selected patients', value: '', placeholder: 'Same instruction for everyone' }
+    { id: 'plan', label: `Plan for ${bulkSelectedIds.size} selected patient(s)`, value: '', placeholder: 'Same instruction for everyone' }
   ]);
   if(!fields || !fields.plan?.trim()) return;
   const text = fields.plan.trim();
@@ -4769,6 +6075,7 @@ async function applyBulkPlan(){
   bulkSelectMode = false;
   bulkSelectedIds.clear();
   document.getElementById('bulkPlanBtn')?.classList.remove('active');
+  updateBulkBar();
   renderAll();
   showToast(`Plan applied to ${count} patient(s)`);
 }

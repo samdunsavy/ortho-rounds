@@ -3,7 +3,7 @@
    arrive when online), falling back to cache when offline.
    API calls (/api/) always go to the network and are never cached. */
 
-const CACHE = 'ortho-rounds-v24';
+const CACHE = 'ortho-rounds-v30';
 const SHELL = ['./', 'index.html', 'milestones.js', 'app.js', 'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-maskable.svg'];
 
 self.addEventListener('install', (event)=>{

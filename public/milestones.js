@@ -7,7 +7,13 @@ const TEMPLATE_LIBRARY_ID = '__template_library__';
 const CHECKLIST_CATEGORIES = ['nv','mobilization','imaging','antibiotics','drain','wound','other'];
 const CHECKLIST_STATUSES = ['pending','done','skipped','na'];
 
-let wardTemplateLibrary = { templates: [], disabledIds: [], updatedAt: 0 };
+let wardTemplateLibrary = {
+  templates: [],
+  disabledIds: [],
+  updatedAt: 0,
+  defaultPostOpTemplateId: null,
+  autoApplyPostOp: true
+};
 
 function itemDef(id, label, duePod, opts){
   opts = opts || {};
@@ -344,14 +350,41 @@ function formatMilestonePodLabelForPatient(c, p){
 
 function loadTemplateLibraryFromRecord(rec){
   if(!rec){
-    wardTemplateLibrary = { templates: [], disabledIds: [], updatedAt: 0 };
+    wardTemplateLibrary = {
+      templates: [],
+      disabledIds: [],
+      updatedAt: 0,
+      defaultPostOpTemplateId: null,
+      autoApplyPostOp: true
+    };
     return;
   }
   wardTemplateLibrary = {
     templates: Array.isArray(rec.templates) ? rec.templates : [],
     disabledIds: Array.isArray(rec.disabledIds) ? rec.disabledIds : [],
-    updatedAt: rec.updatedAt || 0
+    updatedAt: rec.updatedAt || 0,
+    defaultPostOpTemplateId: rec.defaultPostOpTemplateId || null,
+    autoApplyPostOp: rec.autoApplyPostOp !== false
   };
+}
+
+function shouldAutoApplyPostOp(){
+  return wardTemplateLibrary.autoApplyPostOp !== false;
+}
+
+function getDefaultPostOpTemplateId(p){
+  const wardDefault = wardTemplateLibrary.defaultPostOpTemplateId;
+  if(wardDefault && getTemplateById(wardDefault)) return wardDefault;
+  if(p){
+    const suggested = suggestTemplatesForPatient(p, 'postop_pathway', 1)[0];
+    if(suggested) return suggested.id;
+  }
+  return 'orif-upper-pathway';
+}
+
+function getDefaultPostOpTemplateLabel(p){
+  const tpl = getTemplateById(getDefaultPostOpTemplateId(p));
+  return tpl ? tpl.name : 'ORIF upper limb';
 }
 
 function getMergedTemplates(){
@@ -369,7 +402,7 @@ function getMergedTemplates(){
     if(ward && !b.builtin){
       out.push(ward);
     }else if(ward){
-      out.push(Object.assign({}, b, ward, { builtin: true }));
+      out.push(Object.assign({}, b, ward, { builtin: false }));
     }else{
       out.push(Object.assign({}, b));
     }
@@ -380,6 +413,10 @@ function getMergedTemplates(){
     out.push(Object.assign({}, t, { builtin: !!t.builtin }));
   }
   return out;
+}
+
+function getWardTemplateRecord(id){
+  return (wardTemplateLibrary.templates || []).find(t => t && t.id === id) || null;
 }
 
 function getTemplateById(id){
@@ -546,7 +583,7 @@ function suggestTemplatesForPatient(p, type, limit){
 }
 
 function defaultPostOpChecks(){
-  const tpl = getTemplateById('orif-upper-pathway');
+  const tpl = getTemplateById(getDefaultPostOpTemplateId(null));
   if(!tpl) return [];
   return (tpl.items || []).map(d => templateItemToPatientItem(d, tpl.id, false));
 }
@@ -566,8 +603,9 @@ function applyConservativeTemplate(p){
 }
 
 function applyPostOpTemplate(p){
+  if(!shouldAutoApplyPostOp()) return;
   if(!p.postOpChecks || !p.postOpChecks.length){
-    applyTemplateToPatient(p, 'orif-upper-pathway', { fillPlan: 'none' });
+    applyTemplateToPatient(p, getDefaultPostOpTemplateId(p), { fillPlan: 'none' });
   }
 }
 
@@ -583,6 +621,8 @@ function buildTemplateLibraryExport(){
     version: 1,
     exportedAt: new Date().toISOString(),
     templates: wardTemplateLibrary.templates || [],
-    disabledIds: wardTemplateLibrary.disabledIds || []
+    disabledIds: wardTemplateLibrary.disabledIds || [],
+    defaultPostOpTemplateId: wardTemplateLibrary.defaultPostOpTemplateId || null,
+    autoApplyPostOp: wardTemplateLibrary.autoApplyPostOp !== false
   };
 }

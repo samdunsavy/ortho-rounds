@@ -1,9 +1,11 @@
 /* ============================================================
    ORTHO ROUNDS — self-hosted LAN server
    ------------------------------------------------------------
-   - Zero npm dependencies (Node built-ins only).
-   - Stores patient data in a single local SQLite file (data/ortho.db).
-   - Data never leaves this machine. Access over your own Wi-Fi by URL.
+   - Stores patient data via a pluggable storage backend (see storage.js):
+       * SQLite (default): single local file data/ortho.db, zero external
+         dependencies, data never leaves the machine.
+       * MongoDB (optional): set MONGODB_URI to persist patients, X-rays and
+         auth config in a managed database that survives redeploys.
    - Frontend (public/) is an offline-capable client that syncs here.
 
    Run:   node server.js
@@ -14,24 +16,37 @@
    - Set a password with the ORTHO_PASSWORD environment variable, e.g.
         ORTHO_PASSWORD="ward12" node server.js
    - If unset, a random password is generated and printed once on first
-     run, and its hash is stored in data/config.json.
+     run, and its hash is stored alongside the data (config.json / config
+     collection).
    - Change the port with PORT=4000 node server.js (default 3000).
+   - Use MongoDB with MONGODB_URI="mongodb+srv://..." node server.js
+   - Relocate the SQLite data directory with ORTHO_DATA_DIR=/path node server.js
    ============================================================ */
 
 import http from 'node:http';
-import { createReadStream, existsSync, mkdirSync, readFileSync, writeFileSync, statSync, copyFileSync, readdirSync, unlinkSync } from 'node:fs';
+import { createReadStream, existsSync, statSync } from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { DatabaseSync } from 'node:sqlite';
+import { createStore } from './storage.js';
+import {
+  isAiEnabled,
+  getAiConfig,
+  checkRateLimit,
+  draftPlan,
+  polishPresentation,
+  handoverSummary
+} from './ai.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
-const DATA_DIR = path.join(__dirname, 'data');
-const DB_PATH = path.join(DATA_DIR, 'ortho.db');
-const CONFIG_PATH = path.join(DATA_DIR, 'config.json');
-const IMAGES_DIR = path.join(DATA_DIR, 'images');
+// SQLite data directory. MUST be on a persistent disk, or use the MongoDB
+// backend (MONGODB_URI) so patients survive redeploys.
+const DATA_DIR = process.env.ORTHO_DATA_DIR
+  ? path.resolve(process.env.ORTHO_DATA_DIR)
+  : path.join(__dirname, 'data');
+const MONGODB_URI = process.env.MONGODB_URI || '';
 
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
@@ -40,13 +55,8 @@ const TOKEN_TTL_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
 
 /* ---------------- config + auth secrets ---------------- */
 
-function loadConfig(){
-  if(!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
-  let config = {};
-  if(existsSync(CONFIG_PATH)){
-    try{ config = JSON.parse(readFileSync(CONFIG_PATH, 'utf8')); }
-    catch{ config = {}; }
-  }
+async function setupConfig(store){
+  const config = await store.loadRawConfig();
   let changed = false;
   if(!config.tokenSecret){ config.tokenSecret = crypto.randomBytes(32).toString('hex'); changed = true; }
   if(!config.passwordSalt){ config.passwordSalt = crypto.randomBytes(16).toString('hex'); changed = true; }
@@ -54,7 +64,7 @@ function loadConfig(){
   let generatedPassword = null;
   const envPassword = process.env.ORTHO_PASSWORD;
   if(envPassword){
-    // Env var always wins; keep the file's stored hash in sync for reference.
+    // Env var always wins; keep the stored hash in sync for reference.
     config.passwordHash = hashPassword(envPassword, config.passwordSalt);
     changed = true;
   } else if(!config.passwordHash){
@@ -63,7 +73,7 @@ function loadConfig(){
     changed = true;
   }
 
-  if(changed) writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), { mode: 0o600 });
+  if(changed) await store.saveRawConfig(config);
   return { config, generatedPassword, usingEnvPassword: !!envPassword };
 }
 
@@ -104,44 +114,7 @@ function verifyToken(token){
   return Number(expStr) > Date.now();
 }
 
-/* ---------------- database ---------------- */
-
-function initDb(){
-  if(!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
-  const database = new DatabaseSync(DB_PATH);
-  database.exec('PRAGMA journal_mode = WAL;');
-  database.exec(`
-    CREATE TABLE IF NOT EXISTS patients (
-      id        TEXT PRIMARY KEY,
-      updatedAt INTEGER NOT NULL,
-      deleted   INTEGER NOT NULL DEFAULT 0,
-      data      TEXT    NOT NULL
-    );
-  `);
-  database.exec('CREATE INDEX IF NOT EXISTS idx_patients_updatedAt ON patients(updatedAt);');
-  return database;
-}
-
-function autoBackupDb(){
-  if(!existsSync(DB_PATH)) return;
-  const backupDir = path.join(DATA_DIR, 'backups');
-  mkdirSync(backupDir, { recursive: true });
-  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
-  const dest = path.join(backupDir, `ortho-${stamp}.db`);
-  try{
-    copyFileSync(DB_PATH, dest);
-    const files = readdirSync(backupDir)
-      .filter(f => f.startsWith('ortho-') && f.endsWith('.db'))
-      .map(f => ({ name: f, time: statSync(path.join(backupDir, f)).mtimeMs }))
-      .sort((a, b) => b.time - a.time);
-    for(const old of files.slice(7)){
-      try{ unlinkSync(path.join(backupDir, old.name)); }catch{ /* ignore */ }
-    }
-    console.log(`  Auto-backup: ${dest}`);
-  }catch(err){
-    console.warn('  Auto-backup failed:', err.message);
-  }
-}
+/* ---------------- patient records ---------------- */
 
 function rowToPatient(row){
   let obj;
@@ -184,8 +157,15 @@ function mergePatientRecords(local, remote){
   if(!local) return Object.assign({}, remote);
   if(!remote) return Object.assign({}, local);
   const merged = Object.assign({}, remote, local);
-  merged.postOpChecks = mergeChecklistById(local.postOpChecks, remote.postOpChecks);
-  merged.dischargeChecks = mergeChecklistById(local.dischargeChecks, remote.dischargeChecks);
+  const localTs = Number(local.updatedAt) || 0;
+  const remoteTs = Number(remote.updatedAt) || 0;
+  if(localTs >= remoteTs){
+    merged.postOpChecks = (local.postOpChecks || []).map(c => Object.assign({}, c));
+    merged.dischargeChecks = (local.dischargeChecks || []).map(c => Object.assign({}, c));
+  }else{
+    merged.postOpChecks = mergeChecklistById(local.postOpChecks, remote.postOpChecks);
+    merged.dischargeChecks = mergeChecklistById(local.dischargeChecks, remote.dischargeChecks);
+  }
   merged.planHistory = mergePlanHistory(local.planHistory, remote.planHistory);
   merged.labs = Object.assign({}, remote.labs || {}, local.labs || {});
   const localPlanTs = Number(local.planUpdatedAt) || 0;
@@ -214,20 +194,11 @@ function mergePatientRecords(local, remote){
   return merged;
 }
 
-function getStoredPatient(id){
-  const row = db.prepare('SELECT id, updatedAt, deleted, data FROM patients WHERE id = ?').get(id);
-  return row ? rowToPatient(row) : null;
-}
-
-function saveImageFromDataUrl(dataURL){
-  mkdirSync(IMAGES_DIR, { recursive: true });
+async function saveImageFromDataUrl(dataURL){
   const m = String(dataURL).match(/^data:(image\/\w+);base64,(.+)$/);
   if(!m) throw Object.assign(new Error('Invalid image data'), { statusCode: 400 });
   const ext = m[1].includes('png') ? '.png' : m[1].includes('webp') ? '.webp' : '.jpg';
-  const id = crypto.randomBytes(12).toString('hex');
-  const filePath = path.join(IMAGES_DIR, id + ext);
-  writeFileSync(filePath, Buffer.from(m[2], 'base64'));
-  return `/api/images/${id}${ext}`;
+  return await store.saveImage(Buffer.from(m[2], 'base64'), ext);
 }
 
 /* ---------------- http helpers ---------------- */
@@ -265,7 +236,17 @@ function readBody(req){
 
 function getBearerToken(req){
   const h = req.headers['authorization'] || '';
-  return h.startsWith('Bearer ') ? h.slice(7) : null;
+  if(h.startsWith('Bearer ')) return h.slice(7);
+  // Fallback: token in query string. Browsers can't attach an Authorization
+  // header to plain <img>/<a> requests, so server-hosted X-ray images are
+  // fetched as /api/images/<id>.jpg?token=<token>.
+  const qIdx = req.url.indexOf('?');
+  if(qIdx >= 0){
+    const params = new URLSearchParams(req.url.slice(qIdx + 1));
+    const t = params.get('token');
+    if(t) return t;
+  }
+  return null;
 }
 
 const CONTENT_TYPES = {
@@ -303,7 +284,15 @@ function serveStatic(req, res){
 async function handleApi(req, res, pathname){
   // Public endpoints (no auth)
   if(pathname === '/api/health' && req.method === 'GET'){
-    return sendJSON(res, 200, { ok: true, app: 'ortho-rounds', time: Date.now() });
+    // `storage` lets you confirm at a glance whether a deployment is actually
+    // using MongoDB ("mongo") or the ephemeral local file ("sqlite").
+    return sendJSON(res, 200, {
+      ok: true,
+      app: 'ortho-rounds',
+      storage: store ? store.kind : 'starting',
+      time: Date.now(),
+      ai: getAiConfig()
+    });
   }
   if(pathname === '/api/login' && req.method === 'POST'){
     const body = await readBody(req);
@@ -318,28 +307,30 @@ async function handleApi(req, res, pathname){
     return sendJSON(res, 401, { error: 'Login required' });
   }
 
+  if(pathname === '/api/diag' && req.method === 'GET'){
+    const all = await store.getAll();
+    const live = all.filter(r => !r.deleted);
+    return sendJSON(res, 200, {
+      storage: store.kind,
+      location: store.location,
+      totalRecords: all.length,
+      livePatients: live.length,
+      sample: live.slice(0, 10).map(r => { let nm=''; try{ nm = JSON.parse(r.data||'{}').name || ''; }catch{} return { id: r.id, name: nm, updatedAt: r.updatedAt }; })
+    });
+  }
+
   if(pathname === '/api/sync' && req.method === 'POST'){
     const body = await readBody(req) || {};
     const since = Number(body.since) || 0;
     const changes = Array.isArray(body.changes) ? body.changes : [];
     const now = Date.now();
 
-    const upsert = db.prepare(`
-      INSERT INTO patients (id, updatedAt, deleted, data)
-      VALUES (?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET
-        updatedAt = excluded.updatedAt,
-        deleted   = excluded.deleted,
-        data      = excluded.data
-    `);
-    const getOne = db.prepare('SELECT updatedAt, data FROM patients WHERE id = ?');
-
-    db.exec('BEGIN');
+    await store.begin();
     try{
       for(const p of changes){
         if(!p || typeof p.id !== 'string') continue;
         const incomingUpdated = Number(p.updatedAt) || 0;
-        const existing = getOne.get(p.id);
+        const existing = await store.getPatientRaw(p.id);
         if(!existing || incomingUpdated >= existing.updatedAt){
           let stored = Object.assign({}, p);
           if(existing){
@@ -350,51 +341,67 @@ async function handleApi(req, res, pathname){
             existingObj.updatedAt = existing.updatedAt;
             stored = mergePatientRecords(p, existingObj);
           }
-          const serverUpdated = now;
-          stored.updatedAt = serverUpdated;
-          upsert.run(p.id, serverUpdated, p.deleted ? 1 : 0, JSON.stringify(stored));
+          stored.updatedAt = now;
+          await store.upsertPatient(p.id, now, p.deleted ? 1 : 0, JSON.stringify(stored));
         }
       }
-      db.exec('COMMIT');
+      await store.commit();
     }catch(err){
-      db.exec('ROLLBACK');
+      await store.rollback();
       throw err;
     }
 
-    const rows = db.prepare('SELECT id, updatedAt, deleted, data FROM patients WHERE updatedAt > ?').all(since);
+    const rows = await store.getChangedSince(since);
     return sendJSON(res, 200, { serverTime: now, patients: rows.map(rowToPatient) });
   }
 
   if(pathname === '/api/backup' && req.method === 'GET'){
-    if(!existsSync(DB_PATH)) return sendJSON(res, 404, { error: 'Database not found' });
+    const filePath = store.backupFilePath ? store.backupFilePath() : null;
+    if(filePath){
+      res.writeHead(200, {
+        'Content-Type': 'application/octet-stream',
+        'Content-Disposition': `attachment; filename="ortho_${new Date().toISOString().slice(0,10)}.db"`,
+        'Cache-Control': 'no-store'
+      });
+      return createReadStream(filePath).pipe(res);
+    }
+    // Backends without a file (e.g. MongoDB): hand back a full JSON dump.
+    const rows = await store.getAll();
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      appVersion: 2,
+      source: store.kind,
+      patients: rows.map(rowToPatient)
+    };
     res.writeHead(200, {
-      'Content-Type': 'application/octet-stream',
-      'Content-Disposition': `attachment; filename="ortho_${new Date().toISOString().slice(0,10)}.db"`,
+      'Content-Type': 'application/json; charset=utf-8',
+      'Content-Disposition': `attachment; filename="ortho_${new Date().toISOString().slice(0,10)}.json"`,
       'Cache-Control': 'no-store'
     });
-    return createReadStream(DB_PATH).pipe(res);
+    return res.end(JSON.stringify(payload, null, 2));
   }
 
   if(pathname === '/api/images' && req.method === 'POST'){
     const body = await readBody(req) || {};
     if(!body.dataURL) return sendJSON(res, 400, { error: 'dataURL required' });
-    const url = saveImageFromDataUrl(body.dataURL);
+    const url = await saveImageFromDataUrl(body.dataURL);
     return sendJSON(res, 200, { url });
   }
 
   const imgMatch = pathname.match(/^\/api\/images\/([a-f0-9]+\.(jpg|png|webp))$/i);
   if(imgMatch && req.method === 'GET'){
-    const filePath = path.join(IMAGES_DIR, imgMatch[1]);
-    if(!filePath.startsWith(IMAGES_DIR) || !existsSync(filePath)){
-      res.writeHead(404); return res.end('Not found');
-    }
-    const ext = path.extname(filePath).toLowerCase();
-    res.writeHead(200, { 'Content-Type': CONTENT_TYPES[ext] || 'application/octet-stream', 'Cache-Control': 'private, max-age=86400' });
-    return createReadStream(filePath).pipe(res);
+    const img = await store.getImage(imgMatch[1]);
+    if(!img){ res.writeHead(404); return res.end('Not found'); }
+    res.writeHead(200, { 'Content-Type': img.contentType || 'application/octet-stream', 'Cache-Control': 'private, max-age=86400' });
+    return res.end(img.buffer);
+  }
+  if(imgMatch && req.method === 'DELETE'){
+    const ok = await store.deleteImage(imgMatch[1]);
+    return sendJSON(res, ok ? 200 : 404, { ok });
   }
 
   if(pathname === '/api/export' && req.method === 'GET'){
-    const rows = db.prepare('SELECT id, updatedAt, deleted, data FROM patients WHERE deleted = 0').all();
+    const rows = await store.getActive();
     const payload = {
       exportedAt: new Date().toISOString(),
       appVersion: 2,
@@ -408,6 +415,46 @@ async function handleApi(req, res, pathname){
     return res.end(JSON.stringify(payload, null, 2));
   }
 
+  if(pathname.startsWith('/api/ai/') && req.method === 'POST'){
+    if(!isAiEnabled()){
+      return sendJSON(res, 503, { error: 'AI not configured' });
+    }
+    const token = getBearerToken(req);
+    const rate = checkRateLimit(token);
+    if(!rate.ok){
+      return sendJSON(res, 429, { error: `AI rate limit — try again in ${rate.retryAfterSec}s` });
+    }
+    const body = await readBody(req) || {};
+    try{
+      if(pathname === '/api/ai/draft-plan'){
+        if(!body.patient || typeof body.patient !== 'object'){
+          return sendJSON(res, 400, { error: 'patient snapshot required' });
+        }
+        const text = await draftPlan(body.patient);
+        return sendJSON(res, 200, { text });
+      }
+      if(pathname === '/api/ai/polish-presentation'){
+        if(!body.patient || typeof body.patient !== 'object'){
+          return sendJSON(res, 400, { error: 'patient snapshot required' });
+        }
+        const style = body.style === 'compact' ? 'compact' : 'full';
+        const text = await polishPresentation(body.patient, style, body.seedScript || '');
+        return sendJSON(res, 200, { text });
+      }
+      if(pathname === '/api/ai/handover-summary'){
+        if(!Array.isArray(body.patients)){
+          return sendJSON(res, 400, { error: 'patients array required' });
+        }
+        const text = await handoverSummary(body.patients, body.wardNote || '');
+        return sendJSON(res, 200, { text });
+      }
+      return sendJSON(res, 404, { error: 'Unknown AI endpoint' });
+    }catch(err){
+      const status = err.statusCode || 502;
+      return sendJSON(res, status, { error: err.message || 'AI request failed' });
+    }
+  }
+
   if(pathname === '/api/import' && req.method === 'POST'){
     const body = await readBody(req) || {};
     const incoming = Array.isArray(body.patients) ? body.patients : null;
@@ -415,26 +462,17 @@ async function handleApi(req, res, pathname){
     const replace = body.mode === 'replace';
     const now = Date.now();
 
-    const upsert = db.prepare(`
-      INSERT INTO patients (id, updatedAt, deleted, data)
-      VALUES (?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET
-        updatedAt = excluded.updatedAt,
-        deleted   = excluded.deleted,
-        data      = excluded.data
-    `);
-
-    db.exec('BEGIN');
+    await store.begin();
     try{
-      if(replace) db.exec('DELETE FROM patients');
+      if(replace) await store.deleteAllPatients();
       for(const p of incoming){
         if(!p || typeof p.id !== 'string') continue;
         const updatedAt = Number(p.updatedAt) || now;
-        upsert.run(p.id, updatedAt, p.deleted ? 1 : 0, JSON.stringify(p));
+        await store.upsertPatient(p.id, updatedAt, p.deleted ? 1 : 0, JSON.stringify(p));
       }
-      db.exec('COMMIT');
+      await store.commit();
     }catch(err){
-      db.exec('ROLLBACK');
+      await store.rollback();
       throw err;
     }
     return sendJSON(res, 200, { count: incoming.length });
@@ -445,9 +483,8 @@ async function handleApi(req, res, pathname){
 
 /* ---------------- server ---------------- */
 
-const { config, generatedPassword, usingEnvPassword } = loadConfig();
-const db = initDb();
-autoBackupDb();
+let store = null;
+let config = null;
 
 const server = http.createServer(async (req, res)=>{
   try{
@@ -468,10 +505,6 @@ const server = http.createServer(async (req, res)=>{
   }
 });
 
-server.listen(PORT, HOST, ()=>{
-  printStartupBanner();
-});
-
 function getLanAddresses(){
   const out = [];
   const ifaces = os.networkInterfaces();
@@ -483,7 +516,7 @@ function getLanAddresses(){
   return out;
 }
 
-function printStartupBanner(){
+async function printStartupBanner({ generatedPassword, usingEnvPassword }){
   const lan = getLanAddresses();
   console.log('\n  ORTHO ROUNDS server is running');
   console.log('  ------------------------------------------');
@@ -492,7 +525,7 @@ function printStartupBanner(){
     console.log(`  On the network:    http://${ip}:${PORT}`);
   }
   console.log('  ------------------------------------------');
-  console.log(`  Database:  ${DB_PATH}`);
+  console.log(`  Storage:   ${store.kind === 'mongo' ? 'MongoDB' : 'SQLite'} — ${store.location}`);
   if(usingEnvPassword){
     console.log('  Password:  (from ORTHO_PASSWORD environment variable)');
   }else if(generatedPassword){
@@ -501,15 +534,48 @@ function printStartupBanner(){
     console.log('  >> Write it down. It is not shown again.');
     console.log('  >> (To set your own: ORTHO_PASSWORD="..." node server.js)');
   }else{
-    console.log('  Password:  (stored hash in data/config.json — delete it to reset)');
+    console.log('  Password:  (stored password hash — set ORTHO_PASSWORD to reset)');
+  }
+  if(store.freshStart && (await store.countPatients()) === 0){
+    console.warn('\n  !! No existing data was found — starting EMPTY.');
+    if(store.kind === 'mongo'){
+      console.warn('  !! (New MongoDB database. If you expected existing patients,');
+      console.warn('  !!  double-check MONGODB_URI points at the right cluster/db.)');
+    }else{
+      console.warn('  !! If this is a redeploy and you expected existing patients,');
+      console.warn('  !! the data directory is NOT on a persistent disk/volume.');
+      console.warn(`  !! Mount a persistent disk at: ${DATA_DIR}`);
+      console.warn('  !! (or set MONGODB_URI to use a managed database instead).');
+    }
   }
   console.log('\n  Press Ctrl+C to stop.\n');
 }
 
+async function main(){
+  store = await createStore({ dataDir: DATA_DIR, mongoUri: MONGODB_URI });
+  await store.init();
+  const setup = await setupConfig(store);
+  config = setup.config;
+  await store.autoBackup();
+  server.listen(PORT, HOST, ()=>{
+    printStartupBanner(setup).catch(err => console.warn('Banner error:', err.message));
+  });
+}
+
+let shuttingDown = false;
 function shutdown(){
-  try{ db.close(); }catch{ /* ignore */ }
-  server.close(()=> process.exit(0));
-  setTimeout(()=> process.exit(0), 500).unref();
+  if(shuttingDown) return;
+  shuttingDown = true;
+  const done = ()=> process.exit(0);
+  server.close(()=>{
+    Promise.resolve(store && store.close()).then(done, done);
+  });
+  setTimeout(done, 1000).unref();
 }
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
+
+main().catch(err =>{
+  console.error('Failed to start server:', err);
+  process.exit(1);
+});
