@@ -395,6 +395,10 @@ async function handleApi(req, res, pathname){
     res.writeHead(200, { 'Content-Type': img.contentType || 'application/octet-stream', 'Cache-Control': 'private, max-age=86400' });
     return res.end(img.buffer);
   }
+  if(imgMatch && req.method === 'DELETE'){
+    const ok = await store.deleteImage(imgMatch[1]);
+    return sendJSON(res, ok ? 200 : 404, { ok });
+  }
 
   if(pathname === '/api/export' && req.method === 'GET'){
     const rows = await store.getActive();

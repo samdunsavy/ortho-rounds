@@ -123,6 +123,16 @@ function createSqliteStore({ dataDir }){
       const ext = path.extname(filePath).toLowerCase();
       return { buffer: readFileSync(filePath), contentType: extToContentType(ext) };
     },
+    async deleteImage(name){
+      const filePath = path.join(IMAGES_DIR, name);
+      if(!filePath.startsWith(IMAGES_DIR) || !existsSync(filePath)) return false;
+      try{
+        unlinkSync(filePath);
+        return true;
+      }catch{
+        return false;
+      }
+    },
 
     // SQLite backup is the raw DB file; the server streams it directly.
     backupFilePath(){ return existsSync(DB_PATH) ? DB_PATH : null; },
@@ -234,6 +244,10 @@ async function createMongoStore({ mongoUri }){
       if(!d) return null;
       const raw = d.data && d.data.buffer ? d.data.buffer : d.data;
       return { buffer: Buffer.from(raw), contentType: d.contentType || 'image/jpeg' };
+    },
+    async deleteImage(name){
+      const res = await images.deleteOne({ _id: name });
+      return res.deletedCount > 0;
     },
 
     backupFilePath(){ return null; },

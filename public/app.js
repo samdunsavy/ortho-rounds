@@ -17,6 +17,7 @@ let editingPatientId = null; // null = adding new
 let modalWorkingData = null; // in-memory draft while add/edit modal is open
 let modalSuppressAutoTemplate = false; // user removed milestones — don't refill on save
 let pendingImageSlot = null;  // {type: 'preop'|'postop'|'followup'}
+let viewingImageContext = null; // { patientId, imgId }
 
 /* ---------------- storage / sync keys ---------------- */
 
@@ -2116,6 +2117,22 @@ async function uploadPatientImage(patientId, dataURL){
   }
 }
 
+function imageStorageName(img){
+  if(!img?.url) return null;
+  const m = String(img.url).match(/\/api\/images\/([a-f0-9]+\.(jpg|png|webp))$/i);
+  return m ? m[1] : null;
+}
+
+async function deletePatientImageFile(img){
+  const name = imageStorageName(img);
+  if(!name) return;
+  try{
+    await api('/api/images/' + encodeURIComponent(name), { method: 'DELETE' });
+  }catch(err){
+    console.warn('Could not delete image file:', err);
+  }
+}
+
 async function saveWardMeta(partial){
   wardMeta = Object.assign({}, wardMeta, partial, { updatedAt: Date.now() });
   if(wardMeta.presentedToday) wardMeta.presentedToday = normalizePresentedToday(wardMeta.presentedToday);
@@ -2471,6 +2488,11 @@ function bindEvents(){
   bindTemplateManagerEvents();
   bindSyncPanelEvents();
   document.getElementById('imgViewerClose').addEventListener('click', closeImgViewer);
+  document.getElementById('imgViewerDelete').addEventListener('click', (e)=>{
+    e.stopPropagation();
+    if(!viewingImageContext) return;
+    void removePatientImage(viewingImageContext.patientId, viewingImageContext.imgId);
+  });
   document.getElementById('imgViewer').addEventListener('click', (e)=>{ if(e.target.id==='imgViewer') closeImgViewer(); });
   document.getElementById('hiddenFileInput').addEventListener('change', handleImageFileSelected);
   document.getElementById('imgTypeCloseBtn').addEventListener('click', closeImageTypeModal);
@@ -3422,6 +3444,7 @@ function renderCardBody(p){
     <div class="xray-row">
       ${(p.images||[]).map(img=>`
         <div class="xray-thumb" data-action="view-img" data-id="${p.id}" data-imgid="${img.id}">
+          <button type="button" class="xray-del" data-action="delete-img" data-id="${p.id}" data-imgid="${img.id}" title="Delete X-ray" aria-label="Delete X-ray">&times;</button>
           <img src="${imageSrc(img)}">
           <div class="tag">${img.type.toUpperCase()}</div>
         </div>`).join('')}
@@ -3762,7 +3785,10 @@ function handleCardAction(action, id, el){
   }
   if(action==='view-img'){
     const img = p.images.find(i=>i.id===el.dataset.imgid);
-    if(img) openImgViewer(img);
+    if(img) openImgViewer(p.id, img);
+  }
+  if(action==='delete-img'){
+    void removePatientImage(p.id, el.dataset.imgid);
   }
 }
 
@@ -3843,12 +3869,58 @@ async function confirmImageType(type){
   }
 }
 
-function openImgViewer(img){
+function openImgViewer(patientId, img){
+  viewingImageContext = { patientId, imgId: img.id };
   document.getElementById('imgViewerImg').src = imageSrc(img);
   document.getElementById('imgViewerLabel').textContent = `${img.type.toUpperCase()} · ${fmtDate(img.date)}`;
   document.getElementById('imgViewer').classList.add('active');
 }
-function closeImgViewer(){ document.getElementById('imgViewer').classList.remove('active'); }
+function closeImgViewer(){
+  document.getElementById('imgViewer').classList.remove('active');
+  viewingImageContext = null;
+}
+
+async function removePatientImage(patientId, imgId){
+  const p = patients.find(x => x.id === patientId);
+  if(!p || !p.images) return;
+  const idx = p.images.findIndex(i => i.id === imgId);
+  if(idx < 0) return;
+  const removed = p.images[idx];
+  const ok = await showConfirm(
+    'Delete X-ray?',
+    `Remove this ${removed.type} X-ray from the patient record?`,
+    { confirmLabel: 'Delete', danger: true }
+  );
+  if(!ok) return;
+  const snapshot = { patientId, img: Object.assign({}, removed), index: idx };
+  p.images.splice(idx, 1);
+  if(viewingImageContext?.patientId === patientId && viewingImageContext?.imgId === imgId){
+    closeImgViewer();
+  }
+  try{
+    await savePatient(p);
+    void deletePatientImageFile(removed);
+    renderAll();
+    if(document.getElementById('presentationOverlay')?.classList.contains('active')){
+      renderPresentationSlide();
+    }
+    showToast('X-ray deleted', {
+      undo: async ()=>{
+        const target = patients.find(x => x.id === snapshot.patientId);
+        if(!target) return;
+        target.images = target.images || [];
+        if(target.images.some(i => i.id === snapshot.img.id)) return;
+        target.images.splice(Math.min(snapshot.index, target.images.length), 0, snapshot.img);
+        await persistAndRerender(target);
+        showToast('X-ray restored');
+      }
+    });
+  }catch(err){
+    p.images.splice(idx, 0, removed);
+    console.error(err);
+    showToast('Could not delete X-ray — ' + (err.message || 'error'));
+  }
+}
 
 /* ---------------- WORKLIST ---------------- */
 
@@ -5371,7 +5443,7 @@ function bindPresentationXrayClicks(container, p){
     btn.addEventListener('click', (e)=>{
       e.stopPropagation();
       const img = (p.images||[]).find(i=>i.id===btn.dataset.presImg);
-      if(img) openImgViewer(img);
+      if(img) openImgViewer(p.id, img);
     });
   });
 }
