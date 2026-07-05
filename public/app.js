@@ -159,7 +159,10 @@ async function reloadFromCache(){
     .map(r => { const o = Object.assign({}, r); delete o._dirty; return o; });
   const libRec = all.find(r => r && r.id === TEMPLATE_LIBRARY_ID);
   loadTemplateLibraryFromRecord(libRec);
-  patients.forEach(normalizePatientChecklists);
+  patients.forEach(p => {
+    normalizePatientChecklists(p);
+    normalizeAntibioticCourses(p);
+  });
 }
 
 // One-time migration: stamp old local-only records so they sync to the server.
@@ -746,10 +749,7 @@ function blankPatient(){
     complications: [],   // { type, date, note }
     notes: '',
     dischargeDate: '',
-    antibiotics: '',
-    antibioticsStart: '',
-    antibioticsDays: 0,
-    antibioticsStoppedDate: '',
+    antibioticCourses: [], // { id, name, start, days, stoppedDate }
     dvtProphylaxis: '',
     dvtStart: '',
     dvtDays: 0,
@@ -995,23 +995,65 @@ function parseTherapyDays(val){
   return n > 0 ? n : 0;
 }
 
-/** Antibiotic course: day count, duration, and reminder status. */
-function getAntibioticsCourse(p){
+function blankAntibioticCourse(p, overrides){
+  return Object.assign({
+    id: uid(),
+    name: '',
+    start: (p && p.surgeryDate) || '',
+    days: 0,
+    stoppedDate: ''
+  }, overrides || {});
+}
+
+/** Migrate legacy single-field antibiotics into antibioticCourses[]. */
+function normalizeAntibioticCourses(p){
+  if(!p) return;
+  if(Array.isArray(p.antibioticCourses)){
+    p.antibioticCourses.forEach(c => { if(!c.id) c.id = uid(); });
+    return;
+  }
   const name = (p.antibiotics || '').trim();
-  const duration = parseTherapyDays(p.antibioticsDays);
+  const days = parseTherapyDays(p.antibioticsDays);
+  if(name || days || p.antibioticsStart || p.antibioticsStoppedDate){
+    p.antibioticCourses = [{
+      id: uid(),
+      name,
+      start: p.antibioticsStart || '',
+      days,
+      stoppedDate: p.antibioticsStoppedDate || ''
+    }];
+  }else{
+    p.antibioticCourses = [];
+  }
+}
+
+function computeCourseDay(p, course){
+  const start = course.start || '';
+  if(start) return daysSince(start);
+  if(p.status === 'conservative' && p.admissionDate) return daysSince(p.admissionDate);
+  if(p.surgeryDate && (p.status === 'postop' || p.status === 'fordischarge')) return daysSince(p.surgeryDate);
+  return null;
+}
+
+/** Antibiotic course: day count, duration, and reminder status for one course. */
+function getAntibioticCourseStatus(course, p){
+  const name = (course.name || '').trim();
+  const duration = parseTherapyDays(course.days);
   if(!name && !duration) return null;
-  if(p.antibioticsStoppedDate){
+  if(course.stoppedDate){
     return {
+      courseId: course.id,
       status: 'stopped',
       name: name || 'Antibiotics',
-      label: `${name || 'Abx'} stopped · ${fmtDate(p.antibioticsStoppedDate)}`,
+      label: `${name || 'Abx'} stopped · ${fmtDate(course.stoppedDate)}`,
       flagType: 'good'
     };
   }
-  const day = computeTherapyDay(p, 'antibioticsStart');
+  const day = computeCourseDay(p, course);
   const drug = name || 'Antibiotics';
   if(day == null){
     return {
+      courseId: course.id,
       status: 'needs_start',
       name: drug,
       day: null,
@@ -1022,6 +1064,7 @@ function getAntibioticsCourse(p){
   }
   if(!duration){
     return {
+      courseId: course.id,
       status: 'active',
       name: drug,
       day,
@@ -1032,6 +1075,7 @@ function getAntibioticsCourse(p){
   }
   if(day > duration){
     return {
+      courseId: course.id,
       status: 'overdue',
       name: drug,
       day,
@@ -1042,6 +1086,7 @@ function getAntibioticsCourse(p){
   }
   if(day === duration){
     return {
+      courseId: course.id,
       status: 'last_day',
       name: drug,
       day,
@@ -1052,6 +1097,7 @@ function getAntibioticsCourse(p){
   }
   if(day === duration - 1){
     return {
+      courseId: course.id,
       status: 'ending_soon',
       name: drug,
       day,
@@ -1061,6 +1107,7 @@ function getAntibioticsCourse(p){
     };
   }
   return {
+    courseId: course.id,
     status: 'active',
     name: drug,
     day,
@@ -1068,6 +1115,17 @@ function getAntibioticsCourse(p){
     label: `${drug} day ${day}/${duration}`,
     flagType: 'good'
   };
+}
+
+function getAntibioticCourseStatuses(p){
+  normalizeAntibioticCourses(p);
+  return (p.antibioticCourses || [])
+    .map(c => getAntibioticCourseStatus(c, p))
+    .filter(Boolean);
+}
+
+function getActiveAntibioticCourseStatuses(p){
+  return getAntibioticCourseStatuses(p).filter(s => s.status !== 'stopped');
 }
 
 function getDvtCourse(p){
@@ -1089,19 +1147,24 @@ function getDvtCourse(p){
 
 function getTherapyBadges(p){
   const badges = [];
-  const abx = getAntibioticsCourse(p);
-  if(abx && abx.status !== 'stopped') badges.push({ label: abx.label, type: abx.flagType === 'bad' ? 'bad' : abx.flagType === 'good' ? 'good' : 'warn' });
+  getActiveAntibioticCourseStatuses(p).forEach(abx => {
+    badges.push({ label: abx.label, type: abx.flagType === 'bad' ? 'bad' : abx.flagType === 'good' ? 'good' : 'warn' });
+  });
   const dvt = getDvtCourse(p);
   if(dvt) badges.push({ label: dvt.label, type: dvt.flagType === 'bad' ? 'bad' : dvt.flagType === 'good' ? 'good' : 'warn' });
   return badges;
 }
 
-async function markAntibioticsStopped(p){
-  p.antibioticsStoppedDate = todayISO();
+async function markAntibioticStopped(p, courseId){
+  normalizeAntibioticCourses(p);
+  const course = (p.antibioticCourses || []).find(c => c.id === courseId);
+  if(!course) return;
+  const label = (course.name || 'Antibiotics').trim();
+  course.stoppedDate = todayISO();
   await persistAndRerender(p);
-  showToast('Antibiotics marked stopped', {
+  showToast(`${label || 'Antibiotic'} marked stopped`, {
     undo: async ()=>{
-      p.antibioticsStoppedDate = '';
+      course.stoppedDate = '';
       await persistAndRerender(p);
     }
   });
@@ -2124,16 +2187,16 @@ function collectWorklistData(){
         labAbnormalItems.push({ p, text: `${key.toUpperCase()} ${val}`, kind: 'lab', labKey: key, labVal: val });
       }
     }
-    const abx = getAntibioticsCourse(p);
-    if(abx){
+    getActiveAntibioticCourseStatuses(p).forEach(abx => {
+      const item = { p, text: abx.label, kind: 'abx', abxCourseId: abx.courseId };
       if(abx.status === 'last_day'){
-        abxLastDayItems.push({ p, text: abx.label, kind: 'abx', abxAction: 'stop' });
+        abxLastDayItems.push(Object.assign(item, { abxAction: 'stop' }));
       }else if(abx.status === 'overdue'){
-        abxOverdueItems.push({ p, text: abx.label, kind: 'abx', abxAction: 'stop' });
+        abxOverdueItems.push(Object.assign(item, { abxAction: 'stop' }));
       }else if(abx.status === 'ending_soon'){
-        abxEndingSoonItems.push({ p, text: abx.label, kind: 'abx' });
+        abxEndingSoonItems.push(item);
       }
-    }
+    });
   });
 
   const byWard = (a,b)=> (a.p.bed||'').localeCompare(b.p.bed||'', undefined, {numeric:true});
@@ -2402,10 +2465,10 @@ function renderCardQuickBar(p){
 }
 
 function renderAbxQuickChip(p){
-  const abx = getAntibioticsCourse(p);
-  if(!abx || abx.status === 'stopped') return '';
-  const urgent = abx.status === 'last_day' || abx.status === 'overdue';
-  return `<button type="button" class="card-abx-chip ${urgent?'urgent':''}" data-action="mark-abx-stopped" data-id="${p.id}" title="Tap when antibiotics stopped">${escapeHTML(abx.label)}</button>`;
+  return getActiveAntibioticCourseStatuses(p).map(abx => {
+    const urgent = abx.status === 'last_day' || abx.status === 'overdue';
+    return `<button type="button" class="card-abx-chip ${urgent?'urgent':''}" data-action="mark-abx-stopped" data-id="${p.id}" data-abx-id="${escapeHTML(abx.courseId)}" title="Tap when antibiotic stopped">${escapeHTML(abx.label)}</button>`;
+  }).join('');
 }
 
 function renderCard(p){
@@ -2689,7 +2752,7 @@ function handleCardAction(action, id, el){
     return;
   }
   if(action==='mark-abx-stopped'){
-    void markAntibioticsStopped(p);
+    void markAntibioticStopped(p, el.dataset.abxId);
     return;
   }
   if(action==='bulk-toggle'){
@@ -2973,7 +3036,7 @@ function renderWorklist(){
         const doneBtn = (it.kind === 'postop' && it.checkId)
           ? `<button type="button" class="btn primary work-done-btn pressable" data-work-done="${escapeHTML(it.p.id)}" data-check-id="${escapeHTML(it.checkId)}">Done</button>`
           : (it.kind === 'abx' && it.abxAction === 'stop')
-          ? `<button type="button" class="btn primary work-abx-stop pressable" data-abx-stop="${escapeHTML(it.p.id)}">Stopped</button>`
+          ? `<button type="button" class="btn primary work-abx-stop pressable" data-abx-stop="${escapeHTML(it.p.id)}" data-abx-course-id="${escapeHTML(it.abxCourseId || '')}">Stopped</button>`
           : '';
         const labEdit = (it.kind === 'lab')
           ? `<input type="text" class="work-lab-input ${labValueClass(it.labKey, it.labVal)}" data-lab-edit="${escapeHTML(it.p.id)}" data-lab-key="${escapeHTML(it.labKey)}" value="${escapeHTML(it.labVal||'')}" inputmode="decimal">`
@@ -3050,7 +3113,7 @@ function renderWorklist(){
     btn.addEventListener('click', async (e)=>{
       e.stopPropagation();
       const p = patients.find(x => x.id === btn.dataset.abxStop);
-      if(p) await markAntibioticsStopped(p);
+      if(p) await markAntibioticStopped(p, btn.dataset.abxCourseId);
     });
   });
 
@@ -3146,6 +3209,7 @@ function openPatientModal(p){
   editingPatientId = p ? p.id : null;
   modalWorkingData = p ? JSON.parse(JSON.stringify(p)) : blankPatient();
   modalSuppressAutoTemplate = false;
+  normalizeAntibioticCourses(modalWorkingData);
   if(!p){
     const ini = getPgInitials();
     if(ini && !modalWorkingData.assignedPg) modalWorkingData.assignedPg = ini;
@@ -3265,19 +3329,11 @@ function renderModalForm(d){
       <div><label>Handover pin</label><input id="f_handoverPin" value="${escapeHTML(d.handoverPin||'')}" placeholder="One-line for shift handover"></div>
     </div>
 
-    <div class="form-row two">
-      <div><label>Antibiotics</label><input id="f_antibiotics" value="${escapeHTML(d.antibiotics||'')}" placeholder="e.g. Cefazolin"></div>
-      <div><label>Abx start date</label><input id="f_antibioticsStart" type="date" value="${d.antibioticsStart||d.surgeryDate||''}"></div>
-    </div>
     <div class="form-row">
-      <label>Antibiotic course length</label>
-      <div class="abx-days-row">
-        <button type="button" class="btn abx-day-preset abx-day-clear ${!parseTherapyDays(d.antibioticsDays)?'active':''}" data-abx-days="0">None</button>
-        ${[3,5,7].map(n=>`<button type="button" class="btn abx-day-preset ${parseTherapyDays(d.antibioticsDays)===n?'active':''}" data-abx-days="${n}">${n} days</button>`).join('')}
-        <input id="f_antibioticsDays" type="number" min="0" max="30" placeholder="Custom days" value="${[3,5,7].includes(parseTherapyDays(d.antibioticsDays))?'' : (parseTherapyDays(d.antibioticsDays)||'')}" style="width:88px;">
-      </div>
-      <div id="abxCoursePreview" class="form-hint"></div>
-      ${d.antibioticsStoppedDate ? `<div class="form-hint">Stopped ${fmtDate(d.antibioticsStoppedDate)} — change drug/days to restart course.</div>` : ''}
+      <label>Antibiotics</label>
+      <div id="antibioticList"></div>
+      <button type="button" class="btn" id="addAntibioticBtn" style="margin-top:8px;">+ Add antibiotic</button>
+      <div class="form-hint">Each course tracks its own start date, duration, and stop reminders.</div>
     </div>
     <div class="form-row two">
       <div><label>DVT prophylaxis</label><input id="f_dvtProphylaxis" value="${escapeHTML(d.dvtProphylaxis||'')}" placeholder="e.g. LMWH"></div>
@@ -3461,29 +3517,152 @@ function renderPlanStatus(){
   }
 }
 
-function updateAbxCoursePreview(){
-  const el = document.getElementById('abxCoursePreview');
-  if(!el) return;
-  const draft = {
-    antibiotics: document.getElementById('f_antibiotics')?.value.trim() || '',
-    antibioticsStart: document.getElementById('f_antibioticsStart')?.value || '',
-    antibioticsDays: parseTherapyDays(document.getElementById('f_antibioticsDays')?.value)
-      || parseTherapyDays(document.querySelector('.abx-day-preset.active:not(.dvt-day-preset)')?.dataset.abxDays),
-    antibioticsStoppedDate: '',
-    surgeryDate: document.getElementById('f_surgeryDate')?.value || '',
-    status: document.getElementById('f_status')?.value || 'preop'
-  };
-  const c = getAntibioticsCourse(draft);
-  el.textContent = c ? c.label : 'Set drug name, start date, and course length for reminders.';
+function renderAntibioticCourseRow(course, p){
+  const days = parseTherapyDays(course.days);
+  const presetDays = [3, 5, 7];
+  const customDays = presetDays.includes(days) ? '' : (days || '');
+  const status = getAntibioticCourseStatus(course, p);
+  return `
+    <div class="abx-course-row" data-abx-id="${escapeHTML(course.id)}">
+      <div class="form-row two" style="margin-bottom:8px;">
+        <div><label>Drug</label><input class="abx-name" value="${escapeHTML(course.name||'')}" placeholder="e.g. Cefazolin"></div>
+        <div><label>Start date</label><input class="abx-start" type="date" value="${course.start||p.surgeryDate||''}"></div>
+      </div>
+      <div class="form-row" style="margin-bottom:8px;">
+        <label>Course length</label>
+        <div class="abx-days-row">
+          <button type="button" class="btn abx-day-preset abx-day-clear ${!days?'active':''}" data-abx-days="0">None</button>
+          ${presetDays.map(n=>`<button type="button" class="btn abx-day-preset ${days===n?'active':''}" data-abx-days="${n}">${n} days</button>`).join('')}
+          <input class="abx-days-custom" type="number" min="0" max="30" placeholder="Custom days" value="${customDays}" style="width:88px;">
+        </div>
+        <div class="abx-preview form-hint">${status ? escapeHTML(status.label) : 'Set drug name, start date, and course length for reminders.'}</div>
+        ${course.stoppedDate ? `<div class="form-hint">Stopped ${fmtDate(course.stoppedDate)} — change drug/days to restart course.</div>` : ''}
+      </div>
+      <div style="display:flex;justify-content:flex-end;margin-bottom:12px;">
+        <button type="button" class="btn danger abx-remove-btn" style="padding:4px 10px;">Remove</button>
+      </div>
+    </div>`;
 }
 
-function clearAbxDaySelection(){
-  document.querySelectorAll('.abx-day-preset:not(.dvt-day-preset)').forEach(b=> b.classList.remove('active'));
-  const none = document.querySelector('.abx-day-clear');
+function renderAntibioticList(){
+  const el = document.getElementById('antibioticList');
+  if(!el) return;
+  const d = getWorkingData();
+  normalizeAntibioticCourses(d);
+  const courses = d.antibioticCourses || [];
+  el.innerHTML = courses.length
+    ? courses.map(c => renderAntibioticCourseRow(c, d)).join('')
+    : '<div class="small-muted">No antibiotics added</div>';
+  bindAntibioticListEvents();
+}
+
+function updateAntibioticRowPreview(row){
+  if(!row) return;
+  const preview = row.querySelector('.abx-preview');
+  if(!preview) return;
+  const d = getWorkingData();
+  const course = readAntibioticCourseFromRow(row, d);
+  const draft = Object.assign({}, course, { stoppedDate: '' });
+  const status = getAntibioticCourseStatus(draft, d);
+  preview.textContent = status ? status.label : 'Set drug name, start date, and course length for reminders.';
+}
+
+function readAntibioticCourseFromRow(row, d){
+  const id = row.dataset.abxId;
+  const prev = (d.antibioticCourses || []).find(c => c.id === id) || {};
+  const customDays = parseTherapyDays(row.querySelector('.abx-days-custom')?.value);
+  const activePreset = row.querySelector('.abx-day-preset.active');
+  const days = customDays || parseTherapyDays(activePreset?.dataset.abxDays);
+  return {
+    id,
+    name: row.querySelector('.abx-name')?.value.trim() || '',
+    start: row.querySelector('.abx-start')?.value || '',
+    days,
+    stoppedDate: prev.stoppedDate || ''
+  };
+}
+
+function flushAntibioticCoursesFromModal(d){
+  const rows = document.querySelectorAll('.abx-course-row');
+  const prev = d.antibioticCourses || [];
+  const courses = [];
+  rows.forEach(row => {
+    const course = readAntibioticCourseFromRow(row, d);
+    if(!course.name && !course.days && !course.start) return;
+    const prevCourse = prev.find(c => c.id === course.id);
+    if(prevCourse && (prevCourse.name !== course.name || prevCourse.start !== course.start || prevCourse.days !== course.days)){
+      course.stoppedDate = '';
+    }
+    courses.push(course);
+  });
+  d.antibioticCourses = courses;
+}
+
+function clearAbxDaySelectionForRow(row){
+  row.querySelectorAll('.abx-day-preset').forEach(b => b.classList.remove('active'));
+  const none = row.querySelector('.abx-day-clear');
   if(none) none.classList.add('active');
-  const inp = document.getElementById('f_antibioticsDays');
+  const inp = row.querySelector('.abx-days-custom');
   if(inp) inp.value = '';
-  updateAbxCoursePreview();
+  updateAntibioticRowPreview(row);
+}
+
+function bindAntibioticListEvents(){
+  const list = document.getElementById('antibioticList');
+  if(!list) return;
+
+  list.querySelectorAll('.abx-day-preset').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const row = btn.closest('.abx-course-row');
+      if(!row) return;
+      const days = parseTherapyDays(btn.dataset.abxDays);
+      if(days === 0 || btn.classList.contains('active')){
+        clearAbxDaySelectionForRow(row);
+        return;
+      }
+      row.querySelectorAll('.abx-day-preset').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const inp = row.querySelector('.abx-days-custom');
+      if(inp) inp.value = '';
+      updateAntibioticRowPreview(row);
+    });
+  });
+
+  list.querySelectorAll('.abx-days-custom').forEach(inp=>{
+    inp.addEventListener('input', ()=>{
+      const row = inp.closest('.abx-course-row');
+      if(!row) return;
+      if(!inp.value.trim()){
+        clearAbxDaySelectionForRow(row);
+        return;
+      }
+      row.querySelectorAll('.abx-day-preset').forEach(b => b.classList.remove('active'));
+      updateAntibioticRowPreview(row);
+    });
+  });
+
+  list.querySelectorAll('.abx-name, .abx-start').forEach(inp=>{
+    inp.addEventListener('input', ()=>{
+      const row = inp.closest('.abx-course-row');
+      if(row) updateAntibioticRowPreview(row);
+    });
+    inp.addEventListener('change', ()=>{
+      const row = inp.closest('.abx-course-row');
+      if(row) updateAntibioticRowPreview(row);
+    });
+  });
+
+  list.querySelectorAll('.abx-remove-btn').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const row = btn.closest('.abx-course-row');
+      if(!row) return;
+      const d = getWorkingData();
+      const id = row.dataset.abxId;
+      d.antibioticCourses = (d.antibioticCourses || []).filter(c => c.id !== id);
+      setWorkingData(d);
+      renderAntibioticList();
+    });
+  });
 }
 
 function clearDvtDaySelection(){
@@ -3500,28 +3679,21 @@ function bindModalDynamicLists(){
   renderPostOpList();
   renderDischargeList();
   renderComplicationList();
+  renderAntibioticList();
   renderPlanStatus();
-  updateAbxCoursePreview();
   document.getElementById('f_dailyPlan').addEventListener('input', renderPlanStatus);
 
-  document.querySelectorAll('.abx-day-preset:not(.dvt-day-preset)').forEach(btn=>{
-    btn.addEventListener('click', ()=>{
-      const days = parseTherapyDays(btn.dataset.abxDays);
-      if(days === 0){
-        clearAbxDaySelection();
-        return;
-      }
-      if(btn.classList.contains('active')){
-        clearAbxDaySelection();
-        return;
-      }
-      document.querySelectorAll('.abx-day-preset:not(.dvt-day-preset)').forEach(b=> b.classList.remove('active'));
-      btn.classList.add('active');
-      const inp = document.getElementById('f_antibioticsDays');
-      if(inp) inp.value = '';
-      updateAbxCoursePreview();
+  const addAbxBtn = document.getElementById('addAntibioticBtn');
+  if(addAbxBtn){
+    addAbxBtn.addEventListener('click', ()=>{
+      const d = getWorkingData();
+      d.antibioticCourses = d.antibioticCourses || [];
+      d.antibioticCourses.push(blankAntibioticCourse(d));
+      setWorkingData(d);
+      renderAntibioticList();
     });
-  });
+  }
+
   document.querySelectorAll('.dvt-day-preset').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       const days = parseTherapyDays(btn.dataset.dvtDays);
@@ -3539,18 +3711,6 @@ function bindModalDynamicLists(){
       if(inp) inp.value = '';
     });
   });
-  const abxDaysInp = document.getElementById('f_antibioticsDays');
-  if(abxDaysInp){
-    abxDaysInp.addEventListener('input', ()=>{
-      const v = abxDaysInp.value.trim();
-      if(!v){
-        clearAbxDaySelection();
-        return;
-      }
-      document.querySelectorAll('.abx-day-preset:not(.dvt-day-preset)').forEach(b=> b.classList.remove('active'));
-      updateAbxCoursePreview();
-    });
-  }
   const dvtDaysInp = document.getElementById('f_dvtDays');
   if(dvtDaysInp){
     dvtDaysInp.addEventListener('input', ()=>{
@@ -3562,11 +3722,16 @@ function bindModalDynamicLists(){
       document.querySelectorAll('.dvt-day-preset').forEach(b=> b.classList.remove('active'));
     });
   }
-  ['f_antibiotics','f_antibioticsStart','f_surgeryDate'].forEach(id=>{
-    const node = document.getElementById(id);
-    if(node) node.addEventListener('change', updateAbxCoursePreview);
-    if(node) node.addEventListener('input', updateAbxCoursePreview);
-  });
+  const surgeryDateEl = document.getElementById('f_surgeryDate');
+  if(surgeryDateEl){
+    surgeryDateEl.addEventListener('change', ()=>{
+      document.querySelectorAll('.abx-course-row .abx-start').forEach(inp=>{
+        if(!inp.value) inp.value = surgeryDateEl.value;
+      });
+      document.querySelectorAll('.abx-course-row').forEach(row => updateAntibioticRowPreview(row));
+      updateTemplateApplyPreview();
+    });
+  }
 
   document.getElementById('f_status').addEventListener('change', (e)=>{
     const d = getWorkingData();
@@ -3588,8 +3753,6 @@ function bindModalDynamicLists(){
   });
 
   document.getElementById('pathwayTemplatePicker').addEventListener('change', updateTemplateApplyPreview);
-  const surgeryDateEl = document.getElementById('f_surgeryDate');
-  if(surgeryDateEl) surgeryDateEl.addEventListener('change', updateTemplateApplyPreview);
 
   document.getElementById('insertPlanFromTemplateBtn').addEventListener('click', ()=>{
     const id = document.getElementById('pathwayTemplatePicker').value;
@@ -3973,23 +4136,13 @@ async function savePatientFromModal(){
     d.surgeryDate = document.getElementById('f_surgeryDate').value;
     d.theatreTime = document.getElementById('f_theatreTime')?.value.trim() || '';
     d.handoverPin = document.getElementById('f_handoverPin')?.value.trim() || '';
-    d.antibiotics = document.getElementById('f_antibiotics')?.value.trim() || '';
-    d.antibioticsStart = document.getElementById('f_antibioticsStart')?.value || '';
-    const prevAbx = { name: d.antibiotics, start: d.antibioticsStart, days: d.antibioticsDays, stopped: d.antibioticsStoppedDate };
-    d.antibioticsDays = parseTherapyDays(document.getElementById('f_antibioticsDays')?.value);
-    if(!d.antibioticsDays){
-      const activePreset = document.querySelector('.abx-day-preset.active:not(.dvt-day-preset)');
-      if(activePreset) d.antibioticsDays = parseTherapyDays(activePreset.dataset.abxDays);
-    }
+    flushAntibioticCoursesFromModal(d);
     d.dvtProphylaxis = document.getElementById('f_dvtProphylaxis')?.value.trim() || '';
     d.dvtStart = document.getElementById('f_dvtStart')?.value || '';
     d.dvtDays = parseTherapyDays(document.getElementById('f_dvtDays')?.value);
     if(!d.dvtDays){
       const activeDvt = document.querySelector('.dvt-day-preset.active');
       if(activeDvt) d.dvtDays = parseTherapyDays(activeDvt.dataset.dvtDays);
-    }
-    if(d.antibiotics !== prevAbx.name || d.antibioticsStart !== prevAbx.start || d.antibioticsDays !== prevAbx.days){
-      d.antibioticsStoppedDate = '';
     }
     d.labs = {
       hb: document.getElementById('f_lab_hb')?.value.trim() || '',
@@ -4031,6 +4184,7 @@ async function savePatientFromModal(){
     if(!d.name){ showToast('Please enter patient name'); return; }
 
     normalizePatientChecklists(d);
+    normalizeAntibioticCourses(d);
     await savePatient(d);
 
     if(isNew){
