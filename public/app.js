@@ -355,7 +355,7 @@ function setAiButtonBusy(btn, busy){
 
 function buildPatientAiSnapshot(p){
   const dayInfo = getClinicalDayInfo(p);
-  const abx = getAntibioticsCourse(p);
+  const abxStatuses = getActiveAntibioticCourseStatuses(p);
   const yPlan = getYesterdayPlan(p);
   const history = (p.planHistory || []).slice(-2).map(h => ({ date: h.date, text: h.text }));
   const dvtName = (p.dvtProphylaxis || '').trim();
@@ -389,7 +389,7 @@ function buildPatientAiSnapshot(p){
     milestonesOverdue: getOverduePostOpChecks(p).slice(0, 4).map(c => c.label),
     milestonesDue: getDuePostOpChecks(p).slice(0, 4).map(c => c.label),
     therapy: getTherapyBadges(p).map(b => b.label),
-    antibioticsDay: abx && abx.status !== 'stopped' ? abx.label : null,
+    antibioticsDay: abxStatuses.length ? abxStatuses.map(s => s.label).join('; ') : null,
     handoverPin: (p.handoverPin || '').trim() || null,
     handoverNote: (p.handoverNote || '').trim() || null,
     complications: (p.complications || []).map(c => c.type + (c.note ? ': ' + c.note : '')),
@@ -2980,8 +2980,7 @@ function scorePatientForStartHere(p){
   let score = 0;
   const reasons = [];
 
-  const abx = getAntibioticsCourse(p);
-  if(abx){
+  for(const abx of getActiveAntibioticCourseStatuses(p)){
     if(abx.status === 'overdue'){
       score = Math.max(score, 100);
       reasons.push({ score: 100, text: 'Antibiotics stop overdue' });
