@@ -3,12 +3,14 @@
    arrive when online), falling back to cache when offline.
    API calls (/api/) always go to the network and are never cached. */
 
-const CACHE = 'ortho-rounds-v30';
+const CACHE = 'ortho-rounds-v32';
 const SHELL = ['./', 'index.html', 'milestones.js', 'app.js', 'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-maskable.svg'];
 
 self.addEventListener('install', (event)=>{
   event.waitUntil(
-    caches.open(CACHE).then(c => c.addAll(SHELL)).then(()=> self.skipWaiting())
+    caches.open(CACHE).then(c =>
+      Promise.allSettled(SHELL.map(url => c.add(url)))
+    ).then(()=> self.skipWaiting())
   );
 });
 
@@ -19,6 +21,17 @@ self.addEventListener('activate', (event)=>{
     ).then(()=> self.clients.claim())
   );
 });
+
+async function offlineFallback(req){
+  const hit = await caches.match(req);
+  if(hit) return hit;
+  if(req.mode === 'navigate'){
+    return (await caches.match('./'))
+      || (await caches.match('/index.html'))
+      || (await caches.match('index.html'));
+  }
+  return hit;
+}
 
 self.addEventListener('fetch', (event)=>{
   const req = event.request;
@@ -40,6 +53,6 @@ self.addEventListener('fetch', (event)=>{
         }
         return res;
       })
-      .catch(()=> caches.match(req).then(hit => hit || caches.match('index.html')))
+      .catch(()=> offlineFallback(req))
   );
 });

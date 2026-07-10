@@ -45,6 +45,7 @@ const LS_TIP_PRESENT = "ortho_tipPresent";
 const LS_TIP_AI_DRAFT = "ortho_tipAiDraft";
 const LS_TIP_VOICE_PLAN = "ortho_tipVoicePlan";
 const LS_TIP_START_HERE = "ortho_tipStartHere";
+const LS_STORAGE_NOTICE = "ortho_storageNoticeDismissed";
 const START_HERE_LIMIT = 3;
 const START_HERE_MIN_SCORE = 30;
 const BULK_DRAFT_MAX = 20;
@@ -129,6 +130,7 @@ function cacheGet(id){
 }
 
 function cachePutRaw(rec){
+  if(!idb) return Promise.resolve();
   const tx = idb.transaction("patients","readwrite");
   tx.objectStore("patients").put(rec);
   return new Promise((resolve, reject)=>{
@@ -139,6 +141,7 @@ function cachePutRaw(rec){
 }
 
 function clearCache(){
+  if(!idb) return Promise.resolve();
   const tx = idb.transaction("patients","readwrite");
   tx.objectStore("patients").clear();
   return new Promise((resolve, reject)=>{
@@ -813,10 +816,23 @@ function setSyncStatus(state){
   chip.classList.remove('online','syncing','offline');
   chip.classList.add(state);
   if(state === 'online'){
-    lastSyncSuccessAt = Date.now();
-    localStorage.setItem(LS_LAST_SYNC_OK, String(lastSyncSuccessAt));
+    void getDirtyRecordCount().then(dirty => {
+      if(dirty === 0){
+        lastSyncSuccessAt = Date.now();
+        localStorage.setItem(LS_LAST_SYNC_OK, String(lastSyncSuccessAt));
+      }
+      refreshSyncChipLabel();
+    });
+    return;
   }
   refreshSyncChipLabel();
+}
+
+function backgroundSync(opts){
+  syncNow(opts || {}).catch(err => {
+    if(err && err.message !== 'unauthorized') console.warn('Sync failed:', err.message);
+    refreshSyncChipLabel().catch(()=>{});
+  });
 }
 
 function scheduleSyncChipRefresh(){
@@ -826,7 +842,7 @@ function scheduleSyncChipRefresh(){
 function scheduleSync(){
   if(!hasToken()) return;
   if(syncing){ syncQueued = true; return; }
-  syncNow({});
+  backgroundSync();
 }
 
 async function waitForSync(opts){
@@ -879,13 +895,19 @@ async function mergeServerRecords(serverRecords){
       await cachePutRaw(rec);
     }
   }
-  if(pendingSyncConflicts.length){
-    const first = pendingSyncConflicts.shift();
-    showToast('Updated on another device — tap to compare', {
-      duration: 8000,
-      onClick: ()=> showConflictCompare(first.patientId, first.conflict)
-    });
-  }
+  notifyNextSyncConflict();
+}
+
+function notifyNextSyncConflict(){
+  if(!pendingSyncConflicts.length) return;
+  const total = pendingSyncConflicts.length;
+  const next = pendingSyncConflicts.shift();
+  showToast(total > 1
+    ? `${total} updates on another device — tap to review`
+    : 'Updated on another device — tap to compare', {
+    duration: 8000,
+    onClick: ()=> showConflictCompare(next.patientId, next.conflict)
+  });
 }
 
 // Drop local cache rows that no longer exist on the server (unless still dirty).
@@ -943,21 +965,15 @@ async function syncNow(opts){
     const changes = dirty.map(stripClientFields);
 
     const res = await api('/api/sync', { method:'POST', body: JSON.stringify({ since, changes }) });
-
-    for(const d of dirty){
-      const cur = await cacheGet(d.id);
-      if(cur && cur._dirty && cur.updatedAt === d.updatedAt){
-        cur._dirty = false;
-        await cachePutRaw(cur);
-      }
-    }
+    const uploadedIds = new Set(dirty.map(d => d.id));
 
     await mergeServerRecords(res.patients || []);
-    // Apply server updatedAt to records we just pushed (server re-stamps on accept).
+    // Clear dirty only after server merge confirms acceptance (server re-stamps updatedAt).
     for(const rec of res.patients || []){
       if(!rec || !rec.id) continue;
       const local = await cacheGet(rec.id);
-      if(local && local._dirty && rec.updatedAt >= (local.updatedAt || 0)){
+      if(!local || !local._dirty) continue;
+      if(uploadedIds.has(rec.id) || rec.updatedAt >= (local.updatedAt || 0)){
         local.updatedAt = rec.updatedAt;
         local._dirty = false;
         await cachePutRaw(local);
@@ -985,7 +1001,7 @@ async function syncNow(opts){
       syncQueued = false;
       const fullReconcile = syncQueuedFullReconcile;
       syncQueuedFullReconcile = false;
-      setTimeout(()=> syncNow({ fullReconcile }), 60);
+      setTimeout(()=> backgroundSync({ fullReconcile }), 60);
     }
   }
 }
@@ -1161,6 +1177,7 @@ function closeAppDialog(value){
 
 function showAppDialog(opts){
   opts = opts || {};
+  if(appDialogResolver) closeAppDialog(false);
   return new Promise(resolve => {
     appDialogResolver = resolve;
     const overlay = document.getElementById('appDialogModal');
@@ -1860,7 +1877,10 @@ function showConflictCompare(patientId, conflict){
       { label: 'Use other', value: 'remote', primary: true }
     ]
   }).then(choice => {
-    if(!choice || choice.action === 'cancel') return;
+    if(!choice || choice.action === 'cancel'){
+      notifyNextSyncConflict();
+      return;
+    }
     if(choice.action === 'remote'){
       if(conflict.field === 'dailyPlan'){
         localP.dailyPlan = conflict.remote;
@@ -1869,10 +1889,13 @@ function showConflictCompare(patientId, conflict){
         localP.status = conflict.remote;
         localP.statusUpdatedAt = Date.now();
       }
-      void persistAndRerender(localP);
+      void persistAndRerender(localP).then(()=> notifyNextSyncConflict());
     }else if(choice.action === 'local'){
       localP.updatedAt = Date.now();
-      void persistAndRerender(localP).then(()=> showToast('Kept your version — will sync'));
+      void persistAndRerender(localP).then(()=>{
+        showToast('Kept your version — will sync');
+        notifyNextSyncConflict();
+      });
     }
   });
 }
@@ -2153,6 +2176,13 @@ async function markPresented(id){
   await saveWardMeta({ presentedToday: pt });
 }
 
+function safeMarkPresented(id){
+  return markPresented(id).catch(err => {
+    console.warn('Could not mark presented:', err);
+    showToast('Could not save presented state');
+  });
+}
+
 function isPresented(id){
   return getPresentedState().has(id);
 }
@@ -2332,15 +2362,19 @@ async function init(){
     renderAll();
   }
 
-  setInterval(()=>{ if(hasToken() && navigator.onLine) syncNow({}); }, 20000);
+  setInterval(()=>{ if(hasToken() && navigator.onLine) backgroundSync(); }, 20000);
   setInterval(()=>{ refreshSyncChipLabel(); }, 30000);
-  window.addEventListener('online', ()=>{ refreshAiStatus(); if(hasToken()) syncNow({}); });
-  window.addEventListener('focus', ()=>{ if(hasToken()) syncNow({}); });
+  window.addEventListener('online', ()=>{ refreshAiStatus(); if(hasToken()) backgroundSync(); });
+  window.addEventListener('focus', ()=>{ if(hasToken()) backgroundSync(); });
 }
 
 function updateStorageNotice(){
   const el = document.getElementById('storageNotice');
   if(!el) return;
+  if(localStorage.getItem(LS_STORAGE_NOTICE)){
+    el.style.display = 'none';
+    return;
+  }
   const txt = el.querySelector('.storage-notice-text');
   el.style.display = 'flex';
   el.classList.remove('warn');
@@ -2482,6 +2516,7 @@ function bindEvents(){
   });
   bindPresentationSwipe();
   document.getElementById('storageNoticeDismiss').addEventListener('click', ()=>{
+    localStorage.setItem(LS_STORAGE_NOTICE, '1');
     document.getElementById('storageNotice').style.display = 'none';
   });
   document.getElementById('hiddenImportInput').addEventListener('change', importData);
@@ -2503,6 +2538,59 @@ function bindEvents(){
   bindBottomNav();
   populateFilterSheet();
   applyDarkMode();
+  bindGlobalEscapeKey();
+}
+
+function closeTopmostOverlay(){
+  if(document.getElementById('appDialogModal')?.classList.contains('active')){
+    closeAppDialog(false);
+    return true;
+  }
+  if(document.getElementById('presentationOverlay')?.classList.contains('active')){
+    closePresentationMode();
+    return true;
+  }
+  if(document.getElementById('imgViewer')?.classList.contains('active')){
+    closeImgViewer();
+    return true;
+  }
+  if(document.getElementById('bulkDraftModal')?.classList.contains('active')){
+    closeBulkDraftModal();
+    return true;
+  }
+  if(document.getElementById('templateManagerModal')?.classList.contains('active')){
+    closeTemplateManager();
+    return true;
+  }
+  if(document.getElementById('imgTypeModal')?.classList.contains('active')){
+    closeImageTypeModal();
+    return true;
+  }
+  if(document.getElementById('patientModal')?.classList.contains('active')){
+    void closePatientModal();
+    return true;
+  }
+  for(const id of ['filterSheetOverlay', 'moreSheetOverlay']){
+    if(document.getElementById(id)?.classList.contains('active')){
+      closeSheet(id);
+      return true;
+    }
+  }
+  const panel = document.getElementById('syncPanel');
+  if(panel?.classList.contains('open')){
+    panel.classList.remove('open');
+    return true;
+  }
+  return false;
+}
+
+function bindGlobalEscapeKey(){
+  if(window._escapeKeyBound) return;
+  window._escapeKeyBound = true;
+  document.addEventListener('keydown', (e)=>{
+    if(e.key !== 'Escape') return;
+    if(closeTopmostOverlay()) e.preventDefault();
+  });
 }
 
 function switchView(name){
@@ -2562,6 +2650,10 @@ function getSummaryCounts(){
 }
 
 function applyFilter(filter){
+  if(filter === 'mine' && !getPgInitials()){
+    showToast('Set your PG initials in More → first', { duration: 5000 });
+    return;
+  }
   currentFilter = filter;
   localStorage.setItem(LS_FILTER, currentFilter);
   document.querySelectorAll('.filter-chip').forEach(c=>{
@@ -3615,19 +3707,22 @@ function handleCardAction(action, id, el){
   if(action==='edit') return openPatientModal(p);
   if(action==='cycle-inv'){
     const idx = +el.dataset.idx;
+    if(!p.investigations || !p.investigations[idx]) return;
     const order = ['pending','done','abnormal'];
     p.investigations[idx].status = order[(order.indexOf(p.investigations[idx].status)+1)%order.length];
     persistAndRerender(p);
   }
   if(action==='cycle-fit'){
     const idx = +el.dataset.idx;
+    if(!p.fitness || !p.fitness[idx]) return;
     const order = ['pending','done'];
     p.fitness[idx].status = order[(order.indexOf(p.fitness[idx].status)+1)%order.length];
     persistAndRerender(p);
   }
   if(action==='cycle-postop'){
     const idx = +el.dataset.idx;
-    const c = p.postOpChecks[idx];
+    const c = p.postOpChecks?.[idx];
+    if(!c) return;
     const wasDone = c.status === 'done';
     c.status = cycleChecklistStatus(c.status);
     c.doneAt = (c.status === 'done') ? todayISO() : '';
@@ -3641,7 +3736,8 @@ function handleCardAction(action, id, el){
   }
   if(action==='cycle-discharge'){
     const idx = +el.dataset.idx;
-    const c = p.dischargeChecks[idx];
+    const c = p.dischargeChecks?.[idx];
+    if(!c) return;
     c.status = cycleChecklistStatus(c.status);
     c.doneAt = (c.status === 'done') ? todayISO() : '';
     touchChecklistItem(c);
@@ -3784,7 +3880,7 @@ function handleCardAction(action, id, el){
     document.getElementById('hiddenFileInput').click();
   }
   if(action==='view-img'){
-    const img = p.images.find(i=>i.id===el.dataset.imgid);
+    const img = (p.images || []).find(i=>i.id===el.dataset.imgid);
     if(img) openImgViewer(p.id, img);
   }
   if(action==='delete-img'){
@@ -3829,12 +3925,18 @@ let pendingImageData = null; // {patientId, compressed} awaiting type confirmati
 
 async function handleImageFileSelected(e){
   const file = e.target.files[0];
-  if(!file || !pendingImageSlot) return;
-  const raw = await fileToDataURL(file);
-  const compressed = await compressImage(raw);
-  pendingImageData = { patientId: pendingImageSlot.patientId, compressed };
   e.target.value = '';
-  openImageTypeModal();
+  if(!file || !pendingImageSlot) return;
+  try{
+    const raw = await fileToDataURL(file);
+    const compressed = await compressImage(raw);
+    pendingImageData = { patientId: pendingImageSlot.patientId, compressed };
+    openImageTypeModal();
+  }catch(err){
+    console.warn('Image upload failed:', err);
+    showToast('Could not read image — try another file');
+    pendingImageSlot = null;
+  }
 }
 
 function openImageTypeModal(){
@@ -3952,7 +4054,7 @@ function renderWorklist(){
           ? `<input type="text" class="work-lab-input ${labValueClass(it.labKey, it.labVal)}" data-lab-edit="${escapeHTML(it.p.id)}" data-lab-key="${escapeHTML(it.labKey)}" value="${escapeHTML(it.labVal||'')}" inputmode="decimal">`
           : '';
         const planEdit = (it.kind === 'plan')
-          ? `<span class="work-plan-row">${planActionButtonsHtml(it.p.id, 'work')}<input type="text" class="work-plan-input" data-work-plan="${escapeHTML(it.p.id)}" placeholder="Today's plan…" value=""></span>`
+          ? `<span class="work-plan-row">${planActionButtonsHtml(it.p.id, 'work')}<input type="text" class="work-plan-input" data-work-plan="${escapeHTML(it.p.id)}" placeholder="Today's plan…" value="${escapeHTML(it.p.dailyPlan || '')}"></span>`
           : '';
         const invChips = (it.kind === 'inv')
           ? `<span class="work-inv-chips">${COMMON_INVESTIGATIONS.slice(0,6).map(n=>`<button type="button" class="btn work-inv-chip" data-add-inv="${escapeHTML(it.p.id)}" data-inv-name="${escapeHTML(n)}">${escapeHTML(n)}</button>`).join('')}</span>`
@@ -5352,10 +5454,12 @@ function closePresentationMode(){
 function stepPresentation(delta, autoMark){
   const list = getPresentationList();
   if(!list.length) return;
+  if(delta > 0 && presentationIndex >= list.length - 1) return;
+  if(delta < 0 && presentationIndex <= 0) return;
   const curId = list[presentationIndex]?.id;
   if(autoMark && delta > 0){
     const p = list[presentationIndex];
-    if(p && !isPresented(p.id)) void markPresented(p.id);
+    if(p && !isPresented(p.id)) void safeMarkPresented(p.id);
   }
   const body = document.getElementById('presentationContent');
   const doStep = ()=>{
@@ -5394,7 +5498,7 @@ function markCurrentPresented(){
   const list = getPresentationList();
   const p = list[presentationIndex];
   if(!p) return;
-  void markPresented(p.id).then(()=>{
+  void safeMarkPresented(p.id).then(()=>{
     renderPresentationSlide();
     showToast('Marked as presented');
     if(presentationUnpresentedOnly){
@@ -6036,10 +6140,14 @@ async function exportData(){
     localStorage.setItem(LS_LAST_EXPORT, String(Date.now()));
     showToast('Backup file downloaded');
   }catch(err){
+    if(err.message === 'unauthorized'){
+      showToast('Login required to export');
+      return;
+    }
     const payload = { exportedAt: new Date().toISOString(), appVersion: 2, patients: buildExportPatientList() };
     downloadJSON(payload, `ortho_rounds_backup_${todayISO()}.json`);
     localStorage.setItem(LS_LAST_EXPORT, String(Date.now()));
-    showToast('Backup downloaded (from local cache)');
+    showToast('Backup from local cache — server export failed', { warn: true, duration: 6000 });
   }
 }
 

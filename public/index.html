@@ -20,7 +20,9 @@
     --mono:"JetBrains Mono","SF Mono",Consolas,monospace;
     --ink:#1c2230;
     --ink-soft:#5a6478;
+    --text-muted:var(--ink-soft);
     --line:#e2e5eb;
+    --border:var(--line);
     --line-soft:#eef0f4;
     --paper:#f4f5f7;
     --card:#ffffff;
@@ -1712,7 +1714,9 @@
 <script>
   if('serviceWorker' in navigator){
     window.addEventListener('load', ()=>{
-      navigator.serviceWorker.register('sw.js').catch(()=>{ /* offline cache optional */ });
+      navigator.serviceWorker.register('sw.js').catch(err=>{
+        console.warn('Service worker registration failed:', err);
+      });
     });
   }
 </script>
