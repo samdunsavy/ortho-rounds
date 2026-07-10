@@ -270,6 +270,50 @@ Reference patients as "Bed <bed> — <name>". Keep the whole brief under 250 wor
   return reidentifyText(text, mapping);
 }
 
+export async function scribeRoundNote(patient, transcript){
+  const snapshot = sanitizePatientSnapshot(patient);
+  const systemPrompt = `You convert a doctor's spoken bedside note from an orthopedic ward round into structured record updates.
+
+Ward speech conventions:
+- POST-OP patients: the speaker states the POD (post-op day), the procedure that was done, and the plans — discharge planning, physiotherapy, mobilisation, dressing, investigations.
+- PRE-OP and CONSERVATIVE patients: the speaker states the diagnosis and the plan.
+
+Use the patient JSON only as context to resolve references (e.g. which milestone "drain removed" matches). Extract ONLY what the transcript actually says — never invent items.
+
+Return ONLY a JSON object with these keys:
+"dailyPlan": string|null — today's plan in short telegraphic ward style, combining all plan items spoken (physiotherapy, discharge planning, dressings, investigations). Null if no plan is spoken.
+"handoverNote": string|null — only if the speaker flags something to watch for / pending / inform the on-call team.
+"milestonesDone": string[] — ids from the milestones array that the speaker states are completed now.
+"dischargeChecksDone": string[] — ids from the dischargeChecks array stated as completed.
+"complication": {"type": string, "note": string}|null — only if an adverse event or complication is stated (e.g. wound gape, discharge from wound, DVT).
+"markForDischarge": boolean — true ONLY if the speaker clearly says the patient is fit for / to be marked for discharge (planning discharge "tomorrow" is a plan item, not a status change).
+
+Use British/Indian ward English. Do not put the POD or diagnosis into dailyPlan — they are context, not plan items.`;
+
+  const mapping = pseudonymizeSnapshots([snapshot]);
+  const spoken = aliasifyText(String(transcript || '').slice(0, 4000), mapping);
+  const userContent = `Patient data:\n${JSON.stringify(snapshot, null, 2)}\n\nSpoken bedside note:\n${spoken}\n\nExtract the JSON.`;
+  const raw = await callOpenAiJson(systemPrompt, userContent, { maxTokens: 500, temperature: 0.1 });
+
+  const milestoneIds = new Set((patient?.milestones || []).map(m => m && m.id).filter(Boolean));
+  const dischargeIds = new Set((patient?.dischargeChecks || []).map(c => c && c.id).filter(Boolean));
+  const out = {
+    dailyPlan: typeof raw.dailyPlan === 'string' && raw.dailyPlan.trim() ? reidentifyText(raw.dailyPlan.trim(), mapping) : null,
+    handoverNote: typeof raw.handoverNote === 'string' && raw.handoverNote.trim() ? reidentifyText(raw.handoverNote.trim(), mapping) : null,
+    milestonesDone: (Array.isArray(raw.milestonesDone) ? raw.milestonesDone : []).filter(id => milestoneIds.has(id)),
+    dischargeChecksDone: (Array.isArray(raw.dischargeChecksDone) ? raw.dischargeChecksDone : []).filter(id => dischargeIds.has(id)),
+    complication: null,
+    markForDischarge: raw.markForDischarge === true
+  };
+  if(raw.complication && typeof raw.complication === 'object' && (raw.complication.type || raw.complication.note)){
+    out.complication = {
+      type: reidentifyText(String(raw.complication.type || 'Complication').trim(), mapping),
+      note: reidentifyText(String(raw.complication.note || '').trim(), mapping)
+    };
+  }
+  return out;
+}
+
 export async function parseAdmission(text){
   const systemPrompt = `You extract structured data from orthopedic admission notes written in Indian ward English (may mix abbreviations and dictated speech).
 Return ONLY a JSON object with these keys (use null when the note does not state a value — never guess):
