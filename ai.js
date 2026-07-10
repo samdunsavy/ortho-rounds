@@ -1,5 +1,13 @@
 /* OpenAI proxy for Ortho Rounds AI assistants. */
 
+import {
+  normalizePatientClinicalFields,
+  extractLabsFromText,
+  sanitizeLabs,
+  sanitizeAntibioticCourses,
+  mergeLabs
+} from './clinical-normalize.js';
+
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 const OPENAI_BASE_URL = (process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '');
@@ -359,16 +367,22 @@ wardType (e.g. "Free ward", "Paid ward", "Private ward"),
 diagnosis, procedure, surgeon, implant,
 status ("preop"|"postop"|"conservative"|"fordischarge"),
 admissionDate, surgeryDate (ISO YYYY-MM-DD; resolve relative phrases like "yesterday" using today's date given below),
-theatreTime (e.g. "09:30"), dailyPlan, handoverNote, notes.
+theatreTime (e.g. "09:30"), dailyPlan, handoverNote, notes,
+labs: object with optional keys hb, crp, wcc, creatinine (string numbers only, Indian report units),
+antibioticCourses: array of {name, days (integer), start (ISO date or null)} — e.g. "Inj Augmentin 1.2g BD x 5 days",
+dvtProphylaxis (e.g. "LMWH"), dvtDays (integer course length if stated).
+Capitalization: use standard orthopedic style — spine levels as L3/C5, sides as Right/Left, names in title case, common abbreviations as ORIF/IM/LMWH.
 diagnosis: join multiple injuries; keep "+" between items or use newlines; strip leading "Imp :".
 status rules: operated → "postop"; awaiting surgery → "preop"; non-operative management → "conservative".
 Do not put content in notes that already fits another field.`;
 
-  const userContent = `Today's date: ${new Date().toISOString().slice(0, 10)}\n\nAdmission note:\n${String(text || '').slice(0, 6000)}\n\nExtract the JSON.`;
-  const fields = await callOpenAiJson(systemPrompt, userContent, { maxTokens: 500, temperature: 0.1 });
+  const noteText = String(text || '').slice(0, 6000);
+  const userContent = `Today's date: ${new Date().toISOString().slice(0, 10)}\n\nAdmission note:\n${noteText}\n\nExtract the JSON.`;
+  const fields = await callOpenAiJson(systemPrompt, userContent, { maxTokens: 700, temperature: 0.1 });
   const allow = [
     'name', 'age', 'sex', 'bed', 'ward', 'uhid', 'unit', 'wardType', 'diagnosis', 'procedure', 'surgeon', 'implant',
-    'status', 'admissionDate', 'surgeryDate', 'theatreTime', 'dailyPlan', 'handoverNote', 'notes'
+    'status', 'admissionDate', 'surgeryDate', 'theatreTime', 'dailyPlan', 'handoverNote', 'notes',
+    'dvtProphylaxis', 'dvtDays'
   ];
   const out = {};
   for(const key of allow){
@@ -377,10 +391,24 @@ Do not put content in notes that already fits another field.`;
     const str = String(val).trim();
     if(str && str.toLowerCase() !== 'null') out[key] = str;
   }
+  if(fields?.dvtDays != null){
+    const days = parseInt(String(fields.dvtDays), 10);
+    if(days > 0) out.dvtDays = days;
+  }
   if(out.sex && !['M', 'F', 'O'].includes(out.sex)) delete out.sex;
   if(out.status && !['preop', 'postop', 'conservative', 'fordischarge'].includes(out.status)) delete out.status;
   for(const key of ['admissionDate', 'surgeryDate']){
     if(out[key] && !/^\d{4}-\d{2}-\d{2}$/.test(out[key])) delete out[key];
   }
-  return out;
+
+  const defaultStart = out.admissionDate || out.surgeryDate || new Date().toISOString().slice(0, 10);
+  const aiLabs = sanitizeLabs(fields?.labs);
+  const regexLabs = extractLabsFromText(noteText);
+  const labs = mergeLabs(aiLabs, regexLabs);
+  if(Object.keys(labs).length) out.labs = labs;
+
+  const antibioticCourses = sanitizeAntibioticCourses(fields?.antibioticCourses, { start: defaultStart });
+  if(antibioticCourses.length) out.antibioticCourses = antibioticCourses;
+
+  return normalizePatientClinicalFields(out);
 }

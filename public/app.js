@@ -1205,6 +1205,86 @@ const SMART_PASTE_FIELD_MAP = {
   implant: 'f_implant', dailyPlan: 'f_dailyPlan', handoverNote: 'f_handoverNote', notes: 'f_notes'
 };
 
+function normalizeModalPatientFields(d){
+  const N = window.ClinicalNormalize;
+  if(!N?.normalizePatientClinicalFields) return d;
+  return N.normalizePatientClinicalFields(d);
+}
+
+function normalizeSmartPasteFormFields(){
+  const N = window.ClinicalNormalize;
+  if(!N) return;
+  const map = [
+    ['f_name', N.normalizePersonName],
+    ['f_diagnosis', N.normalizeDiagnosis],
+    ['f_procedure', N.normalizeProcedure],
+    ['f_implant', N.normalizeImplant],
+    ['f_surgeon', N.normalizeSurgeon],
+    ['f_handoverNote', N.normalizeClinicalNote],
+    ['f_notes', N.normalizeClinicalNote],
+    ['f_dailyPlan', N.normalizeClinicalNote]
+  ];
+  for(const [id, fn] of map){
+    const el = document.getElementById(id);
+    if(el?.value) el.value = fn(el.value);
+  }
+}
+
+function applySmartPasteLabs(labs){
+  if(!labs) return 0;
+  let filled = 0;
+  const pairs = [
+    ['hb', 'f_lab_hb'],
+    ['crp', 'f_lab_crp'],
+    ['wcc', 'f_lab_wcc'],
+    ['creatinine', 'f_lab_creatinine']
+  ];
+  for(const [key, id] of pairs){
+    if(!labs[key]) continue;
+    const el = document.getElementById(id);
+    if(!el) continue;
+    el.value = labs[key];
+    filled++;
+  }
+  return filled;
+}
+
+function applySmartPasteAntibiotics(courses){
+  if(!Array.isArray(courses) || !courses.length) return 0;
+  const d = getWorkingData();
+  const startDefault = document.getElementById('f_admissionDate')?.value || d.admissionDate || todayISO();
+  d.antibioticCourses = courses.map(c => blankAntibioticCourse(d, {
+    name: c.name || '',
+    days: parseTherapyDays(c.days),
+    start: c.start || startDefault
+  }));
+  setWorkingData(d);
+  renderAntibioticList();
+  return courses.length;
+}
+
+function applySmartPasteDvt(fields){
+  if(!fields) return 0;
+  let filled = 0;
+  if(fields.dvtProphylaxis){
+    const el = document.getElementById('f_dvtProphylaxis');
+    if(el){
+      el.value = fields.dvtProphylaxis;
+      filled++;
+    }
+  }
+  const days = parseTherapyDays(fields.dvtDays);
+  if(days){
+    document.querySelectorAll('.dvt-day-preset').forEach(b => {
+      b.classList.toggle('active', parseTherapyDays(b.dataset.dvtDays) === days);
+    });
+    const inp = document.getElementById('f_dvtDays');
+    if(inp) inp.value = [3, 5, 7, 14].includes(days) ? '' : String(days);
+    filled++;
+  }
+  return filled;
+}
+
 async function runSmartPaste(btn){
   const src = document.getElementById('f_smartPaste');
   const text = (src?.value || '').trim();
@@ -1239,6 +1319,10 @@ async function runSmartPaste(btn){
     if(fields?.status){
       document.getElementById('f_status')?.dispatchEvent(new Event('change', { bubbles: true }));
     }
+    normalizeSmartPasteFormFields();
+    filled += applySmartPasteLabs(fields.labs);
+    filled += applySmartPasteAntibiotics(fields.antibioticCourses);
+    filled += applySmartPasteDvt(fields);
     showToast(filled ? `Filled ${filled} field${filled > 1 ? 's' : ''} — review before saving` : 'Nothing recognisable in that note');
   }catch(err){
     showToast(err.message || 'Smart fill failed');
@@ -6504,6 +6588,8 @@ async function savePatientFromModal(){
     d.notes = document.getElementById('f_notes').value.trim();
 
     if(!d.name){ showToast('Please enter patient name'); return; }
+
+    Object.assign(d, normalizeModalPatientFields(d));
 
     normalizePatientChecklists(d);
     normalizeAntibioticCourses(d);

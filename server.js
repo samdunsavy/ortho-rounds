@@ -546,6 +546,16 @@ const server = http.createServer(async (req, res)=>{
         'Cache-Control': 'no-cache'
       });
       createReadStream(filePath).pipe(res);
+    }else if(pathname === '/clinical-normalize.js'){
+      const filePath = path.join(__dirname, 'clinical-normalize.js');
+      if(!existsSync(filePath)){
+        res.writeHead(404, { 'Content-Type': 'text/plain' }); res.end('Not found'); return;
+      }
+      res.writeHead(200, {
+        'Content-Type': 'application/javascript; charset=utf-8',
+        'Cache-Control': 'no-cache'
+      });
+      createReadStream(filePath).pipe(res);
     }else{
       serveStatic(req, res);
     }
