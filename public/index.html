@@ -40,6 +40,7 @@
     --warn-bg:#fbf0e2;
     --bad:#a33d3d;
     --bad-bg:#faeaea;
+    --stale-border:var(--warn);
     --status-preop:#2c5f6e;
     --status-conservative:#6b8f71;
     --status-postop:#7a9cad;
@@ -116,6 +117,11 @@
   .card-status-conservative.status-rail::before{background:linear-gradient(180deg,var(--status-conservative),rgba(107,143,113,0.5));}
   .card-status-postop.status-rail::before{background:linear-gradient(180deg,var(--status-postop),rgba(122,156,173,0.5));}
   .card-status-fordischarge.status-rail::before{background:linear-gradient(180deg,var(--status-fordischarge),rgba(63,125,92,0.5));}
+  .card.card-urgent{border-left-color:var(--bad);}
+  .card-urgent.status-rail::before{background:linear-gradient(180deg,var(--bad),rgba(163,61,61,0.4));}
+  .card.card-urgent:not(.open){
+    box-shadow:var(--shadow-sm),0 0 0 1px rgba(163,61,61,0.08),0 2px 14px rgba(163,61,61,0.1);
+  }
   .bni-svg{display:flex;align-items:center;justify-content:center;width:24px;height:24px;}
   .bni-svg svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;}
 
@@ -164,6 +170,12 @@
   }
   .ibtn:hover{background:rgba(255,255,255,0.18);border-color:rgba(255,255,255,0.28);}
   .ibtn:active{transform:scale(0.98);}
+  .present-progress{
+    font-family:var(--mono);font-size:10px;font-weight:700;line-height:1;
+    background:rgba(255,255,255,0.16);padding:2px 6px;border-radius:var(--radius-chip);
+    margin-left:4px;vertical-align:1px;
+  }
+  .present-progress.done{background:rgba(95,207,142,0.25);color:#8ee6b4;}
 
   /* ---------- sync status chip ---------- */
   .sync-chip{
@@ -179,14 +191,14 @@
 
   .storage-notice{
     background:var(--accent-soft);color:var(--ink);border-bottom:1px solid var(--line);
-    padding:8px 14px;font-size:12.5px;line-height:1.45;display:flex;gap:10px;align-items:flex-start;
+    padding:5px 14px;font-size:12px;line-height:1.4;display:flex;gap:10px;align-items:center;
   }
   .storage-notice.warn{background:var(--warn-bg);border-bottom-color:#ecd5b8;}
-  .storage-notice-text{flex:1;}
+  .storage-notice-text{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;}
   .storage-notice-text code{font-family:var(--mono);background:var(--line);padding:1px 5px;border-radius:4px;}
   .storage-notice-dismiss{
-    background:none;border:none;color:var(--ink-soft);font-size:18px;line-height:1;cursor:pointer;
-    width:36px;height:36px;border-radius:var(--radius-sm);display:inline-flex;align-items:center;justify-content:center;
+    background:none;border:none;color:var(--ink-soft);font-size:16px;line-height:1;cursor:pointer;
+    width:30px;height:30px;border-radius:var(--radius-sm);display:inline-flex;align-items:center;justify-content:center;
     flex-shrink:0;transition:background var(--dur-fast),color var(--dur-fast);
   }
   .storage-notice-dismiss:hover{background:var(--line-soft);color:var(--ink);}
@@ -214,7 +226,8 @@
   .tab.active .count{background:var(--accent-soft);color:var(--accent);}
 
   .view{display:none;padding:16px 14px 20px;max-width:880px;margin:0 auto;}
-  .view.active{display:block;}
+  .view.active{display:block;animation:viewIn 0.18s ease;}
+  @keyframes viewIn{from{opacity:0;transform:translateY(6px);}to{opacity:1;transform:none;}}
 
   /* ---------- patient card (rounds list) ---------- */
   .card{
@@ -275,6 +288,10 @@
     font-family:var(--mono);letter-spacing:0.03em;
     background:var(--bone);color:var(--bone-ink);border-color:var(--bone-line);
   }
+  /* Recovery-phase tinting: fresh post-op needs the most attention. */
+  .pod-pill.pod-early{background:var(--bad-bg);color:var(--bad);border-color:rgba(163,61,61,0.25);}
+  .pod-pill.pod-mid{background:var(--warn-bg);color:var(--warn);border-color:rgba(166,98,42,0.22);}
+  .pod-pill.pod-late{background:var(--good-bg);color:var(--good);border-color:rgba(63,125,92,0.22);}
   .status-badge{
     text-transform:uppercase;letter-spacing:0.05em;
     background:var(--line-soft);color:var(--ink-soft);
@@ -318,7 +335,7 @@
     transition:border-color var(--dur-fast),box-shadow var(--dur-fast);
   }
   .card-plan-input:focus{outline:none;border-color:var(--accent);box-shadow:var(--focus-ring);}
-  .card-plan-input.stale{border-color:var(--warn);background:var(--warn-bg);}
+  .card-plan-input.stale{border-color:var(--stale-border);background:var(--warn-bg);}
   .card-quick-milestones{display:flex;gap:6px;flex-wrap:wrap;}
   .status-badge.clickable,.pg-chip{cursor:pointer;border:none;font-family:inherit;}
   .pg-chip{
@@ -410,15 +427,19 @@
   .card.open .chevron{transform:rotate(90deg);}
 
   .card-body{
-    max-height:0;overflow:hidden;opacity:0;
+    display:grid;grid-template-rows:0fr;opacity:0;
     border-top:1px solid transparent;padding:0 16px;
     background:linear-gradient(180deg, var(--line-soft) 0%, var(--paper) 100%);
-    transition:max-height .35s ease, opacity .25s ease, padding .25s ease, border-color .2s ease;
+    transition:grid-template-rows .28s ease, opacity .22s ease, padding .22s ease, border-color .2s ease;
   }
   .card.open .card-body{
-    max-height:8000px;opacity:1;padding:16px;
+    grid-template-rows:1fr;opacity:1;padding:16px;
     border-top-color:var(--line-soft);
   }
+  /* Clip content while the row animates; release afterwards ("settled")
+     so the sticky patient-name header can work again. */
+  .card-body > .card-body-inner{overflow:hidden;min-height:0;}
+  .card-body.settled > .card-body-inner{overflow:visible;}
   .card-body-inner{padding-bottom:8px;}
   .card-body-sticky{
     position:sticky;top:0;z-index:5;background:linear-gradient(180deg, var(--line-soft) 90%, transparent);
@@ -443,6 +464,13 @@
 
   .detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;}
   @media (max-width:560px){.detail-grid{grid-template-columns:1fr;}}
+  .add-details-btn{
+    display:inline-flex;align-items:center;gap:6px;margin:-4px 0 12px;
+    background:none;border:1px dashed var(--line);border-radius:var(--radius-chip-lg);
+    color:var(--ink-soft);font-size:11.5px;font-weight:600;padding:5px 12px;cursor:pointer;
+    font-family:inherit;transition:color var(--dur-fast),border-color var(--dur-fast);
+  }
+  .add-details-btn:hover{color:var(--accent);border-color:var(--accent-soft);}
   .field{font-size:13px;}
   .field label{display:block;font-size:10.5px;font-weight:700;text-transform:uppercase;
     letter-spacing:0.04em;color:var(--ink-soft);margin-bottom:2px;}
@@ -504,9 +532,17 @@
   .xray-thumb:hover .xray-del,.xray-thumb:focus-within .xray-del{opacity:1;}
   .xray-del:hover{background:var(--bad);}
   .xray-add{
-    width:100px;height:100px;border-radius:8px;border:1.5px dashed var(--line);
-    display:flex;align-items:center;justify-content:center;font-size:24px;color:var(--ink-soft);
-    cursor:pointer;background:var(--card);
+    width:100px;height:100px;border-radius:8px;border:1.5px dashed var(--accent-soft);
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;
+    font-size:11px;font-weight:600;color:var(--accent);
+    cursor:pointer;background:var(--card);text-align:center;
+    transition:border-color var(--dur-fast),background var(--dur-fast);
+  }
+  .xray-add:hover{border-color:var(--accent);background:var(--accent-soft);}
+  .xray-add svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;opacity:0.85;}
+  .xray-pill{
+    font-family:var(--mono);letter-spacing:0.03em;
+    background:var(--accent-soft);color:var(--accent);border-color:rgba(44,95,110,0.15);
   }
 
   .notes-box{font-size:13px;line-height:1.5;background:var(--card);border:1px solid var(--line-soft);
@@ -519,7 +555,7 @@
   textarea.card-plan-edit:focus{
     outline:none;border-color:var(--accent);box-shadow:var(--focus-ring);
   }
-  textarea.card-plan-edit.stale{border-color:var(--warn);background:var(--warn-bg);}
+  textarea.card-plan-edit.stale{border-color:var(--stale-border);background:var(--warn-bg);}
   textarea.card-plan-edit::placeholder{color:var(--ink-soft);opacity:0.85;}
 
   .card-actions{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;}
@@ -580,6 +616,11 @@
     padding:7px 12px;margin-bottom:12px;border-radius:var(--radius-chip-lg);
     font-size:var(--chip-font);font-weight:700;text-transform:uppercase;letter-spacing:0.06em;
     box-shadow:var(--shadow-sm);
+    border-left:4px solid var(--ward-accent,var(--accent));
+  }
+  .ward-header::before{
+    content:"";width:8px;height:8px;border-radius:50%;flex-shrink:0;
+    background:var(--ward-accent,var(--accent));
   }
   .ward-header .ward-count{
     font-family:var(--mono);font-size:10px;font-weight:700;
@@ -690,6 +731,25 @@
   }
   .script-box .lbl{font-size:10.5px;font-weight:700;color:var(--accent);text-transform:uppercase;
     letter-spacing:0.05em;margin-bottom:5px;display:block;}
+
+  /* ---------- loading skeleton ---------- */
+  .skeleton-list{padding-top:2px;}
+  .skeleton-card{
+    background:var(--card);border:1px solid var(--line);border-left:5px solid var(--line);
+    border-radius:var(--radius);padding:14px 15px;margin-bottom:12px;box-shadow:var(--shadow-sm);
+    display:flex;gap:10px;align-items:flex-start;
+  }
+  .sk-shimmer{
+    background:linear-gradient(90deg,var(--line-soft) 25%,var(--line) 50%,var(--line-soft) 75%);
+    background-size:200% 100%;animation:skShimmer 1.4s ease-in-out infinite;border-radius:6px;
+  }
+  .skeleton-card .sk-chip{width:44px;height:28px;border-radius:var(--radius-chip);flex-shrink:0;}
+  .skeleton-card .sk-lines{flex:1;display:flex;flex-direction:column;gap:8px;padding-top:2px;}
+  .skeleton-card .sk-line{height:12px;}
+  .skeleton-card .sk-line.w60{width:60%;}
+  .skeleton-card .sk-line.w40{width:40%;}
+  .skeleton-card .sk-line.w80{width:80%;height:10px;}
+  @keyframes skShimmer{0%{background-position:200% 0;}100%{background-position:-200% 0;}}
 
   /* ---------- empty state ---------- */
   .empty-state{
@@ -1020,6 +1080,7 @@
       --accent-hover:#5eb0c4;--bone:#2a2820;--bone-line:#3d3828;
       --good:#5fcf8e;--good-bg:#1a2e24;--warn:#e6b84c;--warn-bg:#2e2618;
       --bad:#e07070;--bad-bg:#2e1a1a;
+      --stale-border:rgba(230,184,76,0.45);
       --status-preop:#4a9aad;--status-conservative:#7ecf9a;--status-postop:#8ab4c4;--status-fordischarge:#5fcf8e;
       --status-conservative-bg:#1a2a1e;--status-conservative-fg:#7ecf9a;
       --status-postop-bg:#1a2428;--status-postop-fg:#8ab4c4;
@@ -1046,6 +1107,7 @@
     --accent-hover:#5eb0c4;--bone:#2a2820;--bone-line:#3d3828;
     --good:#5fcf8e;--good-bg:#1a2e24;--warn:#e6b84c;--warn-bg:#2e2618;
     --bad:#e07070;--bad-bg:#2e1a1a;
+    --stale-border:rgba(230,184,76,0.45);
     --status-preop:#4a9aad;--status-conservative:#7ecf9a;--status-postop:#8ab4c4;--status-fordischarge:#5fcf8e;
     --status-conservative-bg:#1a2a1e;--status-conservative-fg:#7ecf9a;
     --status-postop-bg:#1a2428;--status-postop-fg:#8ab4c4;
@@ -1133,6 +1195,8 @@
   @media (max-width:680px){
     .tabs{display:none;}
     body.has-bottom-nav{padding-bottom:calc(72px + env(safe-area-inset-bottom));}
+    /* Keep toasts clear of the bottom navigation bar. */
+    body.has-bottom-nav .toast{bottom:calc(84px + env(safe-area-inset-bottom));}
     .topbar{
       padding:8px 12px;gap:8px;flex-wrap:wrap;align-items:flex-start;
     }
@@ -1451,7 +1515,22 @@
     <div class="filter-chip" data-filter="ottoday">OT today</div>
     <div class="filter-chip" data-filter="mine">My patients</div>
   </div>
-  <div id="roundsList"></div>
+  <div id="roundsList">
+    <div class="skeleton-list" aria-hidden="true">
+      <div class="skeleton-card">
+        <div class="sk-chip sk-shimmer"></div>
+        <div class="sk-lines"><div class="sk-line sk-shimmer w60"></div><div class="sk-line sk-shimmer w40"></div><div class="sk-line sk-shimmer w80"></div></div>
+      </div>
+      <div class="skeleton-card">
+        <div class="sk-chip sk-shimmer"></div>
+        <div class="sk-lines"><div class="sk-line sk-shimmer w40"></div><div class="sk-line sk-shimmer w60"></div><div class="sk-line sk-shimmer w80"></div></div>
+      </div>
+      <div class="skeleton-card">
+        <div class="sk-chip sk-shimmer"></div>
+        <div class="sk-lines"><div class="sk-line sk-shimmer w60"></div><div class="sk-line sk-shimmer w40"></div><div class="sk-line sk-shimmer w80"></div></div>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- WORKLIST VIEW -->
