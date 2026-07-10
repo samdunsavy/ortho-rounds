@@ -12,6 +12,6 @@
     "dev": "node --no-warnings --watch server.js"
   },
   "dependencies": {
-    "mongodb": "^7.3.0"
+    "mongodb": "^7.5.0"
   }
 }
