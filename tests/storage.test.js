@@ -64,6 +64,63 @@ describe('SQLite storage — users', () => {
   });
 });
 
+describe('SQLite storage — pushSubscriptions', () => {
+  let dataDir;
+  let store;
+
+  before(async () => {
+    dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ortho-test-'));
+    store = await createStore({ dataDir });
+    await store.init();
+  });
+
+  after(async () => {
+    await store.close();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  test('creates and retrieves subscriptions by user', async () => {
+    await store.createSubscription({
+      id: 's1', userId: 'u1', endpoint: 'https://push.example/ep1',
+      p256dh: 'key1', auth: 'auth1', createdAt: Date.now()
+    });
+    const subs = await store.getSubscriptionsByUserId('u1');
+    assert.equal(subs.length, 1);
+    assert.equal(subs[0].endpoint, 'https://push.example/ep1');
+    assert.equal(subs[0].lastDigestAt, 0);
+  });
+
+  test('re-subscribing with the same endpoint updates keys, not creates a duplicate', async () => {
+    await store.createSubscription({
+      id: 's2-attempted', userId: 'u1', endpoint: 'https://push.example/ep1',
+      p256dh: 'key1-updated', auth: 'auth1-updated', createdAt: Date.now()
+    });
+    const subs = await store.getSubscriptionsByUserId('u1');
+    assert.equal(subs.length, 1);
+    assert.equal(subs[0].id, 's1'); // original id preserved, not overwritten
+    assert.equal(subs[0].p256dh, 'key1-updated');
+  });
+
+  test('updateSubscription only touches lastDigestAt', async () => {
+    await store.updateSubscription('https://push.example/ep1', { lastDigestAt: 12345, userId: 'attacker' });
+    const subs = await store.getSubscriptionsByUserId('u1');
+    assert.equal(subs[0].lastDigestAt, 12345);
+    assert.equal(subs[0].userId, 'u1'); // ignored the userId in the patch
+  });
+
+  test('deleteSubscription removes it', async () => {
+    await store.deleteSubscription('https://push.example/ep1');
+    assert.deepEqual(await store.getSubscriptionsByUserId('u1'), []);
+  });
+
+  test('getAllSubscriptions spans users', async () => {
+    await store.createSubscription({ id: 's3', userId: 'u1', endpoint: 'ep-a', p256dh: 'k', auth: 'a', createdAt: Date.now() });
+    await store.createSubscription({ id: 's4', userId: 'u2', endpoint: 'ep-b', p256dh: 'k', auth: 'a', createdAt: Date.now() });
+    const all = await store.getAllSubscriptions();
+    assert.equal(all.length, 2);
+  });
+});
+
 describe('SQLite storage — patients (regression check alongside new users table)', () => {
   let dataDir;
   let store;

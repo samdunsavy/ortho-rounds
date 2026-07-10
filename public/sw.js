@@ -3,7 +3,7 @@
    arrive when online), falling back to cache when offline.
    API calls (/api/) always go to the network and are never cached. */
 
-const CACHE = 'ortho-rounds-v32';
+const CACHE = 'ortho-rounds-v33';
 const SHELL = ['./', 'index.html', 'milestones.js', 'app.js', 'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-maskable.svg'];
 
 self.addEventListener('install', (event)=>{
@@ -54,5 +54,30 @@ self.addEventListener('fetch', (event)=>{
         return res;
       })
       .catch(()=> offlineFallback(req))
+  );
+});
+
+self.addEventListener('push', (event)=>{
+  let data = { title: 'Ortho Rounds', body: 'You have new updates.' };
+  try{ if(event.data) data = Object.assign(data, event.data.json()); }catch{ /* use default */ }
+  event.waitUntil(
+    self.registration.showNotification(data.title, {
+      body: data.body,
+      icon: 'icons/icon.svg',
+      badge: 'icons/icon.svg',
+      tag: 'ortho-rounds-digest'
+    })
+  );
+});
+
+self.addEventListener('notificationclick', (event)=>{
+  event.notification.close();
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(clientsList=>{
+      for(const c of clientsList){
+        if('focus' in c) return c.focus();
+      }
+      if(self.clients.openWindow) return self.clients.openWindow('./');
+    })
   );
 });

@@ -23,9 +23,11 @@ import {
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
+import { logWarn } from './logger.js';
 
 const MAX_BACKUPS = 7;
 const USER_PATCH_FIELDS = ['passwordHash', 'passwordSalt', 'active', 'role', 'tokenVersion'];
+const SUBSCRIPTION_PATCH_FIELDS = ['lastDigestAt'];
 
 export async function createStore(opts){
   if(opts && opts.mongoUri){
@@ -78,6 +80,17 @@ function createSqliteStore({ dataDir }){
           active       INTEGER NOT NULL DEFAULT 1,
           tokenVersion INTEGER NOT NULL DEFAULT 0,
           createdAt    INTEGER NOT NULL
+        );
+      `);
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS pushSubscriptions (
+          id           TEXT PRIMARY KEY,
+          userId       TEXT NOT NULL,
+          endpoint     TEXT NOT NULL UNIQUE,
+          p256dh       TEXT NOT NULL,
+          auth         TEXT NOT NULL,
+          createdAt    INTEGER NOT NULL,
+          lastDigestAt INTEGER NOT NULL DEFAULT 0
         );
       `);
     },
@@ -148,6 +161,35 @@ function createSqliteStore({ dataDir }){
       db.prepare(`UPDATE users SET ${setClause} WHERE id = ?`).run(...values, id);
     },
 
+    async createSubscription(sub){
+      db.prepare(`
+        INSERT INTO pushSubscriptions (id, userId, endpoint, p256dh, auth, createdAt, lastDigestAt)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(endpoint) DO UPDATE SET
+          userId = excluded.userId,
+          p256dh = excluded.p256dh,
+          auth   = excluded.auth
+      `).run(
+        sub.id, sub.userId, sub.endpoint, sub.p256dh, sub.auth,
+        sub.createdAt || Date.now(), sub.lastDigestAt || 0
+      );
+    },
+    async getSubscriptionsByUserId(userId){
+      return db.prepare('SELECT * FROM pushSubscriptions WHERE userId = ?').all(userId);
+    },
+    async getAllSubscriptions(){
+      return db.prepare('SELECT * FROM pushSubscriptions').all();
+    },
+    async deleteSubscription(endpoint){
+      db.prepare('DELETE FROM pushSubscriptions WHERE endpoint = ?').run(endpoint);
+    },
+    async updateSubscription(endpoint, patch){
+      const fields = Object.keys(patch || {}).filter(k => SUBSCRIPTION_PATCH_FIELDS.includes(k));
+      if(!fields.length) return;
+      const setClause = fields.map(f => `${f} = ?`).join(', ');
+      db.prepare(`UPDATE pushSubscriptions SET ${setClause} WHERE endpoint = ?`).run(...fields.map(f => patch[f]), endpoint);
+    },
+
     async begin(){ db.exec('BEGIN'); },
     async commit(){ db.exec('COMMIT'); },
     async rollback(){ db.exec('ROLLBACK'); },
@@ -195,7 +237,7 @@ function createSqliteStore({ dataDir }){
         }
         return dest;
       }catch(err){
-        console.warn('  Auto-backup failed:', err.message);
+        logWarn('auto_backup_failed', { errMessage: err.message });
         return null;
       }
     },
@@ -224,8 +266,11 @@ async function createMongoStore({ mongoUri }){
   const configCol = database.collection('config');
   const images = database.collection('images');
   const users = database.collection('users');
+  const pushSubscriptions = database.collection('pushSubscriptions');
   await patients.createIndex({ updatedAt: 1 });
   await users.createIndex({ username: 1 }, { unique: true });
+  await pushSubscriptions.createIndex({ endpoint: 1 }, { unique: true });
+  await pushSubscriptions.createIndex({ userId: 1 });
 
   const freshStart = (await patients.estimatedDocumentCount()) === 0;
   const mapRow = d => d ? { id: d._id, updatedAt: d.updatedAt, deleted: d.deleted ? 1 : 0, data: d.data } : null;
@@ -233,6 +278,10 @@ async function createMongoStore({ mongoUri }){
     id: d._id, username: d.username, passwordHash: d.passwordHash, passwordSalt: d.passwordSalt,
     role: d.role || 'member', active: d.active === false ? 0 : 1,
     tokenVersion: d.tokenVersion || 0, createdAt: d.createdAt
+  } : null;
+  const mapSubscription = d => d ? {
+    id: d._id, userId: d.userId, endpoint: d.endpoint, p256dh: d.p256dh, auth: d.auth,
+    createdAt: d.createdAt, lastDigestAt: d.lastDigestAt || 0
   } : null;
 
   return {
@@ -303,6 +352,41 @@ async function createMongoStore({ mongoUri }){
       const set = {};
       for(const f of fields) set[f] = f === 'active' ? (patch[f] ? 1 : 0) : patch[f];
       await users.updateOne({ _id: id }, { $set: set });
+    },
+
+    async createSubscription(sub){
+      // $set only the mutable fields; _id/createdAt/lastDigestAt are fixed at
+      // insert time and must never be touched on a re-subscribe (same
+      // endpoint) — $set-ing _id on an existing doc would throw.
+      await pushSubscriptions.updateOne(
+        { endpoint: sub.endpoint },
+        {
+          $set: { userId: sub.userId, p256dh: sub.p256dh, auth: sub.auth },
+          $setOnInsert: {
+            _id: sub.id, endpoint: sub.endpoint,
+            createdAt: sub.createdAt || Date.now(), lastDigestAt: sub.lastDigestAt || 0
+          }
+        },
+        { upsert: true }
+      );
+    },
+    async getSubscriptionsByUserId(userId){
+      const arr = await pushSubscriptions.find({ userId }).toArray();
+      return arr.map(mapSubscription);
+    },
+    async getAllSubscriptions(){
+      const arr = await pushSubscriptions.find({}).toArray();
+      return arr.map(mapSubscription);
+    },
+    async deleteSubscription(endpoint){
+      await pushSubscriptions.deleteOne({ endpoint });
+    },
+    async updateSubscription(endpoint, patch){
+      const fields = Object.keys(patch || {}).filter(k => SUBSCRIPTION_PATCH_FIELDS.includes(k));
+      if(!fields.length) return;
+      const set = {};
+      for(const f of fields) set[f] = patch[f];
+      await pushSubscriptions.updateOne({ endpoint }, { $set: set });
     },
 
     // MongoDB upserts are individually atomic; multi-doc transactions aren't

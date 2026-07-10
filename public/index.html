@@ -387,6 +387,15 @@
   .labs-grid input{width:100%;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink);}
   .labs-grid input.lab-low{border-color:var(--bad);background:var(--bad-bg);}
   .labs-grid input.lab-high{border-color:var(--warn);background:var(--warn-bg);}
+  .labs-trend-panel{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:8px;}
+  .lab-trend-item{min-width:0;}
+  .lab-trend-label{
+    display:flex;align-items:baseline;justify-content:space-between;gap:4px;
+    font-size:10.5px;color:var(--ink-soft);margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  }
+  .lab-trend-latest{font-size:11px;font-weight:700;}
+  .lab-trend-svg{display:block;width:100%;height:auto;}
+  .lab-trend-empty{font-size:10.5px;color:var(--ink-soft);font-style:italic;grid-column:1/-1;padding:4px 0;}
   .more-menu-wrap{position:relative;}
   .more-menu-panel{
     display:none;position:absolute;right:0;top:calc(100% + 6px);min-width:180px;
@@ -1561,6 +1570,7 @@
           <button type="button" class="btn btn-sm" id="desktopLogoutBtn">Log out</button>
         </div>
         <button class="ibtn" id="desktopManageUsersBtn" style="display:none;">Manage users</button>
+        <button class="ibtn" id="desktopPushToggleBtn" style="display:none;">Enable reminders</button>
         <button class="ibtn" id="exportBtn">Export</button>
         <button class="ibtn" id="importBtn">Import</button>
         <button class="ibtn" id="templatesBtn">Templates</button>
@@ -1642,6 +1652,8 @@
     <button type="button" class="btn" id="worklistWardHandoverBtn">Unit handover note</button>
     <button type="button" class="btn ai-btn" id="worklistGenerateHandoverBtn" style="display:none">✨ Generate handover</button>
     <button type="button" class="btn ai-btn" id="worklistMorningBriefBtn" style="display:none">✨ Morning brief</button>
+    <button type="button" class="btn ai-btn" id="worklistRiskFlagsBtn" style="display:none">✨ Check ward for risks</button>
+    <span class="small-muted" id="riskFlagsLastChecked"></span>
     <button type="button" class="btn pg-scope-btn-mobile" id="pgScopeBtnMobile">My work</button>
   </div>
   <div id="worklistContent"></div>
@@ -1690,6 +1702,7 @@
       </div>
       <div class="sheet-actions">
         <button type="button" class="sheet-action-btn" data-more-action="account" id="moreManageUsersBtn" style="display:none;"><span class="sa-icon">👤</span> Manage users</button>
+        <button type="button" class="sheet-action-btn" id="morePushToggleBtn" style="display:none;"><span class="sa-icon">🔔</span> <span id="morePushToggleLabel">Enable reminders</span></button>
         <button type="button" class="sheet-action-btn" data-more-action="present"><span class="sa-icon">▶</span> Presentation mode</button>
         <button type="button" class="sheet-action-btn" data-more-action="export"><span class="sa-icon">↓</span> Export backup</button>
         <button type="button" class="sheet-action-btn" data-more-action="import"><span class="sa-icon">↑</span> Import backup</button>

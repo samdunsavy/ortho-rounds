@@ -13,6 +13,7 @@
     "test": "node --no-warnings --test"
   },
   "dependencies": {
-    "mongodb": "^7.5.0"
+    "mongodb": "^7.5.0",
+    "web-push": "^3.6.7"
   }
 }

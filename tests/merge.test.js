@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { mergeChecklistById, mergePlanHistory, mergePatientRecords, stampAttribution } from '../merge.js';
+import { mergeChecklistById, mergePlanHistory, mergeLabsHistory, mergePatientRecords, stampAttribution } from '../merge.js';
 
 describe('mergeChecklistById', () => {
   test('keeps the newer item per id', () => {
@@ -44,6 +44,29 @@ describe('mergePlanHistory', () => {
   });
 });
 
+describe('mergeLabsHistory', () => {
+  test('unions by date and sorts ascending', () => {
+    const local = [{ date: '2026-07-10', hb: '11.0' }];
+    const remote = [{ date: '2026-07-08', hb: '10.5' }];
+    const merged = mergeLabsHistory(local, remote);
+    assert.deepEqual(merged.map(m => m.date), ['2026-07-08', '2026-07-10']);
+  });
+
+  test('local overwrites remote on the same date', () => {
+    const local = [{ date: '2026-07-10', hb: '11.0', crp: '5' }];
+    const remote = [{ date: '2026-07-10', hb: '10.0' }];
+    const merged = mergeLabsHistory(local, remote);
+    assert.equal(merged.length, 1);
+    assert.equal(merged[0].hb, '11.0');
+    assert.equal(merged[0].crp, '5');
+  });
+
+  test('handles missing history on either side', () => {
+    assert.deepEqual(mergeLabsHistory(null, null), []);
+    assert.deepEqual(mergeLabsHistory(undefined, [{ date: '2026-07-01', hb: '12' }]), [{ date: '2026-07-01', hb: '12' }]);
+  });
+});
+
 describe('mergePatientRecords', () => {
   test('returns a copy of remote when local is missing', () => {
     const remote = { id: 'p1', name: 'X' };
@@ -61,6 +84,14 @@ describe('mergePatientRecords', () => {
     const merged = mergePatientRecords(local, remote);
     assert.equal(merged.dailyPlan, 'new');
     assert.equal(merged.planUpdatedAt, 200);
+  });
+
+  test('unions labsHistory from both sides without disturbing labs', () => {
+    const local = { id: 'p1', updatedAt: 100, labs: { hb: '11' }, labsHistory: [{ date: '2026-07-10', hb: '11' }] };
+    const remote = { id: 'p1', updatedAt: 90, labs: { hb: '10' }, labsHistory: [{ date: '2026-07-08', hb: '10' }] };
+    const merged = mergePatientRecords(local, remote);
+    assert.deepEqual(merged.labsHistory.map(h => h.date), ['2026-07-08', '2026-07-10']);
+    assert.equal(merged.labs.hb, '11');
   });
 
   test('newer status wins and carries statusUpdatedBy along with it', () => {

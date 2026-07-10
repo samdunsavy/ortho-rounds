@@ -29,6 +29,17 @@ export function mergePlanHistory(localHist, remoteHist){
   return [...byDate.values()].sort((a, b) => String(a.date).localeCompare(String(b.date)));
 }
 
+export function mergeLabsHistory(localHist, remoteHist){
+  const byDate = new Map();
+  for(const h of (remoteHist || [])){
+    if(h && h.date) byDate.set(h.date, h);
+  }
+  for(const h of (localHist || [])){
+    if(h && h.date) byDate.set(h.date, h);
+  }
+  return [...byDate.values()].sort((a, b) => String(a.date).localeCompare(String(b.date)));
+}
+
 export function mergePatientRecords(local, remote){
   if(!local) return Object.assign({}, remote);
   if(!remote) return Object.assign({}, local);
@@ -44,6 +55,7 @@ export function mergePatientRecords(local, remote){
   }
   merged.planHistory = mergePlanHistory(local.planHistory, remote.planHistory);
   merged.labs = Object.assign({}, remote.labs || {}, local.labs || {});
+  merged.labsHistory = mergeLabsHistory(local.labsHistory, remote.labsHistory);
   const localPlanTs = Number(local.planUpdatedAt) || 0;
   const remotePlanTs = Number(remote.planUpdatedAt) || 0;
   if(remotePlanTs > localPlanTs){

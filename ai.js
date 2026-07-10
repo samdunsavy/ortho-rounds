@@ -270,6 +270,41 @@ Reference patients as "Bed <bed> — <name>". Keep the whole brief under 250 wor
   return reidentifyText(text, mapping);
 }
 
+export async function wardRiskFlags(patients){
+  const list = (Array.isArray(patients) ? patients : []).slice(0, 40);
+  if(!list.length) return [];
+  const snapshots = list.map(sanitizePatientSnapshot);
+  const systemPrompt = `${BASE_SYSTEM}
+
+Scan this ward census for patients with a genuine clinical risk worth flagging right now — do not flag every patient, only ones with something concerning.
+Look for: overdue milestones, abnormal labs, a stated complication, antibiotics due to stop or overdue, or a handover pin suggesting an unresolved issue.
+Return ONLY a JSON object: {"flags": [{"bed": string, "type": "bad"|"warn", "text": string}]}.
+"bed" must exactly match a "bed" value from the input JSON. "text" is one short telegraphic line (under 15 words) explaining the risk. "type" is "bad" for something urgent/serious, "warn" for something to watch. Omit patients with nothing worth flagging — most patients should not appear.`;
+
+  const mapping = pseudonymizeSnapshots(snapshots);
+  const userContent = `Ward census (${snapshots.length} inpatients):\n${JSON.stringify(snapshots, null, 2)}\n\nReturn the risk flags JSON.`;
+  const raw = await callOpenAiJson(systemPrompt, userContent, { maxTokens: 600, temperature: 0.2 });
+
+  // Beds (not ids) go to OpenAI, matching every other ai.js function's
+  // "Bed <bed> — <name>" convention — resolve back to real patient ids here,
+  // server-side, using data that never left the server.
+  const bedToId = new Map();
+  for(const p of list){
+    if(p && p.bed != null && p.id) bedToId.set(String(p.bed), p.id);
+  }
+
+  return (Array.isArray(raw.flags) ? raw.flags : [])
+    .map(f => {
+      if(!f || typeof f !== 'object') return null;
+      const patientId = bedToId.get(String(f.bed));
+      if(!patientId) return null;
+      const text = reidentifyText(String(f.text || '').trim(), mapping).slice(0, 160);
+      if(!text) return null;
+      return { patientId, flag: { type: f.type === 'bad' ? 'bad' : 'warn', text } };
+    })
+    .filter(Boolean);
+}
+
 export async function scribeRoundNote(patient, transcript){
   const snapshot = sanitizePatientSnapshot(patient);
   const systemPrompt = `You convert a doctor's spoken bedside note from an orthopedic ward round into structured record updates.

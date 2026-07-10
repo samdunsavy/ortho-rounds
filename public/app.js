@@ -26,6 +26,7 @@ const CACHE_DB_VERSION = 1;
 const LS_TOKEN = "ortho_token";
 const LS_USERNAME = "ortho_username";
 const LS_ROLE = "ortho_role";
+const LS_PUSH_ENABLED = "ortho_pushEnabled";
 const LS_LASTSYNC = "ortho_lastSync";
 const LS_LAST_FULL_SYNC = "ortho_lastFullSync";
 const LS_PRESENTED = "ortho_presented"; // { date, ids[] }
@@ -90,7 +91,13 @@ const LS_LAST_SYNC_OK = 'ortho_lastSyncOk';
 let syncChipState = 'offline';
 let lastSyncSuccessAt = Number(localStorage.getItem(LS_LAST_SYNC_OK) || 0);
 let aiAvailable = false;
+let vapidPublicKey = null;
 const presentationAiCache = new Map();
+// In-memory only (never persisted) result of the last manual "Check ward for
+// risks" scan — Map<patientId, {type, text}>. Deliberately not auto-refreshed;
+// see the click handler in bindAiEvents for why (rate-limit/cost guardrail).
+let lastRiskFlags = null;
+let lastRiskFlagsCheckedAt = 0;
 let activeVoiceRecognition = null;
 let voiceDictationKey = '';
 
@@ -334,7 +341,9 @@ async function refreshAiStatus(){
     if(!res.ok){ aiAvailable = false; return false; }
     const data = await res.json();
     aiAvailable = !!(data.ai && data.ai.enabled);
+    vapidPublicKey = data.vapidPublicKey || null;
     updateAiButtonsVisibility();
+    void updatePushToggleUI();
     return aiAvailable;
   }catch{
     aiAvailable = false;
@@ -671,6 +680,17 @@ function updateAiButtonsVisibility(){
   if(genBtn) genBtn.style.display = show;
   const briefBtn = document.getElementById('worklistMorningBriefBtn');
   if(briefBtn) briefBtn.style.display = show;
+  const riskBtn = document.getElementById('worklistRiskFlagsBtn');
+  if(riskBtn) riskBtn.style.display = show;
+  updateRiskFlagsLastCheckedLabel();
+}
+
+function updateRiskFlagsLastCheckedLabel(){
+  const el = document.getElementById('riskFlagsLastChecked');
+  if(!el) return;
+  if(!lastRiskFlagsCheckedAt){ el.textContent = ''; return; }
+  const d = new Date(lastRiskFlagsCheckedAt);
+  el.textContent = `Last checked ${d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}`;
 }
 
 /* ---------------- AI result modal ---------------- */
@@ -847,6 +867,38 @@ function bindAiEvents(){
         showToast(err.message || 'AI brief failed');
       }finally{
         setAiButtonBusy(briefBtn, false);
+      }
+      return;
+    }
+
+    const riskBtn = e.target.closest('#worklistRiskFlagsBtn');
+    if(riskBtn){
+      e.stopPropagation();
+      if(!canUseAi()){
+        showToast('AI not available — check server key or connection');
+        return;
+      }
+      const list = collectWardBriefPatients();
+      if(!list.length){
+        showToast('No inpatients to check');
+        return;
+      }
+      setAiButtonBusy(riskBtn, true);
+      try{
+        // wardRiskFlags identifies patients by `bed` when talking to OpenAI
+        // (only allow-listed fields leave the server), but needs the real
+        // `id` back in the raw request body to resolve bed -> patientId.
+        const patients = list.map(p => Object.assign(buildPatientAiSnapshot(p), { id: p.id }));
+        const { flags } = await callAi('risk-flags', { patients });
+        lastRiskFlags = new Map((flags || []).map(f => [f.patientId, f.flag]));
+        lastRiskFlagsCheckedAt = Date.now();
+        updateRiskFlagsLastCheckedLabel();
+        renderAll();
+        showToast(flags && flags.length ? `${flags.length} risk${flags.length > 1 ? 's' : ''} flagged` : 'No risks flagged right now');
+      }catch(err){
+        showToast(err.message || 'AI risk check failed');
+      }finally{
+        setAiButtonBusy(riskBtn, false);
       }
       return;
     }
@@ -2246,6 +2298,93 @@ function formatLabsLine(p){
   return parts.join(' · ');
 }
 
+const LABS_HISTORY_MAX = 60;
+
+/**
+ * Appends/updates today's labsHistory entry without touching p.labs itself
+ * (every existing read of p.labs stays a simple "current value" lookup).
+ * `patch` may be a partial set of keys (inline single-value edit) or the
+ * full LAB_SPEC key set (patient-detail modal save).
+ */
+function upsertLabsHistoryEntry(p, patch, date){
+  date = date || todayISO();
+  p.labsHistory = p.labsHistory || [];
+  const existing = p.labsHistory.find(h => h && h.date === date);
+  if(existing){
+    Object.assign(existing, patch);
+  }else{
+    p.labsHistory.push(Object.assign({ date }, patch));
+  }
+  if(p.labsHistory.length > LABS_HISTORY_MAX){
+    p.labsHistory.sort((a, b) => String(a.date).localeCompare(String(b.date)));
+    p.labsHistory = p.labsHistory.slice(-LABS_HISTORY_MAX);
+  }
+}
+
+/* ---------------- labs trend sparklines ---------------- */
+
+const LAB_TREND_LABELS = { hb: 'Hb', crp: 'CRP', wcc: 'TLC', creatinine: 'Creatinine' };
+const LAB_TREND_W = 130;
+const LAB_TREND_H = 34;
+const LAB_TREND_PAD = 4;
+
+function labTrendThreshold(key){
+  const spec = LAB_SPEC[key];
+  if(!spec) return null;
+  if(key === 'hb') return spec.low;
+  return spec.high;
+}
+
+function renderLabSparkline(key, history){
+  const label = LAB_TREND_LABELS[key];
+  const points = history
+    .map(h => ({ date: h.date, val: parseFloat(h[key]) }))
+    .filter(pt => !isNaN(pt.val));
+
+  if(points.length < 2){
+    return `<div class="lab-trend-item"><div class="lab-trend-label">${escapeHTML(label)}</div><div class="lab-trend-empty">Not enough data yet</div></div>`;
+  }
+
+  const threshold = labTrendThreshold(key);
+  const allVals = points.map(pt => pt.val).concat(threshold != null ? [threshold] : []);
+  const min = Math.min(...allVals);
+  const max = Math.max(...allVals);
+  const range = (max - min) || 1;
+  const w = LAB_TREND_W, h = LAB_TREND_H, pad = LAB_TREND_PAD;
+  const xAt = i => pad + (i / (points.length - 1)) * (w - pad * 2);
+  const yAt = v => h - pad - ((v - min) / range) * (h - pad * 2);
+
+  const pathD = points.map((pt, i) => `${i === 0 ? 'M' : 'L'}${xAt(i).toFixed(1)},${yAt(pt.val).toFixed(1)}`).join(' ');
+  const last = points[points.length - 1];
+  const lastCls = labValueClass(key, last.val);
+  const dotColor = lastCls === 'lab-low' ? 'var(--bad)' : lastCls === 'lab-high' ? 'var(--warn)' : 'var(--accent)';
+  const thresholdLine = threshold != null
+    ? `<line x1="${pad}" y1="${yAt(threshold).toFixed(1)}" x2="${w - pad}" y2="${yAt(threshold).toFixed(1)}" stroke="var(--line)" stroke-width="1" stroke-dasharray="3,3"/>`
+    : '';
+  const dots = points.map((pt, i) => {
+    const isLast = i === points.length - 1;
+    return `<circle cx="${xAt(i).toFixed(1)}" cy="${yAt(pt.val).toFixed(1)}" r="${isLast ? 3.2 : 2}" fill="${isLast ? dotColor : 'var(--ink-soft)'}"><title>${escapeHTML(pt.date)}: ${escapeHTML(String(pt.val))}</title></circle>`;
+  }).join('');
+
+  return `
+    <div class="lab-trend-item">
+      <div class="lab-trend-label"><span>${escapeHTML(label)}</span><span class="lab-trend-latest" style="color:${dotColor}">${escapeHTML(String(last.val))}</span></div>
+      <svg class="lab-trend-svg" viewBox="0 0 ${w} ${h}" role="img" aria-label="${escapeHTML(label)} trend, latest ${escapeHTML(String(last.val))}">
+        ${thresholdLine}
+        <path d="${pathD}" fill="none" stroke="var(--ink-soft)" stroke-width="2"/>
+        ${dots}
+      </svg>
+    </div>`;
+}
+
+function renderLabsTrendPanel(p){
+  const history = (p.labsHistory || []).slice().sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  if(!history.length){
+    return `<div class="labs-trend-panel"><div class="lab-trend-empty">No lab history yet — values you save will build a trend here.</div></div>`;
+  }
+  return `<div class="labs-trend-panel">${Object.keys(LAB_TREND_LABELS).map(key => renderLabSparkline(key, history)).join('')}</div>`;
+}
+
 function touchChecklistItem(c){
   c.updatedAt = Date.now();
   return c;
@@ -2278,6 +2417,17 @@ function mergePlanHistory(localHist, remoteHist){
   return [...byDate.values()].sort((a,b)=> String(a.date).localeCompare(String(b.date))).slice(-PLAN_HISTORY_MAX);
 }
 
+function mergeLabsHistory(localHist, remoteHist){
+  const byDate = new Map();
+  for(const h of (remoteHist || [])){
+    if(h && h.date) byDate.set(h.date, h);
+  }
+  for(const h of (localHist || [])){
+    if(h && h.date) byDate.set(h.date, h);
+  }
+  return [...byDate.values()].sort((a,b)=> String(a.date).localeCompare(String(b.date))).slice(-LABS_HISTORY_MAX);
+}
+
 function mergePatientRecords(local, remote){
   if(!local) return Object.assign({}, remote);
   if(!remote) return Object.assign({}, local);
@@ -2295,6 +2445,7 @@ function mergePatientRecords(local, remote){
   }
   merged.planHistory = mergePlanHistory(local.planHistory, remote.planHistory);
   merged.labs = Object.assign({}, remote.labs || {}, local.labs || {});
+  merged.labsHistory = mergeLabsHistory(local.labsHistory, remote.labsHistory);
 
   const localPlanTs = Number(local.planUpdatedAt) || 0;
   const remotePlanTs = Number(remote.planUpdatedAt) || 0;
@@ -2902,6 +3053,10 @@ function bindAuthEvents(){
     closeSheet('moreSheetOverlay');
     logout();
   });
+  document.getElementById('morePushToggleBtn')?.addEventListener('click', ()=>{
+    closeSheet('moreSheetOverlay');
+    void togglePushReminders();
+  });
   document.getElementById('accountModalClose')?.addEventListener('click', closeAccountModal);
   document.getElementById('accountModalCloseBtn')?.addEventListener('click', closeAccountModal);
   document.getElementById('createUserBtn')?.addEventListener('click', ()=> void createUserFromModal());
@@ -2936,6 +3091,81 @@ function updateAccountUI(){
   if(dRoleEl) dRoleEl.textContent = roleTag;
   const dManageBtn = document.getElementById('desktopManageUsersBtn');
   if(dManageBtn) dManageBtn.style.display = admin ? '' : 'none';
+}
+
+/* ---------------- push reminders ---------------- */
+
+// The Push API/service workers simply don't exist on an insecure origin
+// (except localhost) — this is the documented plain-HTTP LAN use case, so
+// the toggle must not even appear there rather than showing a dead control.
+function isPushEligible(){
+  return ('serviceWorker' in navigator) && ('PushManager' in window)
+    && (location.protocol === 'https:' || location.hostname === 'localhost');
+}
+
+function urlBase64ToUint8Array(base64String){
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const raw = atob(base64);
+  return Uint8Array.from([...raw].map(c => c.charCodeAt(0)));
+}
+
+async function getExistingPushSubscription(){
+  if(!isPushEligible()) return null;
+  try{
+    const reg = await navigator.serviceWorker.ready;
+    return await reg.pushManager.getSubscription();
+  }catch{
+    return null;
+  }
+}
+
+async function updatePushToggleUI(){
+  const eligible = isPushEligible() && !!vapidPublicKey;
+  const sub = eligible ? await getExistingPushSubscription() : null;
+  const label = sub ? 'Disable reminders' : 'Enable reminders';
+
+  const moreBtn = document.getElementById('morePushToggleBtn');
+  if(moreBtn){
+    moreBtn.style.display = eligible ? '' : 'none';
+    const labelEl = document.getElementById('morePushToggleLabel');
+    if(labelEl) labelEl.textContent = label;
+  }
+  const desktopBtn = document.getElementById('desktopPushToggleBtn');
+  if(desktopBtn){
+    desktopBtn.style.display = eligible ? '' : 'none';
+    desktopBtn.textContent = label;
+  }
+}
+
+async function togglePushReminders(){
+  if(!isPushEligible()){
+    showToast('Reminders need a secure (https) connection');
+    return;
+  }
+  if(!vapidPublicKey){
+    showToast('Reminders are not available on this server');
+    return;
+  }
+  try{
+    const reg = await navigator.serviceWorker.ready;
+    const existing = await reg.pushManager.getSubscription();
+    if(existing){
+      await existing.unsubscribe();
+      await api('/api/push/unsubscribe', { method: 'POST', body: JSON.stringify({ endpoint: existing.endpoint }) }).catch(()=>{});
+      showToast('Reminders turned off');
+    }else{
+      const sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(vapidPublicKey)
+      });
+      await api('/api/push/subscribe', { method: 'POST', body: JSON.stringify({ subscription: sub.toJSON() }) });
+      showToast('Reminders turned on', { success: true });
+    }
+  }catch(err){
+    showToast(err.message || 'Could not update reminders');
+  }
+  await updatePushToggleUI();
 }
 
 async function openAccountModal(){
@@ -3063,6 +3293,10 @@ function bindEvents(){
   document.getElementById('desktopManageUsersBtn')?.addEventListener('click', ()=>{
     document.getElementById('moreMenuPanel')?.classList.remove('open');
     void openAccountModal();
+  });
+  document.getElementById('desktopPushToggleBtn')?.addEventListener('click', ()=>{
+    document.getElementById('moreMenuPanel')?.classList.remove('open');
+    void togglePushReminders();
   });
   document.getElementById('presentBtn').addEventListener('click', openPresentationMode);
   document.getElementById('censusBtn').addEventListener('click', exportCensus);
@@ -3790,6 +4024,8 @@ function getPatientFlags(p){
   if(p.status==='fordischarge' && !pendingInv.length && !pendingFit.length && !hasIncompleteDischargeChecks(p)){
     flags.push({type:'good', text:'Ready for discharge'});
   }
+  const aiFlag = lastRiskFlags && lastRiskFlags.get(p.id);
+  if(aiFlag) flags.push({ type: aiFlag.type, text: '✨ ' + aiFlag.text });
   return flags;
 }
 
@@ -4917,6 +5153,9 @@ function renderWorklist(){
       p.labs = p.labs || {};
       p.labs[inp.dataset.labKey] = inp.value.trim();
       p.labs.updatedAt = todayISO();
+      if(p.labs[inp.dataset.labKey]){
+        upsertLabsHistoryEntry(p, { [inp.dataset.labKey]: p.labs[inp.dataset.labKey] }, p.labs.updatedAt);
+      }
       await persistAndRerender(p);
       showToast('Lab updated');
     });
@@ -5267,6 +5506,7 @@ function renderModalForm(d){
         <div><span>TLC (cells/cu.mm)</span><input id="f_lab_wcc" inputmode="decimal" placeholder="e.g. 8500" value="${escapeHTML((d.labs||{}).wcc||'')}" class="${labValueClass('wcc', (d.labs||{}).wcc)}"></div>
         <div><span>Creatinine (mg/dL)</span><input id="f_lab_creatinine" inputmode="decimal" placeholder="e.g. 0.9" value="${escapeHTML((d.labs||{}).creatinine||'')}" class="${labValueClass('creatinine', (d.labs||{}).creatinine)}"></div>
       </div>
+      ${renderLabsTrendPanel(d)}
     </div>
 
     <div class="form-row">
@@ -6063,6 +6303,9 @@ async function savePatientFromModal(){
       creatinine: document.getElementById('f_lab_creatinine')?.value.trim() || '',
       updatedAt: todayISO()
     };
+    if(d.labs.hb || d.labs.crp || d.labs.wcc || d.labs.creatinine){
+      upsertLabsHistoryEntry(d, { hb: d.labs.hb, crp: d.labs.crp, wcc: d.labs.wcc, creatinine: d.labs.creatinine }, d.labs.updatedAt);
+    }
     d.procedure = document.getElementById('f_procedure').value.trim();
     d.surgeon = document.getElementById('f_surgeon').value.trim();
     d.implant = document.getElementById('f_implant').value.trim();

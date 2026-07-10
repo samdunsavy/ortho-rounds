@@ -40,6 +40,7 @@ import {
   handoverSummary,
   dischargeSummary,
   wardBrief,
+  wardRiskFlags,
   parseAdmission,
   scribeRoundNote
 } from './ai.js';
@@ -53,6 +54,8 @@ import {
   bootstrapAdmin
 } from './auth.js';
 import { mergePatientRecords, stampAttribution } from './merge.js';
+import { logError, logWarn } from './logger.js';
+import { runDigestPass } from './notifications.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -71,10 +74,22 @@ const MAX_BODY_BYTES = 64 * 1024 * 1024; // 64MB — patients can carry base64 X
 
 async function setupConfig(store){
   const config = await store.loadRawConfig();
+  let changed = false;
   if(!config.tokenSecret){
     config.tokenSecret = crypto.randomBytes(32).toString('hex');
-    await store.saveRawConfig(config);
+    changed = true;
   }
+  if(!config.vapidPublicKey || !config.vapidPrivateKey){
+    // Dynamic import so LAN-only installs that never touch push never pay
+    // for loading web-push — same pattern storage.js uses for 'mongodb'.
+    // web-push is CommonJS — its functions live on the default export.
+    const webPush = (await import('web-push')).default;
+    const keys = webPush.generateVAPIDKeys();
+    config.vapidPublicKey = keys.publicKey;
+    config.vapidPrivateKey = keys.privateKey;
+    changed = true;
+  }
+  if(changed) await store.saveRawConfig(config);
   return config;
 }
 
@@ -193,7 +208,8 @@ async function handleApi(req, res, pathname){
       app: 'ortho-rounds',
       storage: store ? store.kind : 'starting',
       time: Date.now(),
-      ai: getAiConfig()
+      ai: getAiConfig(),
+      vapidPublicKey: config ? config.vapidPublicKey : null
     });
   }
   if(pathname === '/api/login' && req.method === 'POST'){
@@ -226,6 +242,25 @@ async function handleApi(req, res, pathname){
 
   if(pathname === '/api/account/revoke-sessions' && req.method === 'POST'){
     await store.updateUser(actor.id, { tokenVersion: (authedUser.tokenVersion || 0) + 1 });
+    return sendJSON(res, 200, { ok: true });
+  }
+
+  if(pathname === '/api/push/subscribe' && req.method === 'POST'){
+    const body = await readBody(req) || {};
+    const sub = body.subscription;
+    if(!sub || typeof sub.endpoint !== 'string' || !sub.keys || typeof sub.keys.p256dh !== 'string' || typeof sub.keys.auth !== 'string'){
+      return sendJSON(res, 400, { error: 'Invalid push subscription' });
+    }
+    await store.createSubscription({
+      id: crypto.randomUUID(), userId: actor.id, endpoint: sub.endpoint,
+      p256dh: sub.keys.p256dh, auth: sub.keys.auth, createdAt: Date.now()
+    });
+    return sendJSON(res, 200, { ok: true });
+  }
+
+  if(pathname === '/api/push/unsubscribe' && req.method === 'POST'){
+    const body = await readBody(req) || {};
+    if(typeof body.endpoint === 'string') await store.deleteSubscription(body.endpoint);
     return sendJSON(res, 200, { ok: true });
   }
 
@@ -434,6 +469,13 @@ async function handleApi(req, res, pathname){
         const text = await wardBrief(body.patients);
         return sendJSON(res, 200, { text });
       }
+      if(pathname === '/api/ai/risk-flags'){
+        if(!Array.isArray(body.patients)){
+          return sendJSON(res, 400, { error: 'patients array required' });
+        }
+        const flags = await wardRiskFlags(body.patients);
+        return sendJSON(res, 200, { flags });
+      }
       if(pathname === '/api/ai/parse-admission'){
         if(typeof body.text !== 'string' || !body.text.trim()){
           return sendJSON(res, 400, { error: 'admission note text required' });
@@ -490,8 +532,8 @@ let store = null;
 let config = null;
 
 const server = http.createServer(async (req, res)=>{
+  const pathname = (req.url.split('?')[0]) || '/';
   try{
-    const pathname = (req.url.split('?')[0]) || '/';
     if(pathname.startsWith('/api/')){
       await handleApi(req, res, pathname);
     }else{
@@ -504,7 +546,7 @@ const server = http.createServer(async (req, res)=>{
     }else{
       try{ res.end(); }catch{ /* ignore */ }
     }
-    if(status >= 500) console.error(err);
+    if(status >= 500) logError('request_failed', err, { method: req.method, path: pathname, status });
   }
 });
 
@@ -556,14 +598,28 @@ async function printStartupBanner(bootstrap){
   console.log('\n  Press Ctrl+C to stop.\n');
 }
 
+const DIGEST_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
+let digestIntervalHandle = null;
+
+async function runDigestPassSafely(){
+  try{
+    const rows = await store.getActive();
+    await runDigestPass(store, config, rows.map(rowToPatient));
+  }catch(err){
+    logWarn('digest_pass_failed', { errMessage: err.message });
+  }
+}
+
 async function main(){
   store = await createStore({ dataDir: DATA_DIR, mongoUri: MONGODB_URI });
   await store.init();
   config = await setupConfig(store);
   const bootstrap = await bootstrapAdmin(store);
   await store.autoBackup();
+  digestIntervalHandle = setInterval(runDigestPassSafely, DIGEST_INTERVAL_MS);
+  digestIntervalHandle.unref();
   server.listen(PORT, HOST, ()=>{
-    printStartupBanner(bootstrap).catch(err => console.warn('Banner error:', err.message));
+    printStartupBanner(bootstrap).catch(err => logWarn('startup_banner_failed', { errMessage: err.message }));
   });
 }
 
@@ -571,6 +627,7 @@ let shuttingDown = false;
 function shutdown(){
   if(shuttingDown) return;
   shuttingDown = true;
+  if(digestIntervalHandle) clearInterval(digestIntervalHandle);
   const done = ()=> process.exit(0);
   server.close(()=>{
     Promise.resolve(store && store.close()).then(done, done);
@@ -581,6 +638,6 @@ process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
 main().catch(err =>{
-  console.error('Failed to start server:', err);
+  logError('server_start_failed', err);
   process.exit(1);
 });
