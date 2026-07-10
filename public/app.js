@@ -656,8 +656,53 @@ function planActionButtonsHtml(patientId, target){
 }
 
 function updateAiButtonsVisibility(){
+  const show = canUseAi() ? '' : 'none';
   const genBtn = document.getElementById('worklistGenerateHandoverBtn');
-  if(genBtn) genBtn.style.display = canUseAi() ? '' : 'none';
+  if(genBtn) genBtn.style.display = show;
+  const briefBtn = document.getElementById('worklistMorningBriefBtn');
+  if(briefBtn) briefBtn.style.display = show;
+}
+
+/* ---------------- AI result modal ---------------- */
+
+function openAiResultModal(title, text, hint){
+  document.getElementById('aiResultTitle').textContent = title;
+  document.getElementById('aiResultHint').textContent = hint || '';
+  document.getElementById('aiResultText').value = text;
+  document.getElementById('aiResultModal').classList.add('active');
+}
+
+function closeAiResultModal(){
+  document.getElementById('aiResultModal').classList.remove('active');
+}
+
+async function copyAiResultText(){
+  const text = document.getElementById('aiResultText').value;
+  try{
+    await navigator.clipboard.writeText(text);
+    showToast('Copied to clipboard');
+  }catch{
+    const ta = document.getElementById('aiResultText');
+    ta.focus();
+    ta.select();
+    showToast('Press Ctrl/Cmd+C to copy');
+  }
+}
+
+/** Extended snapshot for discharge summaries: full course context. */
+function buildDischargeAiSnapshot(p){
+  const snapshot = buildPatientAiSnapshot(p);
+  snapshot.planHistory = (p.planHistory || []).slice(-10).map(h => ({ date: h.date, text: h.text }));
+  snapshot.milestones = (p.postOpChecks || []).map(c => ({ label: c.label, status: c.status }));
+  snapshot.dischargeChecks = (p.dischargeChecks || []).map(c => ({ label: c.label, status: c.status, required: c.required !== false }));
+  snapshot.antibioticCourses = getAntibioticCourseStatuses(p).map(s => s.label);
+  snapshot.complications = (p.complications || []).map(c =>
+    `${c.type || 'Note'}${c.date ? ' (' + fmtDate(c.date) + ')' : ''}${c.note ? ': ' + c.note : ''}`);
+  return snapshot;
+}
+
+function collectWardBriefPatients(){
+  return getActiveRoundsItems().slice(0, 40);
 }
 
 function bindAiEvents(){
@@ -743,6 +788,67 @@ function bindAiEvents(){
       return;
     }
 
+    const dischargeBtn = e.target.closest('[data-ai-discharge-summary]');
+    if(dischargeBtn){
+      e.stopPropagation();
+      const p = patients.find(x => x.id === dischargeBtn.dataset.patientId);
+      if(!p) return;
+      if(!canUseAi()){
+        showToast('AI not available — check server key or connection');
+        return;
+      }
+      setAiButtonBusy(dischargeBtn, true);
+      try{
+        const { text } = await callAi('discharge-summary', { patient: buildDischargeAiSnapshot(p) });
+        openAiResultModal(
+          `Discharge summary — ${p.name || 'patient'}`,
+          text,
+          'AI draft from the recorded course. Review, edit and fill any [placeholders] before use.'
+        );
+      }catch(err){
+        showToast(err.message || 'AI discharge summary failed');
+      }finally{
+        setAiButtonBusy(dischargeBtn, false);
+      }
+      return;
+    }
+
+    const briefBtn = e.target.closest('#worklistMorningBriefBtn');
+    if(briefBtn){
+      e.stopPropagation();
+      if(!canUseAi()){
+        showToast('AI not available — check server key or connection');
+        return;
+      }
+      const list = collectWardBriefPatients();
+      if(!list.length){
+        showToast('No inpatients to brief on');
+        return;
+      }
+      setAiButtonBusy(briefBtn, true);
+      try{
+        const { text } = await callAi('ward-brief', { patients: list.map(buildPatientAiSnapshot) });
+        openAiResultModal(
+          'Morning ward brief',
+          text,
+          `Generated from ${list.length} inpatient${list.length > 1 ? 's' : ''} — verify before acting.`
+        );
+      }catch(err){
+        showToast(err.message || 'AI brief failed');
+      }finally{
+        setAiButtonBusy(briefBtn, false);
+      }
+      return;
+    }
+
+    const smartBtn = e.target.closest('#smartPasteBtn');
+    if(smartBtn){
+      e.stopPropagation();
+      e.preventDefault();
+      await runSmartPaste(smartBtn);
+      return;
+    }
+
     const genHandoverBtn = e.target.closest('#worklistGenerateHandoverBtn');
     if(genHandoverBtn){
       e.stopPropagation();
@@ -770,6 +876,60 @@ function bindAiEvents(){
   document.getElementById('bulkDraftClose')?.addEventListener('click', closeBulkDraftModal);
   document.getElementById('bulkDraftCancelBtn')?.addEventListener('click', closeBulkDraftModal);
   document.getElementById('bulkDraftSaveBtn')?.addEventListener('click', ()=> void saveBulkDraftPlans());
+  document.getElementById('aiResultClose')?.addEventListener('click', closeAiResultModal);
+  document.getElementById('aiResultCloseBtn')?.addEventListener('click', closeAiResultModal);
+  document.getElementById('aiResultCopyBtn')?.addEventListener('click', ()=> void copyAiResultText());
+}
+
+/* ---------------- smart admission intake ---------------- */
+
+const SMART_PASTE_FIELD_MAP = {
+  name: 'f_name', bed: 'f_bed', ward: 'f_ward', age: 'f_age', uhid: 'f_uhid',
+  admissionDate: 'f_admissionDate', diagnosis: 'f_diagnosis', surgeryDate: 'f_surgeryDate',
+  theatreTime: 'f_theatreTime', procedure: 'f_procedure', surgeon: 'f_surgeon',
+  implant: 'f_implant', dailyPlan: 'f_dailyPlan', handoverNote: 'f_handoverNote', notes: 'f_notes'
+};
+
+async function runSmartPaste(btn){
+  const src = document.getElementById('f_smartPaste');
+  const text = (src?.value || '').trim();
+  if(!text){
+    showToast('Paste or dictate the admission note first');
+    return;
+  }
+  if(!canUseAi()){
+    showToast('AI not available — check server key or connection');
+    return;
+  }
+  setAiButtonBusy(btn, true);
+  try{
+    const { fields } = await callAi('parse-admission', { text });
+    let filled = 0;
+    for(const [key, id] of Object.entries(SMART_PASTE_FIELD_MAP)){
+      const val = fields?.[key];
+      if(!val) continue;
+      const el = document.getElementById(id);
+      if(!el) continue;
+      el.value = val;
+      filled++;
+    }
+    for(const key of ['sex', 'status']){
+      const val = fields?.[key];
+      const el = document.getElementById(key === 'sex' ? 'f_sex' : 'f_status');
+      if(val && el && [...el.options].some(o => o.value === val)){
+        el.value = val;
+        filled++;
+      }
+    }
+    if(fields?.status){
+      document.getElementById('f_status')?.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    showToast(filled ? `Filled ${filled} field${filled > 1 ? 's' : ''} — review before saving` : 'Nothing recognisable in that note');
+  }catch(err){
+    showToast(err.message || 'Smart fill failed');
+  }finally{
+    setAiButtonBusy(btn, false);
+  }
 }
 
 /* ---------------- sync engine ---------------- */
@@ -3528,6 +3688,7 @@ function renderCardBody(p){
 
     <div class="card-actions">
       <button class="btn primary" data-action="edit" data-id="${p.id}">Edit details</button>
+      ${canUseAi() && (p.status === 'fordischarge' || p.status === 'postop') ? `<button class="btn ai-btn" data-ai-discharge-summary data-patient-id="${escapeHTML(p.id)}">✨ Discharge summary</button>` : ''}
       ${!isConsultantMode() ? `<button class="btn" data-action="clone-patient" data-id="${p.id}">Clone</button>` : ''}
       ${p.status!=='fordischarge' && p.status!=='discharged' ? `<button class="btn" data-action="mark-fordischarge" data-id="${p.id}">Mark for discharge</button>` : ''}
       ${p.status==='fordischarge' ? `<button class="btn" data-action="unmark-fordischarge" data-id="${p.id}">Unmark for discharge</button>` : ''}
@@ -4253,6 +4414,7 @@ function renderDischarged(){
             <div class="card-dx">${escapeHTML(p.diagnosis)}</div>
             <div class="card-proc">${escapeHTML(p.procedure||'')} · Discharged ${fmtDate(p.dischargeDate)}</div>
           </div>
+          ${canUseAi() ? `<button type="button" class="btn btn-sm ai-btn" data-ai-discharge-summary data-patient-id="${escapeHTML(p.id)}">✨ Summary</button>` : ''}
           <button type="button" class="btn btn-sm pressable" data-action="reopen" data-id="${p.id}">Reopen</button>
         </div>
       </div>
@@ -4393,6 +4555,13 @@ function flushChecklistsFromModal(d){
 
 function renderModalForm(d){
   return `
+    ${!editingPatientId && canUseAi() ? `
+    <div class="smart-paste-box">
+      <label style="font-weight:700;">✨ Smart fill from admission note</label>
+      <textarea id="f_smartPaste" placeholder="Paste (or dictate) the admission note here — e.g. '45yr male, bed A12, closed femur shaft fracture, operated yesterday IM nailing by Dr Rao…'"></textarea>
+      <button type="button" class="btn ai-btn" id="smartPasteBtn">✨ Fill form</button>
+      <div class="form-hint">AI fills the fields below for your review — nothing is saved until you press Save.</div>
+    </div>` : ''}
     <div class="form-row two">
       <div><label>Patient name</label><input id="f_name" value="${escapeHTML(d.name)}" placeholder="Full name"></div>
       <div><label>Ward / bed</label><input id="f_bed" value="${escapeHTML(d.bed)}" placeholder="e.g. 7FOW-12"></div>
