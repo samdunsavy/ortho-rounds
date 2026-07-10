@@ -653,7 +653,13 @@ function voicePlanButtonHtml(patientId, target){
 }
 
 function planActionButtonsHtml(patientId, target){
-  return `<span class="plan-action-btns">${voicePlanButtonHtml(patientId, target)}${aiDraftPlanButtonHtml(patientId, target)}</span>`;
+  const scribe = (!target || target === 'card') ? scribeButtonHtml(patientId) : '';
+  return `<span class="plan-action-btns">${voicePlanButtonHtml(patientId, target)}${aiDraftPlanButtonHtml(patientId, target)}${scribe}</span>`;
+}
+
+function scribeButtonHtml(patientId){
+  if(!canUseAi()) return '';
+  return `<button type="button" class="btn btn-sm ai-btn" data-scribe data-patient-id="${escapeHTML(patientId)}" title="Dictate the bedside note — AI fills plan, milestones and handover">🎤 Scribe</button>`;
 }
 
 function updateAiButtonsVisibility(){
@@ -850,6 +856,18 @@ function bindAiEvents(){
       return;
     }
 
+    const scribeBtn = e.target.closest('[data-scribe]');
+    if(scribeBtn){
+      e.stopPropagation();
+      e.preventDefault();
+      if(!canUseAi()){
+        showToast('AI not available — check server key or connection');
+        return;
+      }
+      openScribeModal(scribeBtn.dataset.patientId);
+      return;
+    }
+
     const genHandoverBtn = e.target.closest('#worklistGenerateHandoverBtn');
     if(genHandoverBtn){
       e.stopPropagation();
@@ -880,6 +898,243 @@ function bindAiEvents(){
   document.getElementById('aiResultClose')?.addEventListener('click', closeAiResultModal);
   document.getElementById('aiResultCloseBtn')?.addEventListener('click', closeAiResultModal);
   document.getElementById('aiResultCopyBtn')?.addEventListener('click', ()=> void copyAiResultText());
+  document.getElementById('scribeClose')?.addEventListener('click', closeScribeModal);
+  document.getElementById('scribeCancelBtn')?.addEventListener('click', closeScribeModal);
+  document.getElementById('scribeMicBtn')?.addEventListener('click', toggleScribeDictation);
+  document.getElementById('scribeParseBtn')?.addEventListener('click', (e)=> void runScribeParse(e.currentTarget));
+  document.getElementById('scribeApplyBtn')?.addEventListener('click', ()=> void applyScribeResult());
+}
+
+/* ---------------- bedside scribe ---------------- */
+
+let scribePatientId = null;
+let scribeResult = null;
+let scribeRecognition = null;
+
+function scribeHintFor(p){
+  if(p.status === 'postop' || p.status === 'fordischarge'){
+    return 'Post-op convention: say the POD, what was done, and the plans — discharge planning, physiotherapy, dressings, investigations.';
+  }
+  return 'Pre-op / conservative convention: say the diagnosis and the plan.';
+}
+
+function openScribeModal(patientId){
+  const p = patients.find(x => x.id === patientId);
+  if(!p) return;
+  scribePatientId = patientId;
+  scribeResult = null;
+  document.getElementById('scribeTitle').textContent = `Bedside scribe — ${p.name || 'patient'}`;
+  document.getElementById('scribeHint').textContent = scribeHintFor(p);
+  document.getElementById('scribeTranscript').value = '';
+  const review = document.getElementById('scribeReview');
+  review.style.display = 'none';
+  review.innerHTML = '';
+  document.getElementById('scribeApplyBtn').disabled = true;
+  const micBtn = document.getElementById('scribeMicBtn');
+  micBtn.style.display = isVoicePlanSupported() ? '' : 'none';
+  micBtn.textContent = '🎤 Start dictation';
+  micBtn.classList.remove('listening');
+  document.getElementById('scribeModal').classList.add('active');
+}
+
+function stopScribeDictation(){
+  if(scribeRecognition){
+    try{ scribeRecognition.stop(); }catch{ /* ignore */ }
+    scribeRecognition = null;
+  }
+  const micBtn = document.getElementById('scribeMicBtn');
+  if(micBtn){
+    micBtn.classList.remove('listening');
+    micBtn.textContent = '🎤 Start dictation';
+  }
+}
+
+function closeScribeModal(){
+  stopScribeDictation();
+  document.getElementById('scribeModal').classList.remove('active');
+  scribePatientId = null;
+  scribeResult = null;
+}
+
+function toggleScribeDictation(){
+  if(scribeRecognition){
+    stopScribeDictation();
+    return;
+  }
+  if(!isVoicePlanSupported()){
+    showToast('Voice input not supported in this browser');
+    return;
+  }
+  stopVoicePlanDictation();
+  if(window.speechSynthesis) window.speechSynthesis.cancel();
+  const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const rec = new Recognition();
+  rec.lang = 'en-IN';
+  rec.interimResults = false;
+  rec.continuous = true;
+  rec.maxAlternatives = 1;
+  rec.onresult = (e)=>{
+    const input = document.getElementById('scribeTranscript');
+    for(let i = e.resultIndex; i < e.results.length; i++){
+      if(!e.results[i].isFinal) continue;
+      const chunk = e.results[i][0].transcript.trim();
+      if(chunk) input.value = (input.value ? input.value.replace(/\s+$/, '') + ' ' : '') + chunk;
+    }
+  };
+  rec.onerror = (e)=>{
+    stopScribeDictation();
+    if(e.error === 'not-allowed') showToast('Microphone permission denied');
+    else if(e.error !== 'aborted') showToast('Voice input failed — try again');
+  };
+  rec.onend = ()=>{ if(scribeRecognition === rec) stopScribeDictation(); };
+  scribeRecognition = rec;
+  const micBtn = document.getElementById('scribeMicBtn');
+  micBtn.classList.add('listening');
+  micBtn.textContent = '⏹ Stop dictation';
+  rec.start();
+}
+
+function buildScribeAiSnapshot(p){
+  const snapshot = buildPatientAiSnapshot(p);
+  snapshot.milestones = (p.postOpChecks || []).map(c => ({ id: c.id, label: c.label, status: c.status }));
+  snapshot.dischargeChecks = (p.dischargeChecks || []).map(c => ({ id: c.id, label: c.label, status: c.status }));
+  return snapshot;
+}
+
+async function runScribeParse(btn){
+  const p = patients.find(x => x.id === scribePatientId);
+  const transcript = document.getElementById('scribeTranscript').value.trim();
+  if(!p) return;
+  if(!transcript){
+    showToast('Dictate or type the bedside note first');
+    return;
+  }
+  if(!canUseAi()){
+    showToast('AI not available — check server key or connection');
+    return;
+  }
+  stopScribeDictation();
+  setAiButtonBusy(btn, true);
+  try{
+    const { result } = await callAi('scribe', { patient: buildScribeAiSnapshot(p), transcript });
+    scribeResult = result;
+    renderScribeReview(p, result);
+  }catch(err){
+    showToast(err.message || 'Scribe failed');
+  }finally{
+    setAiButtonBusy(btn, false);
+  }
+}
+
+function renderScribeReview(p, r){
+  const review = document.getElementById('scribeReview');
+  const msById = new Map((p.postOpChecks || []).map(c => [c.id, c]));
+  const dcById = new Map((p.dischargeChecks || []).map(c => [c.id, c]));
+  const milestones = (r.milestonesDone || []).map(id => msById.get(id)).filter(Boolean);
+  const discharge = (r.dischargeChecksDone || []).map(id => dcById.get(id)).filter(Boolean);
+  const hasAnything = r.dailyPlan || r.handoverNote || milestones.length || discharge.length || r.complication || r.markForDischarge;
+
+  if(!hasAnything){
+    review.innerHTML = `<div class="scribe-empty">Nothing actionable found in that note — edit it and extract again.</div>`;
+    review.style.display = '';
+    document.getElementById('scribeApplyBtn').disabled = true;
+    return;
+  }
+
+  review.innerHTML = `
+    <div class="section-label" style="margin-top:0;">Today's plan</div>
+    ${r.dailyPlan
+      ? `<textarea id="scribePlan">${escapeHTML(r.dailyPlan)}</textarea>`
+      : `<div class="scribe-empty">No plan detected — existing plan is kept.</div>`}
+    ${r.handoverNote ? `
+      <div class="section-label">Handover note (appended)</div>
+      <textarea id="scribeHandover">${escapeHTML(r.handoverNote)}</textarea>` : ''}
+    ${milestones.length ? `
+      <div class="section-label">Mark milestones done</div>
+      ${milestones.map(c => `<label class="scribe-check"><input type="checkbox" data-scribe-ms="${escapeHTML(c.id)}" checked> ${escapeHTML(c.label)}</label>`).join('')}` : ''}
+    ${discharge.length ? `
+      <div class="section-label">Mark discharge checks done</div>
+      ${discharge.map(c => `<label class="scribe-check"><input type="checkbox" data-scribe-dc="${escapeHTML(c.id)}" checked> ${escapeHTML(c.label)}</label>`).join('')}` : ''}
+    ${r.complication ? `
+      <div class="section-label">Record complication</div>
+      <label class="scribe-check"><input type="checkbox" id="scribeCompCheck" checked> Add to complications</label>
+      <div class="scribe-comp-row">
+        <input id="scribeCompType" value="${escapeHTML(r.complication.type || 'Complication')}" placeholder="Type">
+        <input id="scribeCompNote" value="${escapeHTML(r.complication.note || '')}" placeholder="Note">
+      </div>` : ''}
+    ${r.markForDischarge && p.status !== 'fordischarge' ? `
+      <div class="section-label">Status</div>
+      <label class="scribe-check"><input type="checkbox" id="scribeForDischarge" checked> Mark for discharge</label>` : ''}
+  `;
+  review.style.display = '';
+  document.getElementById('scribeApplyBtn').disabled = false;
+}
+
+async function applyScribeResult(){
+  const p = patients.find(x => x.id === scribePatientId);
+  if(!p || !scribeResult) return;
+  const applied = [];
+  try{
+    const planEl = document.getElementById('scribePlan');
+    const newPlan = planEl ? planEl.value.trim() : '';
+    if(newPlan && newPlan !== (p.dailyPlan || '').trim()){
+      if(p.dailyPlan && p.dailyPlanDate && (p.dailyPlan !== newPlan || p.dailyPlanDate !== todayISO())){
+        archivePlanToHistory(p, p.dailyPlan, p.dailyPlanDate, getPgInitials());
+      }
+      p.dailyPlan = newPlan;
+      p.dailyPlanDate = todayISO();
+      p.planUpdatedAt = Date.now();
+      applied.push('plan');
+    }
+
+    const handEl = document.getElementById('scribeHandover');
+    const hand = handEl ? handEl.value.trim() : '';
+    if(hand){
+      p.handoverNote = (p.handoverNote || '').trim() ? `${p.handoverNote.trim()} · ${hand}` : hand;
+      applied.push('handover');
+    }
+
+    let msCount = 0;
+    document.querySelectorAll('#scribeReview [data-scribe-ms]:checked').forEach(cb => {
+      const c = (p.postOpChecks || []).find(x => x.id === cb.dataset.scribeMs);
+      if(c && c.status !== 'done'){ c.status = 'done'; c.doneAt = todayISO(); msCount++; }
+    });
+    document.querySelectorAll('#scribeReview [data-scribe-dc]:checked').forEach(cb => {
+      const c = (p.dischargeChecks || []).find(x => x.id === cb.dataset.scribeDc);
+      if(c && c.status !== 'done'){ c.status = 'done'; c.doneAt = todayISO(); msCount++; }
+    });
+    if(msCount) applied.push(`${msCount} milestone${msCount > 1 ? 's' : ''}`);
+
+    if(document.getElementById('scribeCompCheck')?.checked){
+      const type = document.getElementById('scribeCompType')?.value.trim() || 'Complication';
+      const note = document.getElementById('scribeCompNote')?.value.trim() || '';
+      p.complications = p.complications || [];
+      p.complications.push({ type, note, date: todayISO() });
+      applied.push('complication');
+    }
+
+    if(document.getElementById('scribeForDischarge')?.checked){
+      p.status = 'fordischarge';
+      p.statusUpdatedAt = Date.now();
+      if(!(p.dischargeChecks || []).length) applyDischargeTemplate(p);
+      applied.push('for-discharge');
+    }
+
+    if(!applied.length){
+      showToast('Nothing selected to apply');
+      return;
+    }
+    await savePatient(p);
+    closeScribeModal();
+    renderAll();
+    if(document.getElementById('presentationOverlay')?.classList.contains('active')){
+      renderPresentationSlide();
+    }
+    showToast(`Applied: ${applied.join(', ')}`);
+  }catch(err){
+    console.error(err);
+    showToast('Could not apply — ' + (err.message || 'error'));
+  }
 }
 
 /* ---------------- smart admission intake ---------------- */
@@ -5983,7 +6238,7 @@ function renderPresentationSlide(animating){
     </div>
     ${flags.length ? `<div class="flags pres-flags">${flags.map(f=>`<span class="flag ${f.type}">${escapeHTML(f.text)}</span>`).join('')}</div>` : ''}
     ${(p.handoverNote||'').trim() ? `<div class="pres-handover"><strong>Handover:</strong> ${escapeHTML(p.handoverNote.trim())}</div>` : ''}
-    <div class="pres-section"><div class="pres-label">Today's plan</div><div class="pres-plan">${escapeHTML(p.dailyPlan) || '—'}</div></div>
+    <div class="pres-section"><div class="pres-label-row"><span class="pres-label">Today's plan</span>${scribeButtonHtml(p.id)}</div><div class="pres-plan">${escapeHTML(p.dailyPlan) || '—'}</div></div>
     ${renderPresentationExtras(p)}
     ${renderPresentationXrays(p)}
     <div class="pres-section">
