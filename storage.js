@@ -25,6 +25,7 @@ import crypto from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 
 const MAX_BACKUPS = 7;
+const USER_PATCH_FIELDS = ['passwordHash', 'passwordSalt', 'active', 'role', 'tokenVersion'];
 
 export async function createStore(opts){
   if(opts && opts.mongoUri){
@@ -67,6 +68,18 @@ function createSqliteStore({ dataDir }){
         );
       `);
       db.exec('CREATE INDEX IF NOT EXISTS idx_patients_updatedAt ON patients(updatedAt);');
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS users (
+          id           TEXT PRIMARY KEY,
+          username     TEXT NOT NULL UNIQUE,
+          passwordHash TEXT NOT NULL,
+          passwordSalt TEXT NOT NULL,
+          role         TEXT NOT NULL DEFAULT 'member',
+          active       INTEGER NOT NULL DEFAULT 1,
+          tokenVersion INTEGER NOT NULL DEFAULT 0,
+          createdAt    INTEGER NOT NULL
+        );
+      `);
     },
 
     async loadRawConfig(){
@@ -106,6 +119,34 @@ function createSqliteStore({ dataDir }){
     },
     async deleteAllPatients(){ db.exec('DELETE FROM patients'); },
     async countPatients(){ return db.prepare('SELECT COUNT(*) AS n FROM patients').get().n; },
+
+    async getUserByUsername(username){
+      return db.prepare('SELECT * FROM users WHERE username = ?').get(username) || null;
+    },
+    async getUserById(id){
+      return db.prepare('SELECT * FROM users WHERE id = ?').get(id) || null;
+    },
+    async getAllUsers(){
+      return db.prepare('SELECT * FROM users ORDER BY createdAt ASC').all();
+    },
+    async countUsers(){ return db.prepare('SELECT COUNT(*) AS n FROM users').get().n; },
+    async createUser(user){
+      db.prepare(`
+        INSERT INTO users (id, username, passwordHash, passwordSalt, role, active, tokenVersion, createdAt)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        user.id, user.username, user.passwordHash, user.passwordSalt,
+        user.role || 'member', user.active === false ? 0 : 1,
+        user.tokenVersion || 0, user.createdAt || Date.now()
+      );
+    },
+    async updateUser(id, patch){
+      const fields = Object.keys(patch || {}).filter(k => USER_PATCH_FIELDS.includes(k));
+      if(!fields.length) return;
+      const setClause = fields.map(f => `${f} = ?`).join(', ');
+      const values = fields.map(f => (f === 'active' ? (patch[f] ? 1 : 0) : patch[f]));
+      db.prepare(`UPDATE users SET ${setClause} WHERE id = ?`).run(...values, id);
+    },
 
     async begin(){ db.exec('BEGIN'); },
     async commit(){ db.exec('COMMIT'); },
@@ -182,10 +223,17 @@ async function createMongoStore({ mongoUri }){
   const patients = database.collection('patients');
   const configCol = database.collection('config');
   const images = database.collection('images');
+  const users = database.collection('users');
   await patients.createIndex({ updatedAt: 1 });
+  await users.createIndex({ username: 1 }, { unique: true });
 
   const freshStart = (await patients.estimatedDocumentCount()) === 0;
   const mapRow = d => d ? { id: d._id, updatedAt: d.updatedAt, deleted: d.deleted ? 1 : 0, data: d.data } : null;
+  const mapUser = d => d ? {
+    id: d._id, username: d.username, passwordHash: d.passwordHash, passwordSalt: d.passwordSalt,
+    role: d.role || 'member', active: d.active === false ? 0 : 1,
+    tokenVersion: d.tokenVersion || 0, createdAt: d.createdAt
+  } : null;
 
   return {
     kind: 'mongo',
@@ -229,6 +277,33 @@ async function createMongoStore({ mongoUri }){
     },
     async deleteAllPatients(){ await patients.deleteMany({}); },
     async countPatients(){ return await patients.countDocuments(); },
+
+    async getUserByUsername(username){
+      return mapUser(await users.findOne({ username }));
+    },
+    async getUserById(id){
+      return mapUser(await users.findOne({ _id: id }));
+    },
+    async getAllUsers(){
+      const arr = await users.find({}).sort({ createdAt: 1 }).toArray();
+      return arr.map(mapUser);
+    },
+    async countUsers(){ return await users.countDocuments(); },
+    async createUser(user){
+      await users.insertOne({
+        _id: user.id, username: user.username, passwordHash: user.passwordHash,
+        passwordSalt: user.passwordSalt, role: user.role || 'member',
+        active: user.active === false ? 0 : 1, tokenVersion: user.tokenVersion || 0,
+        createdAt: user.createdAt || Date.now()
+      });
+    },
+    async updateUser(id, patch){
+      const fields = Object.keys(patch || {}).filter(k => USER_PATCH_FIELDS.includes(k));
+      if(!fields.length) return;
+      const set = {};
+      for(const f of fields) set[f] = f === 'active' ? (patch[f] ? 1 : 0) : patch[f];
+      await users.updateOne({ _id: id }, { $set: set });
+    },
 
     // MongoDB upserts are individually atomic; multi-doc transactions aren't
     // needed for this app's small sync batches, so these are no-ops.

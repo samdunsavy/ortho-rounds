@@ -11,7 +11,9 @@ the connection returns. You can **export/import** JSON backups any time.
 - **Optional MongoDB backend** for persistent cloud hosting — set `MONGODB_URI`
   and patients, X-rays and login config live in a managed database that
   survives redeploys. (This is the one optional dependency.)
-- **Login** with a single shared password.
+- **Per-user accounts** — each PG logs in with their own username and
+  password, so plan edits, milestones, and complications are attributed to a
+  real person, not a shared login.
 
 ## Requirements
 
@@ -23,14 +25,23 @@ the connection returns. You can **export/import** JSON backups any time.
 From this folder:
 
 ```bash
-# Optional: set your own password (otherwise one is generated and printed)
-ORTHO_PASSWORD="choose-a-password" npm start
+npm start
 ```
 
-or simply:
+On first run (no accounts exist yet), one admin account is created
+automatically and its credentials are printed once:
+
+```
+>> First run — created admin account "admin"
+>>     bone-plate-1234
+>> Write it down. It is not shown again.
+```
+
+Set your own admin credentials instead of the generated ones with
+`ORTHO_ADMIN_USERNAME` / `ORTHO_ADMIN_PASSWORD`:
 
 ```bash
-npm start
+ORTHO_ADMIN_USERNAME="chief" ORTHO_ADMIN_PASSWORD="choose-a-password" npm start
 ```
 
 On startup the console prints the URLs, for example:
@@ -41,7 +52,20 @@ On the network:    http://192.168.1.42:3000
 ```
 
 Open the **network URL** on your phone, tablet, or another computer on the
-same Wi-Fi. Enter the password once per device.
+same Wi-Fi and log in with the admin account. From there, open **More →
+Manage users** to add an account for each PG — the admin panel shows a
+one-time password for each new user to share with them directly.
+
+### Accounts
+
+- Each person has their own username + password — there is no shared
+  ward login anymore.
+- Admins can add/disable users and reset passwords from **More → Manage
+  users**, no server access needed after the first run.
+- Disabling a user immediately invalidates any device they're logged in on.
+- Lost your own phone? **More → Manage users → Log out everywhere** logs out
+  every device signed in as you, so you can re-login from one you still hold.
+- Login attempts are rate-limited per username to resist brute-forcing.
 
 ### Change the port
 
@@ -54,8 +78,9 @@ PORT=4000 npm start
 By default the server uses **SQLite**:
 
 - Server database file: `data/ortho.db`. Back it up by copying this file, or
-  use the in-app **Export** button.
-- Login config (password hash + token secret): `data/config.json`.
+  use the in-app **Export** button. This is also where user accounts live
+  (a `users` table alongside patients).
+- Token signing secret: `data/config.json`.
 - The `data/` folder is git-ignored so patient data and secrets are never
   committed.
 - By default `data/` sits next to `server.js`. To point it at a mounted
@@ -78,27 +103,31 @@ example a free [MongoDB Atlas](https://www.mongodb.com/atlas) M0 cluster):
 
 ```bash
 MONGODB_URI="mongodb+srv://USER:PASSWORD@cluster0.xxxxx.mongodb.net/ortho" \
-ORTHO_PASSWORD="choose-a-password" npm start
+ORTHO_ADMIN_PASSWORD="choose-a-password" npm start
 ```
 
-- When `MONGODB_URI` is set, **all** data — patients, X-ray images, and the
-  auth config (token secret + password hash) — is stored in MongoDB. Nothing
-  is written to `data/`, and the database survives every redeploy.
+- When `MONGODB_URI` is set, **all** data — patients, X-ray images, user
+  accounts, and the token secret — is stored in MongoDB. Nothing is written
+  to `data/`, and the database survives every redeploy.
 - The database name is taken from the URI path (`/ortho` above); it defaults
-  to `ortho` if omitted. Collections used: `patients`, `images`, `config`.
+  to `ortho` if omitted. Collections used: `patients`, `images`, `config`, `users`.
 - Install the driver first with `npm install` (it is the project's only
   dependency and is only needed for this backend).
-- On the host (Railway/Render/etc.), set `MONGODB_URI` and `ORTHO_PASSWORD`
-  as environment variables. With MongoDB you do **not** need a persistent disk.
+- On the host (Railway/Render/etc.), set `MONGODB_URI` and
+  `ORTHO_ADMIN_PASSWORD` as environment variables. With MongoDB you do
+  **not** need a persistent disk.
 - Atlas setup: create a free cluster, add a database user, allow your host's
   IP (or `0.0.0.0/0` for managed hosts with dynamic IPs), then copy the
   **Drivers** connection string into `MONGODB_URI`.
 
-### Reset the password
+### Reset a password
 
-- Set `ORTHO_PASSWORD` (it overrides the stored one), **or**
-- Delete `data/config.json` and restart — a new password is generated and
-  printed once.
+- Any admin can reset another user's password from **More → Manage users**
+  (shows a new one-time password to share with them).
+- Locked out entirely (no working admin account)? Delete the `users`
+  table/collection (SQLite: `data/ortho.db`, table `users`; Mongo: the
+  `users` collection) and restart — a fresh admin account is created and
+  printed once, same as a first run.
 
 ## How it works
 
@@ -166,7 +195,8 @@ For access off the ward Wi‑Fi, you can host the same app on
 2. Add a **Volume** and mount it at `/app/data` (must contain `ortho.db`,
    `config.json`, and `images/`).
 3. Set environment variables:
-   - `ORTHO_PASSWORD` — ward login password
+   - `ORTHO_ADMIN_PASSWORD` — first admin account's password (optional; a
+     random one is printed on first boot if you skip this)
    - `PORT` — Railway sets this automatically
 4. Use the generated HTTPS URL on phones (Add to Home Screen still works).
 
@@ -179,18 +209,23 @@ no special proxy headers are required for basic use.
 
 ## Security notes
 
-- Intended for a **trusted local network**. It serves plain HTTP and uses a
-  single shared password. Do not expose it directly to the public internet
-  without putting it behind HTTPS and stronger authentication.
+- Intended for a **trusted local network**. It serves plain HTTP. Do not
+  expose it directly to the public internet without putting it behind HTTPS.
+- Each person has their own account (see **Accounts** above); disabling a
+  user immediately revokes their access, including any device already
+  logged in. Login attempts are rate-limited to resist brute-forcing.
 - Keep `data/config.json` and `data/ortho.db` private.
 
 ## Project layout
 
 ```
 server.js                 Node HTTP server + REST API
+auth.js                   Accounts: password hashing, tokens, login rate limit, bootstrap
+merge.js                  Sync merge logic + server-side attribution stamping
 ai.js                     OpenAI proxy for AI assistants
 storage.js                Pluggable storage backends (SQLite / MongoDB)
 package.json              Scripts + optional mongodb dependency
+tests/                    node:test unit + integration tests (`npm test`)
 public/
   index.html              UI
   app.js                  Client logic, offline cache, sync, login

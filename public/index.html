@@ -1111,6 +1111,19 @@
   .sheet-action-btn:hover{background:var(--line-soft);}
   .sheet-action-btn:active{background:var(--line);transform:scale(0.99);}
   .sheet-action-btn .sa-icon{font-size:18px;width:24px;text-align:center;flex:none;}
+  .sheet-account-row{
+    display:flex;align-items:center;justify-content:space-between;gap:10px;
+    padding:8px 14px 14px;font-size:13px;color:var(--ink-soft);
+    border-bottom:1px solid var(--line-soft);margin-bottom:8px;
+  }
+  .account-user-row{
+    display:flex;align-items:center;justify-content:space-between;gap:10px;
+    padding:8px 0;border-bottom:1px solid var(--line-soft);font-size:13.5px;
+  }
+  .account-user-row:last-child{border-bottom:none;}
+  .account-user-row .u-name{font-weight:600;}
+  .account-user-row .u-meta{color:var(--ink-soft);font-size:12px;}
+  .account-user-actions{display:flex;gap:6px;flex:none;}
 
   /* ---------- bottom navigation ---------- */
   .bottom-nav{
@@ -1520,7 +1533,6 @@
     <span class="date" id="todayLabel"></span>
   </div>
   <div class="topbar-actions">
-    <input type="text" class="pg-initials" id="pgInitialsInput" placeholder="PG" title="Your initials (for plan attribution)" maxlength="6">
     <button type="button" class="ibtn pg-scope-btn" id="pgScopeBtn" title="Toggle my patients / whole ward">My work</button>
     <div class="sync-chip-wrap">
       <span class="sync-chip" id="syncChip" title="Tap for sync details" role="button" tabindex="0"><span class="dot"></span><span id="syncChipText">…</span></span>
@@ -1662,7 +1674,12 @@
       <button type="button" class="modal-close" id="moreSheetClose">&times;</button>
     </div>
     <div class="sheet-body">
+      <div class="sheet-account-row">
+        <span>Logged in as <strong id="moreAccountUsername">—</strong></span>
+        <button type="button" class="btn btn-sm" id="moreLogoutBtn">Log out</button>
+      </div>
       <div class="sheet-actions">
+        <button type="button" class="sheet-action-btn" data-more-action="account" id="moreManageUsersBtn" style="display:none;"><span class="sa-icon">👤</span> Manage users</button>
         <button type="button" class="sheet-action-btn" data-more-action="present"><span class="sa-icon">▶</span> Presentation mode</button>
         <button type="button" class="sheet-action-btn" data-more-action="export"><span class="sa-icon">↓</span> Export backup</button>
         <button type="button" class="sheet-action-btn" data-more-action="import"><span class="sa-icon">↑</span> Import backup</button>
@@ -1678,6 +1695,31 @@
         <button type="button" class="sheet-action-btn" data-more-action="discharged"><span class="sa-icon">✓</span> Discharged patients</button>
         <button type="button" class="sheet-action-btn" data-more-action="refresh"><span class="sa-icon">↻</span> Refresh from server</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- ACCOUNT / MANAGE USERS (admin only) -->
+<div class="modal-overlay" id="accountModal">
+  <div class="modal">
+    <div class="modal-head">
+      <h2>Manage users</h2>
+      <button type="button" class="modal-close" id="accountModalClose">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div id="accountUsersList"></div>
+      <div class="form-hint" style="margin-top:12px;">Add a PG</div>
+      <div class="scribe-comp-row" style="margin-top:6px;">
+        <input id="newUserUsername" placeholder="Username">
+        <input id="newUserPassword" placeholder="Password (blank = auto-generate)">
+      </div>
+      <label class="scribe-check"><input type="checkbox" id="newUserIsAdmin"> Make this user an admin too</label>
+      <button type="button" class="btn primary" id="createUserBtn" style="margin-top:8px;">Add user</button>
+      <div id="accountModalResult" class="form-hint" style="margin-top:10px;"></div>
+    </div>
+    <div class="modal-foot">
+      <button type="button" class="btn" id="accountModalCloseBtn">Close</button>
+      <button type="button" class="btn linkish" id="revokeSessionsBtn">Log out everywhere</button>
     </div>
   </div>
 </div>
@@ -1798,11 +1840,13 @@
     </div>
     <span class="mark">ORTHO</span>
     <h1>Daily Rounds</h1>
-    <p>Enter the shared ward password to access patient records.</p>
+    <p>Log in with your account to access patient records.</p>
+    <label for="loginUsername">Username</label>
+    <input type="text" id="loginUsername" autocomplete="username" placeholder="Your username" autocapitalize="off" autocorrect="off">
     <label for="loginPassword">Password</label>
-    <input type="password" id="loginPassword" autocomplete="current-password" placeholder="Ward password">
+    <input type="password" id="loginPassword" autocomplete="current-password" placeholder="Password">
     <div class="login-error" id="loginError"></div>
-    <button type="button" class="btn primary" id="loginBtn">Unlock</button>
+    <button type="button" class="btn primary" id="loginBtn">Log in</button>
   </div>
 </div>
 

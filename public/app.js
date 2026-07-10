@@ -24,9 +24,10 @@ let viewingImageContext = null; // { patientId, imgId }
 const CACHE_DB_NAME = "ortho_rounds_db"; // reuse existing local store so old data migrates
 const CACHE_DB_VERSION = 1;
 const LS_TOKEN = "ortho_token";
+const LS_USERNAME = "ortho_username";
+const LS_ROLE = "ortho_role";
 const LS_LASTSYNC = "ortho_lastSync";
 const LS_LAST_FULL_SYNC = "ortho_lastFullSync";
-const LS_PG_INITIALS = "ortho_pgInitials";
 const LS_PRESENTED = "ortho_presented"; // { date, ids[] }
 const LS_FILTER = "ortho_filter";
 const LS_AUTO_WORKLIST = "ortho_lastAutoWorklistDate";
@@ -1457,30 +1458,35 @@ function preserveOpenCard(){
 function showLogin(){
   const ov = document.getElementById('loginOverlay');
   ov.classList.add('active');
-  setTimeout(()=> document.getElementById('loginPassword').focus(), 50);
+  setTimeout(()=> document.getElementById('loginUsername').focus(), 50);
 }
 function hideLogin(){
   document.getElementById('loginOverlay').classList.remove('active');
+  document.getElementById('loginUsername').value = '';
   document.getElementById('loginPassword').value = '';
   document.getElementById('loginError').textContent = '';
 }
 async function attemptLogin(){
+  const username = document.getElementById('loginUsername').value.trim();
   const pw = document.getElementById('loginPassword').value;
   const errEl = document.getElementById('loginError');
   const btn = document.getElementById('loginBtn');
   errEl.textContent = '';
-  if(!pw){ errEl.textContent = 'Enter the password'; return; }
+  if(!username || !pw){ errEl.textContent = 'Enter your username and password'; return; }
   btn.disabled = true;
   btn.classList.add('btn-busy');
   try{
     const res = await fetch('/api/login', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ password: pw })
+      body: JSON.stringify({ username, password: pw })
     });
-    if(!res.ok){ errEl.textContent = 'Wrong password'; return; }
-    const data = await res.json();
+    const data = await res.json().catch(()=> ({}));
+    if(!res.ok){ errEl.textContent = data.error || 'Login failed'; return; }
     localStorage.setItem(LS_TOKEN, data.token);
+    localStorage.setItem(LS_USERNAME, data.username);
+    localStorage.setItem(LS_ROLE, data.role || 'member');
+    updateAccountUI();
     hideLogin();
     await refreshAiStatus();
     await syncNow({ fullReconcile: true });
@@ -1490,6 +1496,13 @@ async function attemptLogin(){
     btn.disabled = false;
     btn.classList.remove('btn-busy');
   }
+}
+function logout(){
+  localStorage.removeItem(LS_TOKEN);
+  localStorage.removeItem(LS_USERNAME);
+  localStorage.removeItem(LS_ROLE);
+  updateAccountUI();
+  showLogin();
 }
 
 /* ---------------- helpers ---------------- */
@@ -1917,27 +1930,13 @@ function renderTemplatePickerOptionsForType(type, selectedId){
 }
 
 function getPgInitials(){
-  return (localStorage.getItem(LS_PG_INITIALS) || '').trim().toUpperCase();
+  // Identity now comes from the logged-in account, not a free-text box.
+  return (localStorage.getItem(LS_USERNAME) || '').trim().toUpperCase();
 }
 
 async function ensurePgInitials(){
-  let ini = getPgInitials();
-  if(ini) return ini;
-  const fields = await showPromptFields('Your initials', [
-    { id: 'initials', label: 'PG initials (e.g. AK)', value: '', placeholder: 'AK', maxlength: 6 }
-  ]);
-  if(fields && fields.initials && fields.initials.trim()){
-    ini = fields.initials.trim().toUpperCase().slice(0, 6);
-    localStorage.setItem(LS_PG_INITIALS, ini);
-    updatePgInitialsUI();
-    return ini;
-  }
-  return '';
-}
-
-function updatePgInitialsUI(){
-  const el = document.getElementById('pgInitialsInput');
-  if(el) el.value = getPgInitials();
+  // Always logged in with a real account by this point — nothing to prompt for.
+  return getPgInitials();
 }
 
 function archivePlanToHistory(p, text, date, by){
@@ -2804,7 +2803,7 @@ async function init(){
   bindAuthEvents();
   bindAiEvents();
   updateStorageNotice();
-  updatePgInitialsUI();
+  updateAccountUI();
   renderWardHandoverBanner();
   updateStickyHeaderOffset();
   window.addEventListener('resize', updateStickyHeaderOffset);
@@ -2893,9 +2892,120 @@ function bindSyncPanelEvents(){
 
 function bindAuthEvents(){
   document.getElementById('loginBtn').addEventListener('click', attemptLogin);
+  document.getElementById('loginUsername').addEventListener('keydown', (e)=>{
+    if(e.key === 'Enter') attemptLogin();
+  });
   document.getElementById('loginPassword').addEventListener('keydown', (e)=>{
     if(e.key === 'Enter') attemptLogin();
   });
+  document.getElementById('moreLogoutBtn')?.addEventListener('click', ()=>{
+    closeSheet('moreSheetOverlay');
+    logout();
+  });
+  document.getElementById('accountModalClose')?.addEventListener('click', closeAccountModal);
+  document.getElementById('accountModalCloseBtn')?.addEventListener('click', closeAccountModal);
+  document.getElementById('createUserBtn')?.addEventListener('click', ()=> void createUserFromModal());
+  document.getElementById('revokeSessionsBtn')?.addEventListener('click', ()=> void revokeSessionsEverywhere());
+  document.getElementById('accountUsersList')?.addEventListener('click', (e)=>{
+    const disableBtn = e.target.closest('[data-disable-user]');
+    if(disableBtn){ void disableUser(disableBtn.dataset.disableUser); return; }
+    const resetBtn = e.target.closest('[data-reset-user]');
+    if(resetBtn){ void resetUserPassword(resetBtn.dataset.resetUser); return; }
+  });
+}
+
+function isAdmin(){
+  return localStorage.getItem(LS_ROLE) === 'admin';
+}
+
+function updateAccountUI(){
+  const label = document.getElementById('moreAccountUsername');
+  if(label) label.textContent = localStorage.getItem(LS_USERNAME) || '—';
+  const manageBtn = document.getElementById('moreManageUsersBtn');
+  if(manageBtn) manageBtn.style.display = isAdmin() ? '' : 'none';
+}
+
+async function openAccountModal(){
+  if(!isAdmin()) return;
+  document.getElementById('accountModal').classList.add('active');
+  document.getElementById('accountModalResult').textContent = '';
+  await refreshAccountUsersList();
+}
+
+function closeAccountModal(){
+  document.getElementById('accountModal').classList.remove('active');
+}
+
+async function refreshAccountUsersList(){
+  const listEl = document.getElementById('accountUsersList');
+  listEl.textContent = 'Loading…';
+  try{
+    const { users } = await api('/api/admin/users');
+    const me = localStorage.getItem(LS_USERNAME);
+    listEl.innerHTML = users.map(u => `
+      <div class="account-user-row">
+        <div>
+          <div class="u-name">${escapeHTML(u.username)}${u.username === me ? ' (you)' : ''}</div>
+          <div class="u-meta">${escapeHTML(u.role)}${u.active ? '' : ' · disabled'}</div>
+        </div>
+        <div class="account-user-actions">
+          ${u.active ? `<button type="button" class="btn btn-sm" data-disable-user="${escapeHTML(u.id)}">Disable</button>` : ''}
+          <button type="button" class="btn btn-sm" data-reset-user="${escapeHTML(u.id)}">Reset password</button>
+        </div>
+      </div>
+    `).join('') || '<div class="scribe-empty">No users yet.</div>';
+  }catch(err){
+    listEl.textContent = 'Could not load users — ' + (err.message || 'error');
+  }
+}
+
+async function createUserFromModal(){
+  const username = document.getElementById('newUserUsername').value.trim();
+  const password = document.getElementById('newUserPassword').value;
+  const isAdminUser = document.getElementById('newUserIsAdmin').checked;
+  const resultEl = document.getElementById('accountModalResult');
+  if(!username){ resultEl.textContent = 'Enter a username'; return; }
+  try{
+    const res = await api('/api/admin/users', {
+      method: 'POST',
+      body: JSON.stringify({ username, password, role: isAdminUser ? 'admin' : 'member' })
+    });
+    document.getElementById('newUserUsername').value = '';
+    document.getElementById('newUserPassword').value = '';
+    document.getElementById('newUserIsAdmin').checked = false;
+    resultEl.textContent = `Created "${res.username}" — password: ${res.temporaryPassword} (shown once, share it securely)`;
+    await refreshAccountUsersList();
+  }catch(err){
+    resultEl.textContent = 'Could not create user — ' + (err.message || 'error');
+  }
+}
+
+async function disableUser(id){
+  if(!confirm('Disable this user? They will be logged out everywhere immediately.')) return;
+  try{
+    await api(`/api/admin/users/${id}/disable`, { method: 'POST' });
+    await refreshAccountUsersList();
+  }catch(err){
+    showToast('Could not disable user — ' + (err.message || 'error'));
+  }
+}
+
+async function resetUserPassword(id){
+  try{
+    const res = await api(`/api/admin/users/${id}/reset-password`, { method: 'POST' });
+    document.getElementById('accountModalResult').textContent = `New password: ${res.temporaryPassword} (shown once, share it securely)`;
+  }catch(err){
+    showToast('Could not reset password — ' + (err.message || 'error'));
+  }
+}
+
+async function revokeSessionsEverywhere(){
+  if(!confirm('Log out of every device using your account? You will need to log in again here too.')) return;
+  try{
+    await api('/api/account/revoke-sessions', { method: 'POST' });
+  }catch{ /* token is about to be discarded regardless */ }
+  closeAccountModal();
+  logout();
 }
 
 function bindEvents(){
@@ -2977,11 +3087,6 @@ function bindEvents(){
   });
   const readAloudCb = document.getElementById('presentationReadAloud');
   if(readAloudCb) readAloudCb.checked = presentationReadAloud;
-  document.getElementById('pgInitialsInput').addEventListener('change', (e)=>{
-    localStorage.setItem(LS_PG_INITIALS, (e.target.value || '').trim().toUpperCase().slice(0, 6));
-    updatePgInitialsUI();
-    renderRounds();
-  });
   document.getElementById('wardHandoverDismiss').addEventListener('click', ()=>{
     document.getElementById('wardHandoverBanner').style.display = 'none';
   });
@@ -3338,7 +3443,8 @@ function bindSheets(){
     btn.addEventListener('click', ()=>{
       closeSheet('moreSheetOverlay');
       const a = btn.dataset.moreAction;
-      if(a === 'present') openPresentationMode();
+      if(a === 'account') void openAccountModal();
+      else if(a === 'present') openPresentationMode();
       else if(a === 'export') exportData();
       else if(a === 'import') document.getElementById('hiddenImportInput').click();
       else if(a === 'templates') openTemplateManager();
