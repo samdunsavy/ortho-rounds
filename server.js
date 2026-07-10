@@ -536,6 +536,16 @@ const server = http.createServer(async (req, res)=>{
   try{
     if(pathname.startsWith('/api/')){
       await handleApi(req, res, pathname);
+    }else if(pathname === '/admission.js'){
+      const filePath = path.join(__dirname, 'admission.js');
+      if(!existsSync(filePath)){
+        res.writeHead(404, { 'Content-Type': 'text/plain' }); res.end('Not found'); return;
+      }
+      res.writeHead(200, {
+        'Content-Type': 'application/javascript; charset=utf-8',
+        'Cache-Control': 'no-cache'
+      });
+      createReadStream(filePath).pipe(res);
     }else{
       serveStatic(req, res);
     }

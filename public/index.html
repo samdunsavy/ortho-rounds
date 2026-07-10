@@ -644,6 +644,8 @@
   }
   .smart-paste-box textarea{width:100%;min-height:64px;font-size:13px;margin:6px 0 8px;}
   .smart-paste-box .form-hint{margin-top:0;}
+  .modal-xray-box{margin:12px 0 4px;padding:10px 12px;border:1px dashed var(--line);border-radius:10px;background:var(--paper);}
+  .modal-xray-box .form-hint{margin-top:6px;}
 
   /* ---------- ward groups ---------- */
   .ward-section{margin-bottom:18px;}
@@ -1710,6 +1712,7 @@
         <button type="button" class="sheet-action-btn" data-more-action="census"><span class="sa-icon">#</span> Census</button>
         <button type="button" class="sheet-action-btn" data-more-action="handover"><span class="sa-icon">↪</span> Handover sheet</button>
         <button type="button" class="sheet-action-btn" data-more-action="whatsapp"><span class="sa-icon">⎘</span> Copy handover</button>
+        <button type="button" class="sheet-action-btn" data-more-action="defaultunit"><span class="sa-icon">U</span> Default unit</button>
         <button type="button" class="sheet-action-btn" data-more-action="pgroster"><span class="sa-icon">PG</span> PG roster</button>
         <button type="button" class="sheet-action-btn" data-more-action="bulk"><span class="sa-icon">☑</span> Bulk plan select</button>
         <button type="button" class="sheet-action-btn" data-more-action="bulkapply"><span class="sa-icon">✎</span> Apply bulk plan</button>
@@ -1983,11 +1986,13 @@
 </div>
 
 <input type="file" id="hiddenFileInput" accept="image/*" style="display:none;">
+<input type="file" id="modalFileInput" accept="image/*" style="display:none;">
 <input type="file" id="hiddenImportInput" accept="application/json" style="display:none;">
 <input type="file" id="hiddenTemplateImport" accept="application/json" style="display:none;">
 
 <div class="toast" id="toast"></div>
 
+<script type="module" src="admission-bridge.js"></script>
 <script src="milestones.js"></script>
 <script src="app.js"></script>
 <script>

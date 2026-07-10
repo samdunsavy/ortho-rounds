@@ -17,6 +17,7 @@ let editingPatientId = null; // null = adding new
 let modalWorkingData = null; // in-memory draft while add/edit modal is open
 let modalSuppressAutoTemplate = false; // user removed milestones — don't refill on save
 let pendingImageSlot = null;  // {type: 'preop'|'postop'|'followup'}
+let modalPendingImages = [];  // { id, dataURL, type } — staged X-rays before modal save
 let viewingImageContext = null; // { patientId, imgId }
 
 /* ---------------- storage / sync keys ---------------- */
@@ -75,7 +76,7 @@ const LAB_SPEC = {
 const PLAN_HISTORY_MAX = 14;
 const FULL_RECONCILE_INTERVAL_MS = 5 * 60 * 1000; // periodic full reconcile
 let idb = null;
-let wardMeta = { handoverNote: '', pgRoster: [], presentedToday: { date: '', ids: [] }, updatedAt: 0 };
+let wardMeta = { handoverNote: '', defaultUnit: '', pgRoster: [], presentedToday: { date: '', ids: [] }, updatedAt: 0 };
 let syncing = false;
 let presentationUnpresentedOnly = localStorage.getItem(LS_PRESENT_UNPRESENTED) === '1';
 let presentationReadAloud = localStorage.getItem(LS_READ_ALOUD) === '1';
@@ -190,9 +191,10 @@ function normalizePresentedToday(pt){
 }
 
 function parseWardMetaFromRecord(metaRec){
-  if(!metaRec) return { handoverNote: '', pgRoster: [], presentedToday: normalizePresentedToday(null), updatedAt: 0 };
+  if(!metaRec) return { handoverNote: '', defaultUnit: '', pgRoster: [], presentedToday: normalizePresentedToday(null), updatedAt: 0 };
   return {
     handoverNote: metaRec.handoverNote || '',
+    defaultUnit: metaRec.defaultUnit || '',
     pgRoster: Array.isArray(metaRec.pgRoster) ? metaRec.pgRoster : [],
     presentedToday: normalizePresentedToday(metaRec.presentedToday),
     updatedAt: metaRec.updatedAt || 0
@@ -214,6 +216,7 @@ function mergeWardMetaFields(local, remote){
   const other = lt >= rt ? remote : local;
   return {
     handoverNote: (base.handoverNote || '').trim() ? base.handoverNote : (other.handoverNote || ''),
+    defaultUnit: (base.defaultUnit || '').trim() ? base.defaultUnit : (other.defaultUnit || ''),
     pgRoster: (base.pgRoster && base.pgRoster.length) ? base.pgRoster : (other.pgRoster || []),
     presentedToday: mergePresentedToday(local.presentedToday, remote.presentedToday),
     updatedAt: Math.max(lt, rt)
@@ -1195,7 +1198,8 @@ async function applyScribeResult(){
 /* ---------------- smart admission intake ---------------- */
 
 const SMART_PASTE_FIELD_MAP = {
-  name: 'f_name', bed: 'f_bed', ward: 'f_ward', age: 'f_age', uhid: 'f_uhid',
+  name: 'f_name', bed: 'f_bed', ward: 'f_ward', unit: 'f_unit', wardType: 'f_wardType',
+  age: 'f_age', uhid: 'f_uhid',
   admissionDate: 'f_admissionDate', diagnosis: 'f_diagnosis', surgeryDate: 'f_surgeryDate',
   theatreTime: 'f_theatreTime', procedure: 'f_procedure', surgeon: 'f_surgeon',
   implant: 'f_implant', dailyPlan: 'f_dailyPlan', handoverNote: 'f_handoverNote', notes: 'f_notes'
@@ -1240,6 +1244,122 @@ async function runSmartPaste(btn){
     showToast(err.message || 'Smart fill failed');
   }finally{
     setAiButtonBusy(btn, false);
+  }
+}
+
+function getDefaultUnit(){
+  return (wardMeta.defaultUnit || '').trim();
+}
+
+function formatAdmissionMessage(p){
+  const fmt = window.Admission;
+  if(!fmt?.formatAdmissionWhatsApp){
+    showToast('Admission formatter not loaded — refresh the page');
+    return '';
+  }
+  return fmt.formatAdmissionWhatsApp(p, { defaultUnit: getDefaultUnit() });
+}
+
+async function copyAdmissionWhatsApp(p){
+  const text = formatAdmissionMessage(p);
+  if(!text) return;
+  try{
+    await navigator.clipboard.writeText(text);
+    showToast('Admission copied for WhatsApp');
+  }catch{
+    showToast('Could not copy — check clipboard permission');
+  }
+}
+
+async function shareAdmissionWhatsApp(p){
+  const text = formatAdmissionMessage(p);
+  if(!text) return;
+  const files = [];
+  for(const img of (p.images || [])){
+    try{
+      const res = await fetch(imageSrc(img));
+      if(!res.ok) continue;
+      const blob = await res.blob();
+      files.push(new File([blob], `xray-${img.id}.jpg`, { type: blob.type || 'image/jpeg' }));
+    }catch{ /* skip */ }
+  }
+  if(navigator.share){
+    try{
+      const payload = { text, title: 'New admission' };
+      if(files.length && (!navigator.canShare || navigator.canShare({ files }))){
+        payload.files = files;
+      }
+      await navigator.share(payload);
+      showToast('Shared');
+      return;
+    }catch(err){
+      if(err?.name === 'AbortError') return;
+    }
+  }
+  await copyAdmissionWhatsApp(p);
+}
+
+async function uploadPendingModalImages(patientId, pending){
+  if(!pending?.length) return 0;
+  const p = patients.find(x => x.id === patientId);
+  if(!p) return 0;
+  p.images = p.images || [];
+  let uploaded = 0;
+  for(const item of pending){
+    const url = await uploadPatientImage(patientId, item.dataURL);
+    if(!url) continue;
+    p.images.push({ id: uid(), type: item.type || 'preop', url, date: todayISO() });
+    uploaded++;
+  }
+  if(uploaded) await savePatient(p);
+  return uploaded;
+}
+
+function renderModalPendingXrays(){
+  const el = document.getElementById('modalXrayRow');
+  if(!el) return;
+  const d = getWorkingData();
+  const existing = (d.images || []).map(img => `
+    <div class="xray-thumb" title="Saved on patient record">
+      <img src="${imageSrc(img)}" alt="">
+      <span class="tag">${escapeHTML(img.type)}</span>
+    </div>`).join('');
+  const pending = modalPendingImages.map(item => `
+    <div class="xray-thumb" data-modal-xray-id="${escapeHTML(item.id)}">
+      <button type="button" class="xray-del" data-modal-xray-rm="${escapeHTML(item.id)}" title="Remove" aria-label="Remove X-ray">&times;</button>
+      <img src="${item.dataURL}" alt="">
+      <span class="tag">pre-op</span>
+    </div>`).join('');
+  el.innerHTML = existing + pending + `
+    <div class="xray-add" id="modalAddXrayBtn" role="button" tabindex="0" aria-label="Attach X-ray">
+      <svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    </div>`;
+  el.querySelector('#modalAddXrayBtn')?.addEventListener('click', ()=>{
+    document.getElementById('modalFileInput')?.click();
+  });
+  el.querySelectorAll('[data-modal-xray-rm]').forEach(btn=>{
+    btn.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      const id = btn.dataset.modalXrayRm;
+      modalPendingImages = modalPendingImages.filter(x => x.id !== id);
+      renderModalPendingXrays();
+    });
+  });
+}
+
+async function handleModalImageSelected(e){
+  const file = e.target.files[0];
+  e.target.value = '';
+  if(!file) return;
+  try{
+    const raw = await fileToDataURL(file);
+    const compressed = await compressImage(raw);
+    modalPendingImages.push({ id: uid(), dataURL: compressed, type: 'preop' });
+    renderModalPendingXrays();
+    showToast('X-ray attached — saved with patient');
+  }catch(err){
+    console.warn('Modal image attach failed:', err);
+    showToast('Could not read image — try another file');
   }
 }
 
@@ -1832,7 +1952,7 @@ function blankPatient(){
   const ini = getPgInitials();
   return {
     id: uid(),
-    name: '', age: '', sex: 'M', bed: '', ward: '', uhid: '',
+    name: '', age: '', sex: 'M', bed: '', ward: '', unit: '', wardType: '', uhid: '',
     admissionDate: todayISO(),
     diagnosis: '',
     surgeryDate: '', procedure: '', surgeon: '', implant: '',
@@ -2879,6 +2999,7 @@ function updateStickyHeaderOffset(){
 function buildExportPatientList(){
   const list = patients.map(p => Object.assign({}, p));
   const hasWardMeta = (wardMeta.handoverNote || '').trim()
+    || (wardMeta.defaultUnit || '').trim()
     || (wardMeta.pgRoster || []).length
     || (wardMeta.presentedToday?.ids || []).length;
   if(hasWardMeta){
@@ -3393,6 +3514,7 @@ function bindEvents(){
   });
   bindImgViewerGestures();
   document.getElementById('hiddenFileInput').addEventListener('change', handleImageFileSelected);
+  document.getElementById('modalFileInput')?.addEventListener('change', handleModalImageSelected);
   document.getElementById('imgTypeCloseBtn').addEventListener('click', closeImageTypeModal);
   document.getElementById('imgTypePreop').addEventListener('click', ()=> confirmImageType('preop'));
   document.getElementById('imgTypePostop').addEventListener('click', ()=> confirmImageType('postop'));
@@ -3706,6 +3828,7 @@ function bindSheets(){
       else if(a === 'census') exportCensus();
       else if(a === 'handover') printHandoverSheet();
       else if(a === 'whatsapp') copyHandoverWhatsApp();
+      else if(a === 'defaultunit') editDefaultUnit();
       else if(a === 'pgroster') editPgRoster();
       else if(a === 'bulk') toggleBulkSelectMode();
       else if(a === 'bulkapply') applyBulkPlan();
@@ -4383,6 +4506,8 @@ function renderCardBody(p){
   if(p.surgeryDate) fields.push(['Surgery date', fmtDate(p.surgeryDate)]);
   else if(p.status === 'preop') fields.push(['Surgery date', '<span class="val empty">not yet operated</span>']);
   if(p.surgeon) fields.push(['Surgeon', escapeHTML(p.surgeon)]);
+  if(p.unit) fields.push(['Ortho unit', escapeHTML(p.unit)]);
+  if(p.wardType) fields.push(['Ward type', escapeHTML(p.wardType)]);
   if(p.assignedPg) fields.push(['Assigned PG', escapeHTML(p.assignedPg)]);
   const missing = [
     !p.uhid && 'UHID',
@@ -4471,6 +4596,8 @@ function renderCardBody(p){
 
     <div class="card-actions">
       <button class="btn primary" data-action="edit" data-id="${p.id}">Edit details</button>
+      <button class="btn" data-action="copy-admission" data-id="${p.id}">Copy admission</button>
+      ${typeof navigator.share === 'function' ? `<button class="btn" data-action="share-admission" data-id="${p.id}">Share admission</button>` : ''}
       ${canUseAi() && (p.status === 'fordischarge' || p.status === 'postop') ? `<button class="btn ai-btn" data-ai-discharge-summary data-patient-id="${escapeHTML(p.id)}">✨ Discharge summary</button>` : ''}
       ${!isConsultantMode() ? `<button class="btn" data-action="clone-patient" data-id="${p.id}">Clone</button>` : ''}
       ${p.status!=='fordischarge' && p.status!=='discharged' ? `<button class="btn" data-action="mark-fordischarge" data-id="${p.id}">Mark for discharge</button>` : ''}
@@ -4616,6 +4743,14 @@ function handleCardAction(action, id, el){
   }
   if(action==='clone-patient'){
     void clonePatientRecord(p);
+    return;
+  }
+  if(action==='copy-admission'){
+    void copyAdmissionWhatsApp(p);
+    return;
+  }
+  if(action==='share-admission'){
+    void shareAdmissionWhatsApp(p);
     return;
   }
 
@@ -5310,11 +5445,14 @@ function renderDischarged(){
 function openPatientModal(p){
   editingPatientId = p ? p.id : null;
   modalWorkingData = p ? JSON.parse(JSON.stringify(p)) : blankPatient();
+  modalPendingImages = [];
   modalSuppressAutoTemplate = false;
   normalizeAntibioticCourses(modalWorkingData);
   if(!p){
     const ini = getPgInitials();
     if(ini && !modalWorkingData.assignedPg) modalWorkingData.assignedPg = ini;
+    const defaultUnit = getDefaultUnit();
+    if(defaultUnit && !modalWorkingData.unit) modalWorkingData.unit = defaultUnit;
   }
   document.getElementById('modalTitle').textContent = p ? 'Edit patient' : 'Add patient';
   document.getElementById('deletePatientBtn').style.display = p ? 'inline-block' : 'none';
@@ -5329,6 +5467,8 @@ function readModalFieldsToObject(){
   d.name = document.getElementById('f_name')?.value.trim() || '';
   d.bed = document.getElementById('f_bed')?.value.trim() || '';
   d.ward = document.getElementById('f_ward')?.value.trim() || '';
+  d.unit = document.getElementById('f_unit')?.value.trim() || '';
+  d.wardType = document.getElementById('f_wardType')?.value.trim() || '';
   d.assignedPg = document.getElementById('f_assignedPg')?.value.trim().toUpperCase() || '';
   d.diagnosis = document.getElementById('f_diagnosis')?.value.trim() || '';
   d.status = document.getElementById('f_status')?.value || d.status;
@@ -5349,6 +5489,7 @@ function snapshotModalBaseline(){
 }
 
 function isModalDirty(){
+  if(modalPendingImages.length) return true;
   if(!modalWorkingData || !document.getElementById('patientModal')?.classList.contains('active')) return false;
   if(!modalBaselineJson) return false;
   try{
@@ -5368,6 +5509,7 @@ async function closePatientModal(){
   editingPatientId = null;
   modalWorkingData = null;
   modalBaselineJson = null;
+  modalPendingImages = [];
   modalSuppressAutoTemplate = false;
 }
 
@@ -5431,10 +5573,15 @@ function renderModalForm(d){
     ${!editingPatientId && canUseAi() ? `
     <div class="smart-paste-box">
       <label style="font-weight:700;">✨ Smart fill from admission note</label>
-      <textarea id="f_smartPaste" placeholder="Paste (or dictate) the admission note here — e.g. '45yr male, bed A12, closed femur shaft fracture, operated yesterday IM nailing by Dr Rao…'"></textarea>
+      <textarea id="f_smartPaste" placeholder="Paste the WhatsApp admission message — e.g. 'New admission sir / Shivappa SS / 53 years / Male / Imp : L3 wedge fracture+ … / ortho unit - IV / Free ward'"></textarea>
       <button type="button" class="btn ai-btn" id="smartPasteBtn">✨ Fill form</button>
       <div class="form-hint">AI fills the fields below for your review — nothing is saved until you press Save.</div>
     </div>` : ''}
+    <div class="modal-xray-box">
+      <label style="font-weight:700;">Admission X-rays</label>
+      <div class="xray-row" id="modalXrayRow"></div>
+      <div class="form-hint">Attach pre-op films from WhatsApp (gallery or camera). Saved when you press Save.</div>
+    </div>
     <div class="form-row two">
       <div><label>Patient name</label><input id="f_name" value="${escapeHTML(d.name)}" placeholder="Full name"></div>
       <div><label>Ward / bed</label><input id="f_bed" value="${escapeHTML(d.bed)}" placeholder="e.g. 7FOW-12"></div>
@@ -5442,6 +5589,10 @@ function renderModalForm(d){
     <div class="form-row two">
       <div><label>Ward group (optional)</label><input id="f_ward" value="${escapeHTML(d.ward||'')}" placeholder="e.g. 7FOW — auto from bed if blank"></div>
       <div><label>Assigned PG</label><input id="f_assignedPg" value="${escapeHTML(d.assignedPg||'')}" placeholder="Initials e.g. AK" maxlength="6"></div>
+    </div>
+    <div class="form-row two">
+      <div><label>Ortho unit</label><input id="f_unit" value="${escapeHTML(d.unit||'')}" placeholder="e.g. IV — defaults from ward setting"></div>
+      <div><label>Ward type</label><input id="f_wardType" value="${escapeHTML(d.wardType||'')}" placeholder="e.g. Free ward"></div>
     </div>
     <div class="form-row two">
       <div><label>Age</label><input id="f_age" value="${escapeHTML(d.age)}" placeholder="e.g. 34" inputmode="numeric"></div>
@@ -5833,6 +5984,7 @@ function bindModalDynamicLists(){
   renderComplicationList();
   renderAntibioticList();
   renderPlanStatus();
+  renderModalPendingXrays();
   document.getElementById('f_dailyPlan').addEventListener('input', renderPlanStatus);
 
   const addAbxBtn = document.getElementById('addAntibioticBtn');
@@ -6275,6 +6427,8 @@ async function savePatientFromModal(){
     d.name = document.getElementById('f_name').value.trim();
     d.bed = document.getElementById('f_bed').value.trim();
     d.ward = document.getElementById('f_ward').value.trim();
+    d.unit = document.getElementById('f_unit')?.value.trim() || '';
+    d.wardType = document.getElementById('f_wardType')?.value.trim() || '';
     d.assignedPg = document.getElementById('f_assignedPg').value.trim().toUpperCase();
     d.age = document.getElementById('f_age').value.trim();
     d.sex = document.getElementById('f_sex').value;
@@ -6353,7 +6507,22 @@ async function savePatientFromModal(){
 
     normalizePatientChecklists(d);
     normalizeAntibioticCourses(d);
+    const pendingXrays = modalPendingImages.slice();
+    modalPendingImages = [];
     await savePatient(d);
+
+    if(pendingXrays.length){
+      const count = await uploadPendingModalImages(d.id, pendingXrays);
+      if(!count){
+        showToast('Saved — X-ray upload failed', { warn: true, duration: 6000 });
+      }else if(count < pendingXrays.length){
+        showToast(`Saved — ${count}/${pendingXrays.length} X-ray(s) uploaded`, { warn: true, duration: 6000 });
+      }else{
+        showToast(`Saved with ${count} X-ray${count > 1 ? 's' : ''}`);
+      }
+    }else{
+      showToast('Saved');
+    }
 
     if(isNew){
       const savedFilter = localStorage.getItem(LS_FILTER) || (getPgInitials() ? 'mine' : 'all');
@@ -6365,7 +6534,6 @@ async function savePatientFromModal(){
 
     closePatientModal();
     renderAll();
-    showToast('Saved');
   }catch(err){
     console.error(err);
     showToast('Could not save patient — ' + (err.message || 'error'));
@@ -7166,6 +7334,15 @@ async function editPgRoster(){
   }).filter(Boolean);
   await saveWardMeta({ pgRoster: roster });
   showToast('PG roster saved');
+}
+
+async function editDefaultUnit(){
+  const fields = await showPromptFields('Default ortho unit', [
+    { id: 'unit', label: 'Used in WhatsApp admissions when a patient has no unit set', value: getDefaultUnit(), placeholder: 'e.g. IV' }
+  ]);
+  if(!fields) return;
+  await saveWardMeta({ defaultUnit: (fields.unit || '').trim() });
+  showToast(getDefaultUnit() ? `Default unit set to ${getDefaultUnit()}` : 'Default unit cleared');
 }
 
 function buildHandoverSheetHtml(){

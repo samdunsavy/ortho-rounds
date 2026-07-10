@@ -351,19 +351,23 @@ Use British/Indian ward English. Do not put the POD or diagnosis into dailyPlan 
 
 export async function parseAdmission(text){
   const systemPrompt = `You extract structured data from orthopedic admission notes written in Indian ward English (may mix abbreviations and dictated speech).
+Common WhatsApp format: salutation, name, "53 years / Male", "Imp : diagnosis+", "Admitted under ortho unit - IV", "Free ward", closing thanks — ignore salutations and thanks.
 Return ONLY a JSON object with these keys (use null when the note does not state a value — never guess):
 name, age (string of digits), sex ("M"|"F"|"O"), bed, ward, uhid,
+unit (ortho unit number or label only, e.g. "IV" from "ortho unit - IV"),
+wardType (e.g. "Free ward", "Paid ward", "Private ward"),
 diagnosis, procedure, surgeon, implant,
 status ("preop"|"postop"|"conservative"|"fordischarge"),
 admissionDate, surgeryDate (ISO YYYY-MM-DD; resolve relative phrases like "yesterday" using today's date given below),
 theatreTime (e.g. "09:30"), dailyPlan, handoverNote, notes.
+diagnosis: join multiple injuries; keep "+" between items or use newlines; strip leading "Imp :".
 status rules: operated → "postop"; awaiting surgery → "preop"; non-operative management → "conservative".
 Do not put content in notes that already fits another field.`;
 
   const userContent = `Today's date: ${new Date().toISOString().slice(0, 10)}\n\nAdmission note:\n${String(text || '').slice(0, 6000)}\n\nExtract the JSON.`;
   const fields = await callOpenAiJson(systemPrompt, userContent, { maxTokens: 500, temperature: 0.1 });
   const allow = [
-    'name', 'age', 'sex', 'bed', 'ward', 'uhid', 'diagnosis', 'procedure', 'surgeon', 'implant',
+    'name', 'age', 'sex', 'bed', 'ward', 'uhid', 'unit', 'wardType', 'diagnosis', 'procedure', 'surgeon', 'implant',
     'status', 'admissionDate', 'surgeryDate', 'theatreTime', 'dailyPlan', 'handoverNote', 'notes'
   ];
   const out = {};
