@@ -39,7 +39,8 @@ import {
   handoverSummary,
   dischargeSummary,
   wardBrief,
-  parseAdmission
+  parseAdmission,
+  scribeRoundNote
 } from './ai.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -471,6 +472,16 @@ async function handleApi(req, res, pathname){
         }
         const fields = await parseAdmission(body.text);
         return sendJSON(res, 200, { fields });
+      }
+      if(pathname === '/api/ai/scribe'){
+        if(!body.patient || typeof body.patient !== 'object'){
+          return sendJSON(res, 400, { error: 'patient snapshot required' });
+        }
+        if(typeof body.transcript !== 'string' || !body.transcript.trim()){
+          return sendJSON(res, 400, { error: 'transcript required' });
+        }
+        const result = await scribeRoundNote(body.patient, body.transcript);
+        return sendJSON(res, 200, { result });
       }
       return sendJSON(res, 404, { error: 'Unknown AI endpoint' });
     }catch(err){

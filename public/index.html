@@ -608,6 +608,23 @@
   .btn.linkish{background:none;border:none;color:var(--accent);font-size:12px;padding:0;}
   .btn.linkish:hover{text-decoration:underline;}
   .ai-result-modal{max-width:640px;}
+  .scribe-modal{max-width:560px;}
+  .scribe-modal #scribeTranscript{width:100%;min-height:88px;font-size:14px;margin:8px 0;}
+  .scribe-controls{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:4px;}
+  #scribeMicBtn.listening{
+    background:var(--bad-bg);color:var(--bad);border-color:var(--bad);
+    animation:pulse 1.2s ease-in-out infinite;
+  }
+  .scribe-review{margin-top:14px;border-top:1px solid var(--line-soft);padding-top:12px;}
+  .scribe-review .section-label{margin-top:10px;}
+  .scribe-review textarea{width:100%;min-height:52px;font-size:13px;}
+  .scribe-review .scribe-check{
+    display:flex;align-items:center;gap:8px;font-size:13px;padding:6px 0;cursor:pointer;
+  }
+  .scribe-review .scribe-check input{accent-color:var(--accent);width:16px;height:16px;}
+  .scribe-review .scribe-empty{font-size:12.5px;color:var(--ink-soft);font-style:italic;}
+  .scribe-comp-row{display:flex;gap:8px;}
+  .scribe-comp-row input{flex:1;font-size:13px;}
   .ai-result-modal textarea{
     width:100%;font-size:13px;line-height:1.55;font-family:var(--mono);
     min-height:260px;resize:vertical;
@@ -880,6 +897,8 @@
     display:none;position:fixed;inset:0;background:rgba(20,22,28,0.55);z-index:200;
     align-items:flex-start;justify-content:center;padding:20px 12px;overflow-y:auto;
   }
+  /* Modals that can open from presentation mode (z-index 450) must sit above it. */
+  #scribeModal,#aiResultModal{z-index:460;}
   .modal-overlay.active{display:flex;}
   .modal{
     background:var(--card);border-radius:var(--radius);max-width:600px;width:100%;margin-top:20px;
@@ -1801,6 +1820,29 @@
     <div class="modal-foot">
       <button type="button" class="btn" id="bulkDraftCancelBtn">Cancel</button>
       <button type="button" class="btn primary" id="bulkDraftSaveBtn" disabled>Save all</button>
+    </div>
+  </div>
+</div>
+
+<!-- BEDSIDE SCRIBE -->
+<div class="modal-overlay" id="scribeModal">
+  <div class="modal scribe-modal">
+    <div class="modal-head">
+      <h2 id="scribeTitle">Bedside scribe</h2>
+      <button type="button" class="modal-close" id="scribeClose">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-hint" id="scribeHint"></div>
+      <textarea id="scribeTranscript" placeholder="Tap the mic and speak, or type the bedside note here…"></textarea>
+      <div class="scribe-controls">
+        <button type="button" class="btn" id="scribeMicBtn">🎤 Start dictation</button>
+        <button type="button" class="btn primary ai-btn" id="scribeParseBtn">✨ Extract updates</button>
+      </div>
+      <div id="scribeReview" class="scribe-review" style="display:none;"></div>
+    </div>
+    <div class="modal-foot">
+      <button type="button" class="btn" id="scribeCancelBtn">Cancel</button>
+      <button type="button" class="btn primary" id="scribeApplyBtn" disabled>Apply to patient</button>
     </div>
   </div>
 </div>
