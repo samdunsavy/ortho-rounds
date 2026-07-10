@@ -826,8 +826,29 @@
     align-items:center;justify-content:center;flex-direction:column;
   }
   .img-viewer-overlay.active{display:flex;}
-  .img-viewer-overlay img{max-width:92vw;max-height:80vh;border-radius:6px;}
-  .img-viewer-overlay .iv-label{color:#fff;margin-top:12px;font-size:13px;font-family:var(--mono);}
+  .img-viewer-overlay img{
+    max-width:92vw;max-height:76vh;border-radius:6px;
+    transition:opacity 0.12s ease,transform 0.12s ease;
+  }
+  .img-viewer-overlay img.iv-jump{transition:none;}
+  .img-viewer-overlay img.iv-out-left{opacity:0;transform:translateX(-28px);}
+  .img-viewer-overlay img.iv-out-right{opacity:0;transform:translateX(28px);}
+  .img-viewer-overlay .iv-label{color:#fff;margin-top:10px;font-size:13px;font-family:var(--mono);}
+  .img-viewer-overlay .iv-counter{margin-left:10px;opacity:0.65;}
+  .img-viewer-overlay .iv-nav{
+    position:absolute;top:50%;transform:translateY(-50%);z-index:2;
+    width:46px;height:46px;border-radius:50%;border:1px solid rgba(255,255,255,0.25);
+    background:rgba(255,255,255,0.1);color:#fff;font-size:28px;line-height:1;cursor:pointer;
+    display:inline-flex;align-items:center;justify-content:center;padding:0 0 3px;
+    transition:background var(--dur-fast),opacity var(--dur-fast);
+  }
+  .img-viewer-overlay .iv-nav:hover{background:rgba(255,255,255,0.22);}
+  .img-viewer-overlay .iv-nav:disabled{opacity:0.25;cursor:default;}
+  .img-viewer-overlay .iv-prev{left:10px;}
+  .img-viewer-overlay .iv-next{right:10px;}
+  .iv-dots{display:flex;gap:8px;margin-top:14px;min-height:9px;}
+  .iv-dot{width:9px;height:9px;border-radius:50%;background:rgba(255,255,255,0.3);border:none;padding:0;cursor:pointer;transition:background var(--dur-fast),transform var(--dur-fast);}
+  .iv-dot.active{background:#fff;transform:scale(1.25);}
   .img-viewer-overlay .iv-close{
     position:absolute;top:12px;right:12px;color:#fff;font-size:28px;cursor:pointer;background:none;border:none;
     width:44px;height:44px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;
@@ -1560,8 +1581,11 @@
 <!-- IMAGE VIEWER -->
 <div class="img-viewer-overlay" id="imgViewer">
   <button class="iv-close" id="imgViewerClose">&times;</button>
-  <img id="imgViewerImg" src="">
-  <div class="iv-label" id="imgViewerLabel"></div>
+  <button type="button" class="iv-nav iv-prev" id="imgViewerPrev" aria-label="Previous X-ray">&#8249;</button>
+  <img id="imgViewerImg" src="" alt="X-ray">
+  <button type="button" class="iv-nav iv-next" id="imgViewerNext" aria-label="Next X-ray">&#8250;</button>
+  <div class="iv-dots" id="imgViewerDots"></div>
+  <div class="iv-label"><span id="imgViewerLabel"></span><span class="iv-counter" id="imgViewerCounter"></span></div>
   <button type="button" class="iv-delete" id="imgViewerDelete">Delete X-ray</button>
 </div>
 

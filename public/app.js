@@ -2558,6 +2558,18 @@ function bindEvents(){
     void removePatientImage(viewingImageContext.patientId, viewingImageContext.imgId);
   });
   document.getElementById('imgViewer').addEventListener('click', (e)=>{ if(e.target.id==='imgViewer') closeImgViewer(); });
+  document.getElementById('imgViewerPrev').addEventListener('click', (e)=>{ e.stopPropagation(); stepImgViewer(-1); });
+  document.getElementById('imgViewerNext').addEventListener('click', (e)=>{ e.stopPropagation(); stepImgViewer(1); });
+  document.getElementById('imgViewerDots').addEventListener('click', (e)=>{
+    const dot = e.target.closest('[data-iv-dot]');
+    if(!dot) return;
+    e.stopPropagation();
+    const { imgs, idx } = getImgViewerGallery();
+    const target = parseInt(dot.dataset.ivDot, 10);
+    if(Number.isNaN(target) || target === idx || !imgs[target]) return;
+    stepImgViewer(target - idx);
+  });
+  bindImgViewerGestures();
   document.getElementById('hiddenFileInput').addEventListener('change', handleImageFileSelected);
   document.getElementById('imgTypeCloseBtn').addEventListener('click', closeImageTypeModal);
   document.getElementById('imgTypePreop').addEventListener('click', ()=> confirmImageType('preop'));
@@ -3932,15 +3944,87 @@ async function confirmImageType(type){
   }
 }
 
-function openImgViewer(patientId, img){
-  viewingImageContext = { patientId, imgId: img.id };
+function getImgViewerGallery(){
+  if(!viewingImageContext) return { imgs: [], idx: -1 };
+  const p = patients.find(x => x.id === viewingImageContext.patientId);
+  const imgs = (p && p.images) || [];
+  return { imgs, idx: imgs.findIndex(i => i.id === viewingImageContext.imgId) };
+}
+
+function renderImgViewer(){
+  const { imgs, idx } = getImgViewerGallery();
+  if(idx < 0){ closeImgViewer(); return; }
+  const img = imgs[idx];
+  const multi = imgs.length > 1;
   document.getElementById('imgViewerImg').src = imageSrc(img);
   document.getElementById('imgViewerLabel').textContent = `${img.type.toUpperCase()} · ${fmtDate(img.date)}`;
+  document.getElementById('imgViewerCounter').textContent = multi ? `${idx + 1} / ${imgs.length}` : '';
+  document.getElementById('imgViewerDots').innerHTML = multi
+    ? imgs.map((im, i)=>`<button type="button" class="iv-dot${i===idx?' active':''}" data-iv-dot="${i}" aria-label="X-ray ${i+1} of ${imgs.length}"></button>`).join('')
+    : '';
+  const prevBtn = document.getElementById('imgViewerPrev');
+  const nextBtn = document.getElementById('imgViewerNext');
+  prevBtn.style.display = multi ? '' : 'none';
+  nextBtn.style.display = multi ? '' : 'none';
+  prevBtn.disabled = idx <= 0;
+  nextBtn.disabled = idx >= imgs.length - 1;
+}
+
+function stepImgViewer(delta){
+  const { imgs, idx } = getImgViewerGallery();
+  if(idx < 0) return;
+  const next = idx + delta;
+  if(next < 0 || next >= imgs.length) return;
+  viewingImageContext.imgId = imgs[next].id;
+  const imgEl = document.getElementById('imgViewerImg');
+  if(window.matchMedia('(prefers-reduced-motion: no-preference)').matches){
+    imgEl.classList.add(delta > 0 ? 'iv-out-left' : 'iv-out-right');
+    setTimeout(()=>{
+      renderImgViewer();
+      // Jump to the opposite side without a transition, then slide back in.
+      imgEl.classList.remove('iv-out-left', 'iv-out-right');
+      imgEl.classList.add('iv-jump', delta > 0 ? 'iv-out-right' : 'iv-out-left');
+      requestAnimationFrame(()=>{
+        imgEl.classList.remove('iv-jump');
+        requestAnimationFrame(()=> imgEl.classList.remove('iv-out-left', 'iv-out-right'));
+      });
+    }, 120);
+  }else{
+    renderImgViewer();
+  }
+}
+
+function openImgViewer(patientId, img){
+  viewingImageContext = { patientId, imgId: img.id };
+  renderImgViewer();
   document.getElementById('imgViewer').classList.add('active');
 }
 function closeImgViewer(){
   document.getElementById('imgViewer').classList.remove('active');
   viewingImageContext = null;
+}
+
+function bindImgViewerGestures(){
+  const viewer = document.getElementById('imgViewer');
+  if(!viewer) return;
+  let startX = 0, startY = 0;
+  viewer.addEventListener('touchstart', (e)=>{
+    startX = e.changedTouches[0].screenX;
+    startY = e.changedTouches[0].screenY;
+  }, { passive: true });
+  viewer.addEventListener('touchend', (e)=>{
+    if(!viewer.classList.contains('active')) return;
+    const dx = e.changedTouches[0].screenX - startX;
+    const dy = e.changedTouches[0].screenY - startY;
+    if(Math.abs(dx) < 50 || Math.abs(dx) < Math.abs(dy) * 1.2) return;
+    stepImgViewer(dx < 0 ? 1 : -1);
+  }, { passive: true });
+  document.addEventListener('keydown', (e)=>{
+    if(!viewer.classList.contains('active')) return;
+    if(e.key === 'ArrowRight') stepImgViewer(1);
+    if(e.key === 'ArrowLeft') stepImgViewer(-1);
+    if(e.key === 'Escape') closeImgViewer();
+  });
 }
 
 async function removePatientImage(patientId, imgId){
@@ -3958,7 +4042,12 @@ async function removePatientImage(patientId, imgId){
   const snapshot = { patientId, img: Object.assign({}, removed), index: idx };
   p.images.splice(idx, 1);
   if(viewingImageContext?.patientId === patientId && viewingImageContext?.imgId === imgId){
-    closeImgViewer();
+    if(p.images.length){
+      viewingImageContext.imgId = p.images[Math.min(idx, p.images.length - 1)].id;
+      renderImgViewer();
+    }else{
+      closeImgViewer();
+    }
   }
   try{
     await savePatient(p);
@@ -5489,6 +5578,7 @@ function bindPresentationKeyboard(){
   window._presKeyHandler = (e)=>{
     const overlay = document.getElementById('presentationOverlay');
     if(!overlay?.classList.contains('active')) return;
+    if(document.getElementById('imgViewer')?.classList.contains('active')) return;
     if(e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
     if(e.key === 'ArrowRight' || e.key === 'n') stepPresentation(1, true);
     if(e.key === 'ArrowLeft' || e.key === 'p') stepPresentation(-1);
