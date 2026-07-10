@@ -42,6 +42,7 @@ const LS_MORNING_VIEW = "ortho_morningView";
 const LS_TIP_MINE_EMPTY = "ortho_tipMineEmpty";
 const LS_TIP_WORKLIST = "ortho_tipWorklist";
 const LS_TIP_PRESENT = "ortho_tipPresent";
+const LS_HIDE_SERVER_NOTICE = "ortho_hideServerNotice";
 const LS_TIP_AI_DRAFT = "ortho_tipAiDraft";
 const LS_TIP_VOICE_PLAN = "ortho_tipVoicePlan";
 const LS_TIP_START_HERE = "ortho_tipStartHere";
@@ -2215,6 +2216,7 @@ async function markPresented(id){
   if(!pt.ids.includes(id)) pt.ids.push(id);
   wardMeta.presentedToday = pt;
   await saveWardMeta({ presentedToday: pt });
+  updatePresentBtnProgress();
 }
 
 function isPresented(id){
@@ -2405,10 +2407,14 @@ async function init(){
 function updateStorageNotice(){
   const el = document.getElementById('storageNotice');
   if(!el) return;
+  if(localStorage.getItem(LS_HIDE_SERVER_NOTICE) === '1'){
+    el.style.display = 'none';
+    return;
+  }
   const txt = el.querySelector('.storage-notice-text');
   el.style.display = 'flex';
   el.classList.remove('warn');
-  txt.innerHTML = `Shared records on this server. Open <code>${escapeHTML(location.origin)}</code> on any device on the same Wi-Fi to see the same data. Use <b>Export</b> for file backups.`;
+  txt.innerHTML = `Shared server · open <code>${escapeHTML(location.origin)}</code> on any device on this Wi-Fi`;
 }
 
 function bindSyncPanelEvents(){
@@ -2558,6 +2564,7 @@ function bindEvents(){
   bindPresentationSwipe();
   document.getElementById('storageNoticeDismiss').addEventListener('click', ()=>{
     document.getElementById('storageNotice').style.display = 'none';
+    localStorage.setItem(LS_HIDE_SERVER_NOTICE, '1');
   });
   document.getElementById('hiddenImportInput').addEventListener('change', importData);
   bindTemplateManagerEvents();
@@ -2628,7 +2635,20 @@ function updateCounts(){
   document.getElementById('countRounds').textContent = active.length;
   document.getElementById('countDischarged').textContent = patients.filter(p=>p.status==='discharged').length;
   document.getElementById('countWork').textContent = countPendingItems();
+  updatePresentBtnProgress(active);
   updateBottomNavBadge();
+}
+
+function updatePresentBtnProgress(active){
+  const btn = document.getElementById('presentBtn');
+  if(!btn) return;
+  const scoped = getPgScopedPatients(active || patients.filter(p=>p.status!=='discharged'));
+  if(!scoped.length){
+    btn.textContent = 'Present';
+    return;
+  }
+  const done = scoped.filter(p => isPresented(p.id)).length;
+  btn.innerHTML = `Present <span class="present-progress${done >= scoped.length ? ' done' : ''}">${done}/${scoped.length}</span>`;
 }
 
 function getSummaryCounts(){
@@ -3147,6 +3167,15 @@ function getPatientFlags(p){
 
 /* ---------------- ROUNDS LIST ---------------- */
 
+// Stable, muted accent per ward so multi-ward lists scan faster.
+const WARD_ACCENT_HUES = [195, 150, 265, 20, 330, 45, 220, 105];
+function wardAccentColor(ward){
+  const s = String(ward || '');
+  let h = 0;
+  for(let i = 0; i < s.length; i++) h = ((h * 31) + s.charCodeAt(i)) >>> 0;
+  return `hsl(${WARD_ACCENT_HUES[h % WARD_ACCENT_HUES.length]}, 42%, 48%)`;
+}
+
 function renderRounds(){
   const list = document.getElementById('roundsList');
   const items = getFilteredRoundsItems();
@@ -3200,7 +3229,7 @@ function renderRounds(){
   const groups = groupPatientsByWard(items);
   list.innerHTML = groups.map(([ward, pts])=>`
     <div class="ward-section">
-      <div class="ward-header">Ward ${escapeHTML(ward)} <span class="ward-count">${pts.length}</span></div>
+      <div class="ward-header" style="--ward-accent:${wardAccentColor(ward)};">Ward ${escapeHTML(ward)} <span class="ward-count">${pts.length}</span></div>
       ${pts.map(p=> renderCard(p)).join('')}
     </div>
   `).join('');
@@ -3315,7 +3344,7 @@ function toggleCardOpen(id){
       card.classList.remove('open');
       syncCardHeadAria(card, false);
       const body = card.querySelector('.card-body');
-      if(body) body.innerHTML = '';
+      if(body){ body.innerHTML = ''; body.classList.remove('settled'); }
     }
     openCardId = null;
     patchCardHeadGlance(p, true);
@@ -3329,7 +3358,7 @@ function toggleCardOpen(id){
       prevCard.classList.remove('open');
       syncCardHeadAria(prevCard, false);
       const prevBody = prevCard.querySelector('.card-body');
-      if(prevBody) prevBody.innerHTML = '';
+      if(prevBody){ prevBody.innerHTML = ''; prevBody.classList.remove('settled'); }
       const prevP = patients.find(x => x.id === prevId);
       if(prevP) patchCardHeadGlance(prevP, true);
     }
@@ -3350,6 +3379,7 @@ function toggleCardOpen(id){
   patchCardHeadGlance(p, false);
   const dayInfo = getClinicalDayInfo(p);
   const body = card.querySelector('.card-body');
+  body.classList.remove('settled');
   body.innerHTML = `
     <div class="card-body-inner">
       <div class="card-body-sticky">
@@ -3359,6 +3389,9 @@ function toggleCardOpen(id){
       ${renderCardBody(p)}
       <div class="card-quick-footer">${renderCardQuickBar(p, false)}</div>
     </div>`;
+  // Un-clip the body once the expand transition finishes so the sticky
+  // name header works; the timeout covers reduced-motion / missed events.
+  setTimeout(()=> body.classList.add('settled'), 350);
   bindCardListEvents(card);
   patchCardHeadGlance(p, false);
   requestAnimationFrame(()=>{
@@ -3399,20 +3432,29 @@ function renderAbxQuickChip(p){
   }).join('');
 }
 
+function podPillClass(dayInfo){
+  if(!dayInfo || dayInfo.prefix !== 'POD') return '';
+  if(dayInfo.day <= 1) return ' pod-early';
+  if(dayInfo.day <= 4) return ' pod-mid';
+  return ' pod-late';
+}
+
 function renderCard(p){
   const isOpen = openCardId===p.id;
   const dayInfo = getClinicalDayInfo(p);
   const flags = getPatientFlags(p);
   const statusLabel = STATUS_LABELS[p.status] || '';
   const statusClass = STATUS_CYCLE.includes(p.status) ? ` card-status-${p.status}` : '';
+  const urgentClass = flags.some(f => f.type === 'bad') ? ' card-urgent' : '';
   const presented = isPresented(p.id);
   const bulkOn = bulkSelectMode && bulkSelectedIds.has(p.id);
+  const imgCount = (p.images || []).length;
   const procLine = p.procedure
     ? `${escapeHTML(p.procedure)}${p.surgeryDate ? ' · '+fmtDate(p.surgeryDate) : ''}${p.theatreTime ? ' · OT '+escapeHTML(p.theatreTime) : ''}`
     : '';
 
   return `
-  <div class="card status-rail ${isOpen?'open':''}${statusClass}${bulkOn?' bulk-selected':''}" data-id="${p.id}">
+  <div class="card status-rail ${isOpen?'open':''}${statusClass}${urgentClass}${bulkOn?' bulk-selected':''}" data-id="${p.id}">
     <div class="card-head" aria-expanded="${isOpen?'true':'false'}">
       ${bulkSelectMode ? `<input type="checkbox" class="bulk-check" data-action="bulk-toggle" data-id="${p.id}" ${bulkOn?'checked':''}>` : ''}
       <div class="card-head-top">
@@ -3422,7 +3464,8 @@ function renderCard(p){
             <span class="card-name">${escapeHTML(p.name||'Unnamed')}</span>
             <span class="card-meta">${escapeHTML(p.age||'?')}${p.sex?'/'+p.sex:''}</span>
             <span class="card-badges">
-              ${dayInfo ? `<span class="pod-pill">${escapeHTML(dayInfo.prefix)} ${dayInfo.day}</span>` : `<span class="status-badge ${p.status||'preop'}">${statusLabel}</span>`}
+              ${dayInfo ? `<span class="pod-pill${podPillClass(dayInfo)}">${escapeHTML(dayInfo.prefix)} ${dayInfo.day}</span>` : `<span class="status-badge ${p.status||'preop'}">${statusLabel}</span>`}
+              ${imgCount ? `<span class="pill xray-pill" title="${imgCount} X-ray${imgCount>1?'s':''} on file">XR ${imgCount}</span>` : ''}
               ${presented ? `<span class="presented-pill" title="Presented today">✓</span>` : ''}
             </span>
           </div>
@@ -3436,7 +3479,7 @@ function renderCard(p){
       ${!isOpen && (p.handoverNote||'').trim() ? `<div class="handover-strip">↪ ${escapeHTML(p.handoverNote.trim())}</div>` : ''}
       ${!isOpen ? renderFlagsGlance(flags) : ''}
     </div>
-    <div class="card-body">${isOpen ? `
+    <div class="card-body${isOpen?' settled':''}">${isOpen ? `
       <div class="card-body-inner">
         <div class="card-body-sticky">
           <div class="card-name">${escapeHTML(p.name||'Unnamed')}</div>
@@ -3469,14 +3512,24 @@ function renderPlanHistoryBlock(p){
 
 function renderCardBody(p){
   const dayInfo = getClinicalDayInfo(p);
+  // Show only filled detail fields; empty ones collapse into one "+ Add" chip.
+  const fields = [];
+  if(p.uhid) fields.push(['UHID', escapeHTML(p.uhid)]);
+  if(p.admissionDate) fields.push(['Admission date', fmtDate(p.admissionDate)]);
+  if(p.surgeryDate) fields.push(['Surgery date', fmtDate(p.surgeryDate)]);
+  else if(p.status === 'preop') fields.push(['Surgery date', '<span class="val empty">not yet operated</span>']);
+  if(p.surgeon) fields.push(['Surgeon', escapeHTML(p.surgeon)]);
+  if(p.assignedPg) fields.push(['Assigned PG', escapeHTML(p.assignedPg)]);
+  const missing = [
+    !p.uhid && 'UHID',
+    !p.admissionDate && 'admission date',
+    !p.surgeon && 'surgeon'
+  ].filter(Boolean);
   return `
-    <div class="detail-grid">
-      <div class="field"><label>UHID</label><div class="val ${!p.uhid?'empty':''}">${escapeHTML(p.uhid)||'not entered'}</div></div>
-      <div class="field"><label>Admission date</label><div class="val">${fmtDate(p.admissionDate)||'—'}</div></div>
-      <div class="field"><label>Surgery date</label><div class="val ${!p.surgeryDate?'empty':''}">${p.surgeryDate?fmtDate(p.surgeryDate):'not yet operated'}</div></div>
-      <div class="field"><label>Surgeon</label><div class="val ${!p.surgeon?'empty':''}">${escapeHTML(p.surgeon)||'not entered'}</div></div>
-      ${p.assignedPg ? `<div class="field"><label>Assigned PG</label><div class="val">${escapeHTML(p.assignedPg)}</div></div>` : ''}
-    </div>
+    ${fields.length ? `<div class="detail-grid">
+      ${fields.map(([label, val])=>`<div class="field"><label>${label}</label><div class="val">${val}</div></div>`).join('')}
+    </div>` : ''}
+    ${missing.length && !isConsultantMode() ? `<button type="button" class="add-details-btn" data-action="edit" data-id="${p.id}">+ Add ${missing.join(' · ')}</button>` : ''}
 
     ${p.implant ? `<div class="field" style="margin-bottom:10px;"><label>Implant / fixation details</label><div class="val">${escapeHTML(p.implant)}</div></div>` : ''}
 
@@ -3534,7 +3587,10 @@ function renderCardBody(p){
           <img src="${imageSrc(img)}">
           <div class="tag">${img.type.toUpperCase()}</div>
         </div>`).join('')}
-      <div class="xray-add" data-action="add-img" data-id="${p.id}">+</div>
+      <div class="xray-add" data-action="add-img" data-id="${p.id}" role="button" tabindex="0" aria-label="Add X-ray">
+        <svg viewBox="0 0 24 24"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+        <span>Add X-ray</span>
+      </div>
     </div>
 
     <div class="section-label">Presentation script</div>
