@@ -2539,10 +2539,21 @@ function bindEvents(){
   document.getElementById('worklistWardHandoverBtn').addEventListener('click', editWardHandover);
   document.getElementById('presentationClose').addEventListener('click', closePresentationMode);
   document.getElementById('presentationPrev').addEventListener('click', ()=> stepPresentation(-1));
-  document.getElementById('presentationNext').addEventListener('click', ()=> stepPresentation(1, true));
+  document.getElementById('presentationNext').addEventListener('click', presentationNextAction);
   document.getElementById('presentationMarkBtn').addEventListener('click', markCurrentPresented);
+  document.getElementById('presentationOptionsBtn')?.addEventListener('click', ()=>{
+    document.getElementById('presentationOptions')?.classList.toggle('open');
+  });
+  // Capture phase so the panel closes even when the click target stops propagation.
+  document.addEventListener('click', (e)=>{
+    const panel = document.getElementById('presentationOptions');
+    if(!panel?.classList.contains('open')) return;
+    if(e.target.closest('#presentationOptions') || e.target.closest('#presentationOptionsBtn')) return;
+    panel.classList.remove('open');
+  }, true);
   document.getElementById('presentationWardJump').addEventListener('change', (e)=>{
     jumpPresentationToWard(e.target.value);
+    document.getElementById('presentationOptions')?.classList.remove('open');
   });
   bindPresentationSwipe();
   document.getElementById('storageNoticeDismiss').addEventListener('click', ()=>{
@@ -5565,7 +5576,7 @@ function openPresentationMode(){
   }
   if(!localStorage.getItem(LS_TIP_PRESENT)){
     localStorage.setItem(LS_TIP_PRESENT, '1');
-    showToast('Tip: → next patient · Space marks presented', { duration: 6000 });
+    showToast('Tip: swipe or → for next patient · Space marks presented', { duration: 6000 });
   }
   presentationIndex = 0;
   document.getElementById('presentationOverlay').classList.add('active');
@@ -5580,11 +5591,24 @@ function bindPresentationKeyboard(){
     if(!overlay?.classList.contains('active')) return;
     if(document.getElementById('imgViewer')?.classList.contains('active')) return;
     if(e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
-    if(e.key === 'ArrowRight' || e.key === 'n') stepPresentation(1, true);
+    if(e.key === 'ArrowRight' || e.key === 'n') presentationNextAction();
     if(e.key === 'ArrowLeft' || e.key === 'p') stepPresentation(-1);
     if(e.key === ' ') { e.preventDefault(); markCurrentPresented(); }
   };
   document.addEventListener('keydown', window._presKeyHandler);
+}
+
+function presentationNextAction(){
+  const list = getPresentationList();
+  if(!list.length){ closePresentationMode(); return; }
+  if(presentationIndex >= list.length - 1){
+    const p = list[presentationIndex];
+    if(p && !isPresented(p.id)) void markPresented(p.id);
+    closePresentationMode();
+    showToast('Round complete');
+    return;
+  }
+  stepPresentation(1, true);
 }
 
 function closePresentationMode(){
@@ -5707,6 +5731,8 @@ function renderPresentationSlide(animating){
   const scopeLabel = isPgScopeMine() ? 'My patients' : (currentFilter !== 'all' ? (FILTER_LABELS[currentFilter] || 'Filtered') : 'Whole ward');
   document.getElementById('presentationCounter').textContent = `${presentationIndex + 1} / ${list.length} · ${scopeLabel}`;
   document.getElementById('presentationWard').textContent = `Ward ${getPatientWard(p)} · ${p.bed || '—'}`;
+  const progressFill = document.getElementById('presentationProgress');
+  if(progressFill) progressFill.style.width = `${((presentationIndex + 1) / list.length) * 100}%`;
 
   const wardJump = document.getElementById('presentationWardJump');
   const wards = getPresentationWards(list);
@@ -5750,23 +5776,33 @@ function renderPresentationSlide(animating){
   bindPresentationXrayClicks(el, p);
 
   document.getElementById('presentationPrev').disabled = presentationIndex <= 0;
-  document.getElementById('presentationNext').disabled = presentationIndex >= list.length - 1;
+  const nextBtn = document.getElementById('presentationNext');
+  const atEnd = presentationIndex >= list.length - 1;
+  nextBtn.disabled = false;
+  nextBtn.textContent = atEnd ? 'Finish ✓' : 'Next ›';
+  const markBtn = document.getElementById('presentationMarkBtn');
+  markBtn.textContent = presented ? '✓ Presented' : 'Mark presented';
+  markBtn.classList.toggle('is-marked', presented);
   if(!animating) el.scrollTop = 0;
 }
 
 function bindPresentationSwipe(){
   const overlay = document.getElementById('presentationOverlay');
   if(!overlay) return;
-  let startX = 0;
+  let startX = 0, startY = 0;
   overlay.addEventListener('touchstart', (e)=>{
     if(!overlay.classList.contains('active')) return;
     startX = e.changedTouches[0].screenX;
+    startY = e.changedTouches[0].screenY;
   }, { passive: true });
   overlay.addEventListener('touchend', (e)=>{
     if(!overlay.classList.contains('active')) return;
     const dx = e.changedTouches[0].screenX - startX;
-    if(dx > 60) stepPresentation(-1);
-    if(dx < -60) stepPresentation(1, true);
+    const dy = e.changedTouches[0].screenY - startY;
+    // Ignore mostly-vertical gestures so scrolling never flips the slide.
+    if(Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.2) return;
+    if(dx > 0) stepPresentation(-1);
+    else stepPresentation(1, true);
   }, { passive: true });
 }
 
