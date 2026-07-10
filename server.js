@@ -36,7 +36,10 @@ import {
   checkRateLimit,
   draftPlan,
   polishPresentation,
-  handoverSummary
+  handoverSummary,
+  dischargeSummary,
+  wardBrief,
+  parseAdmission
 } from './ai.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -447,6 +450,27 @@ async function handleApi(req, res, pathname){
         }
         const text = await handoverSummary(body.patients, body.wardNote || '');
         return sendJSON(res, 200, { text });
+      }
+      if(pathname === '/api/ai/discharge-summary'){
+        if(!body.patient || typeof body.patient !== 'object'){
+          return sendJSON(res, 400, { error: 'patient snapshot required' });
+        }
+        const text = await dischargeSummary(body.patient);
+        return sendJSON(res, 200, { text });
+      }
+      if(pathname === '/api/ai/ward-brief'){
+        if(!Array.isArray(body.patients)){
+          return sendJSON(res, 400, { error: 'patients array required' });
+        }
+        const text = await wardBrief(body.patients);
+        return sendJSON(res, 200, { text });
+      }
+      if(pathname === '/api/ai/parse-admission'){
+        if(typeof body.text !== 'string' || !body.text.trim()){
+          return sendJSON(res, 400, { error: 'admission note text required' });
+        }
+        const fields = await parseAdmission(body.text);
+        return sendJSON(res, 200, { fields });
       }
       return sendJSON(res, 404, { error: 'Unknown AI endpoint' });
     }catch(err){
