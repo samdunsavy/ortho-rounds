@@ -70,15 +70,28 @@ function aliasFor(i){
   return i < 26 ? `Patient ${letter}` : `Patient ${letter}${Math.floor(i / 26) + 1}`;
 }
 
+function deepAliasify(value, mapping){
+  if(typeof value === 'string') return aliasifyText(value, mapping);
+  if(Array.isArray(value)) return value.map(v => deepAliasify(v, mapping));
+  if(value && typeof value === 'object'){
+    for(const key of Object.keys(value)) value[key] = deepAliasify(value[key], mapping);
+    return value;
+  }
+  return value;
+}
+
 function pseudonymizeSnapshots(snapshots){
   const mapping = [];
-  snapshots.forEach((s, i)=>{
+  for(const s of snapshots){
     const name = typeof s.name === 'string' ? s.name.trim() : '';
-    if(!name) return;
+    if(!name) continue;
     const alias = aliasFor(mapping.length);
     mapping.push({ alias, name });
     s.name = alias;
-  });
+  }
+  // Names can also hide inside free-text fields (plans, notes, handover) —
+  // scrub every string in every snapshot, not just the name field.
+  for(const s of snapshots) deepAliasify(s, mapping);
   return mapping;
 }
 
