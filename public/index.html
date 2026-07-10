@@ -1116,6 +1116,11 @@
     padding:8px 14px 14px;font-size:13px;color:var(--ink-soft);
     border-bottom:1px solid var(--line-soft);margin-bottom:8px;
   }
+  .sheet-account-row .role-tag{
+    font-size:10.5px;text-transform:uppercase;letter-spacing:0.04em;
+    color:var(--accent);margin-left:6px;font-weight:700;
+  }
+  .more-menu-panel .sheet-account-row{padding:6px 10px 10px;margin-bottom:4px;flex-wrap:wrap;}
   .account-user-row{
     display:flex;align-items:center;justify-content:space-between;gap:10px;
     padding:8px 0;border-bottom:1px solid var(--line-soft);font-size:13.5px;
@@ -1551,6 +1556,11 @@
     <div class="more-menu-wrap">
       <button class="ibtn" id="moreMenuBtn" title="More actions">⋮ More</button>
       <div class="more-menu-panel" id="moreMenuPanel">
+        <div class="sheet-account-row">
+          <span>Logged in as <strong id="desktopAccountUsername">—</strong><span id="desktopAccountRole" class="role-tag"></span></span>
+          <button type="button" class="btn btn-sm" id="desktopLogoutBtn">Log out</button>
+        </div>
+        <button class="ibtn" id="desktopManageUsersBtn" style="display:none;">Manage users</button>
         <button class="ibtn" id="exportBtn">Export</button>
         <button class="ibtn" id="importBtn">Import</button>
         <button class="ibtn" id="templatesBtn">Templates</button>
@@ -1675,7 +1685,7 @@
     </div>
     <div class="sheet-body">
       <div class="sheet-account-row">
-        <span>Logged in as <strong id="moreAccountUsername">—</strong></span>
+        <span>Logged in as <strong id="moreAccountUsername">—</strong><span id="moreAccountRole" class="role-tag"></span></span>
         <button type="button" class="btn btn-sm" id="moreLogoutBtn">Log out</button>
       </div>
       <div class="sheet-actions">

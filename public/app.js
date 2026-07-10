@@ -2919,10 +2919,23 @@ function isAdmin(){
 }
 
 function updateAccountUI(){
+  const username = localStorage.getItem(LS_USERNAME) || '—';
+  const admin = isAdmin();
+  const roleTag = admin ? ' (admin)' : '';
+
   const label = document.getElementById('moreAccountUsername');
-  if(label) label.textContent = localStorage.getItem(LS_USERNAME) || '—';
+  if(label) label.textContent = username;
+  const roleEl = document.getElementById('moreAccountRole');
+  if(roleEl) roleEl.textContent = roleTag;
   const manageBtn = document.getElementById('moreManageUsersBtn');
-  if(manageBtn) manageBtn.style.display = isAdmin() ? '' : 'none';
+  if(manageBtn) manageBtn.style.display = admin ? '' : 'none';
+
+  const dLabel = document.getElementById('desktopAccountUsername');
+  if(dLabel) dLabel.textContent = username;
+  const dRoleEl = document.getElementById('desktopAccountRole');
+  if(dRoleEl) dRoleEl.textContent = roleTag;
+  const dManageBtn = document.getElementById('desktopManageUsersBtn');
+  if(dManageBtn) dManageBtn.style.display = admin ? '' : 'none';
 }
 
 async function openAccountModal(){
@@ -3043,6 +3056,14 @@ function bindEvents(){
   document.getElementById('exportBtn').addEventListener('click', exportData);
   document.getElementById('importBtn').addEventListener('click', ()=> document.getElementById('hiddenImportInput').click());
   document.getElementById('refreshServerBtn').addEventListener('click', refreshFromServer);
+  document.getElementById('desktopLogoutBtn')?.addEventListener('click', ()=>{
+    document.getElementById('moreMenuPanel')?.classList.remove('open');
+    logout();
+  });
+  document.getElementById('desktopManageUsersBtn')?.addEventListener('click', ()=>{
+    document.getElementById('moreMenuPanel')?.classList.remove('open');
+    void openAccountModal();
+  });
   document.getElementById('presentBtn').addEventListener('click', openPresentationMode);
   document.getElementById('censusBtn').addEventListener('click', exportCensus);
   document.getElementById('templatesBtn').addEventListener('click', openTemplateManager);
