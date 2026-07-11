@@ -3684,6 +3684,9 @@ function renderAll(){
   renderWardHandoverBanner();
   updateStickyHeaderOffset();
   maybeShowContextualTips();
+  if(document.getElementById('presentationOverlay')?.classList.contains('active')){
+    renderPresentationSlide();
+  }
 }
 
 function maybeShowContextualTips(){
@@ -6589,6 +6592,8 @@ async function savePatientFromModal(){
 
     if(!d.name){ showToast('Please enter patient name'); return; }
 
+    if(isNew && !d.assignedPg && getPgInitials()) d.assignedPg = getPgInitials();
+
     Object.assign(d, normalizeModalPatientFields(d));
 
     normalizePatientChecklists(d);
@@ -6702,14 +6707,12 @@ async function editWardHandover(){
 /* ---------------- PRESENTATION MODE ---------------- */
 
 function getPresentationList(){
-  let list;
-  if(isPgScopeMine() && currentFilter === 'all'){
-    list = getPgScopedPatients(getActiveRoundsItems());
-  }else if(currentFilter !== 'all'){
-    list = getFilteredRoundsItems();
-  }else{
-    list = getActiveRoundsItems();
-  }
+  // Presentation uses the full active census (like census/handover), not the
+  // rounds list filter — otherwise new patients or other statuses vanish when
+  // e.g. filter is Pre-op or My patients.
+  let list = isPgScopeMine()
+    ? getPgScopedPatients(getActiveRoundsItems())
+    : getActiveRoundsItems();
   if(presentationUnpresentedOnly){
     list = list.filter(p => !isPresented(p.id));
   }
@@ -6920,6 +6923,12 @@ function bindPresentationXrayClicks(container, p){
 
 function renderPresentationSlide(animating){
   const list = getPresentationList();
+  if(!list.length){
+    closePresentationMode();
+    showToast(presentationUnpresentedOnly ? 'All patients presented' : 'No patients to present');
+    return;
+  }
+  presentationIndex = Math.max(0, Math.min(presentationIndex, list.length - 1));
   const p = list[presentationIndex];
   const el = document.getElementById('presentationContent');
   if(!p || !el){
@@ -6930,7 +6939,7 @@ function renderPresentationSlide(animating){
   const flags = getPatientFlags(p);
   const presented = isPresented(p.id);
   const dayLabel = dayInfo ? ` · ${dayInfo.prefix} ${dayInfo.day}` : (p.status === 'conservative' ? ' · Conservative' : '');
-  const scopeLabel = isPgScopeMine() ? 'My patients' : (currentFilter !== 'all' ? (FILTER_LABELS[currentFilter] || 'Filtered') : 'Whole ward');
+  const scopeLabel = isPgScopeMine() ? 'My patients' : 'Whole ward';
   document.getElementById('presentationCounter').textContent = `${presentationIndex + 1} / ${list.length} · ${scopeLabel}`;
   document.getElementById('presentationWard').textContent = `Ward ${getPatientWard(p)} · ${p.bed || '—'}`;
   const progressFill = document.getElementById('presentationProgress');
