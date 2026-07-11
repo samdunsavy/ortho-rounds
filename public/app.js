@@ -16,6 +16,7 @@ let openCardId = null;
 let editingPatientId = null; // null = adding new
 let modalWorkingData = null; // in-memory draft while add/edit modal is open
 let modalSuppressAutoTemplate = false; // user removed milestones — don't refill on save
+let modalSmartPasteUsed = false; // AI admission fill — don't auto-apply milestone templates
 let pendingImageSlot = null;  // {type: 'preop'|'postop'|'followup'}
 let modalPendingImages = [];  // { id, dataURL, type } — staged X-rays before modal save
 let viewingImageContext = null; // { patientId, imgId }
@@ -1316,9 +1317,7 @@ async function runSmartPaste(btn){
         filled++;
       }
     }
-    if(fields?.status){
-      document.getElementById('f_status')?.dispatchEvent(new Event('change', { bubbles: true }));
-    }
+    modalSmartPasteUsed = true;
     normalizeSmartPasteFormFields();
     filled += applySmartPasteLabs(fields.labs);
     filled += applySmartPasteAntibiotics(fields.antibioticCourses);
@@ -5534,6 +5533,7 @@ function openPatientModal(p){
   modalWorkingData = p ? JSON.parse(JSON.stringify(p)) : blankPatient();
   modalPendingImages = [];
   modalSuppressAutoTemplate = false;
+  modalSmartPasteUsed = false;
   normalizeAntibioticCourses(modalWorkingData);
   if(!p){
     const ini = getPgInitials();
@@ -5598,6 +5598,7 @@ async function closePatientModal(){
   modalBaselineJson = null;
   modalPendingImages = [];
   modalSuppressAutoTemplate = false;
+  modalSmartPasteUsed = false;
 }
 
 /** Read checklist rows from the modal DOM into working data (source of truth on save). */
@@ -6556,9 +6557,9 @@ async function savePatientFromModal(){
 
     flushChecklistsFromModal(d);
 
-    if(isNew && !modalSuppressAutoTemplate && newStatus === 'postop' && !d.postOpChecks?.length) applyPostOpTemplate(d);
-    if(isNew && !modalSuppressAutoTemplate && newStatus === 'fordischarge' && !d.dischargeChecks?.length) applyDischargeTemplate(d);
-    if(isNew && !modalSuppressAutoTemplate && newStatus === 'conservative' && !d.postOpChecks?.length) applyConservativeTemplate(d);
+    if(isNew && !modalSuppressAutoTemplate && !modalSmartPasteUsed && newStatus === 'postop' && !d.postOpChecks?.length) applyPostOpTemplate(d);
+    if(isNew && !modalSuppressAutoTemplate && !modalSmartPasteUsed && newStatus === 'fordischarge' && !d.dischargeChecks?.length) applyDischargeTemplate(d);
+    if(isNew && !modalSuppressAutoTemplate && !modalSmartPasteUsed && newStatus === 'conservative' && !d.postOpChecks?.length) applyConservativeTemplate(d);
 
     if(!isNew && editingPatientId){
       const cached = await cacheGet(editingPatientId);
