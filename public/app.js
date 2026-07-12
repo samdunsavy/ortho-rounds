@@ -5963,10 +5963,10 @@ function renderModalForm(d){
       <div class="form-hint">Default team: ${escapeHTML(getDefaultOtDoctors().join(', '))}. Used on the OT list Word/PDF export.</div>
     </div>
     <div class="form-row">
-      <label class="scribe-check"><input type="checkbox" id="f_cArmRequired" ${d.cArmRequired ? 'checked' : ''}> C-arm required (prints banner on OT list)</label>
+      <label class="scribe-check"><input type="checkbox" id="f_cArmRequired" ${d.cArmRequired ? 'checked' : ''}> C-arm required (one banner at bottom of OT list)</label>
     </div>
     <div class="form-row">
-      <label class="scribe-check"><input type="checkbox" id="f_arthroMonitorRequired" ${d.arthroMonitorRequired ? 'checked' : ''}> Arthroscopic monitor required (prints banner on OT list)</label>
+      <label class="scribe-check"><input type="checkbox" id="f_arthroMonitorRequired" ${d.arthroMonitorRequired ? 'checked' : ''}> Arthroscopic monitor required (one banner at bottom of OT list)</label>
     </div>
 
     <div class="form-row">
@@ -7792,11 +7792,11 @@ async function editOtListFields(id){
     { id: 'anaesthesia', label: 'Anaesthesia', value: p.anaesthesia || '', placeholder: 'GA / SA / RA' },
     { id: 'cArmRequired', label: 'C-arm required', value: p.cArmRequired ? 'yes' : 'no', type: 'select', options: [
       { value: 'no', label: 'No' },
-      { value: 'yes', label: 'Yes — print C ARM REQUIRED banner' }
+      { value: 'yes', label: 'Yes — one C ARM REQUIRED banner at bottom of list' }
     ]},
     { id: 'arthroMonitorRequired', label: 'Arthroscopic monitor required', value: p.arthroMonitorRequired ? 'yes' : 'no', type: 'select', options: [
       { value: 'no', label: 'No' },
-      { value: 'yes', label: 'Yes — print ARTHROSCOPIC MONITOR REQUIRED banner' }
+      { value: 'yes', label: 'Yes — one ARTHROSCOPIC MONITOR REQUIRED banner at bottom of list' }
     ]},
     { id: 'otDoctors', label: 'Doctors (one per line; blank = unit default)', value: (p.otDoctors && p.otDoctors.length ? p.otDoctors : []).join('\n'), type: 'textarea', rows: 4, placeholder: getDefaultOtDoctors().join('\n') }
   ]);
@@ -7819,7 +7819,7 @@ async function toggleOtCArm(id){
   if(!p) return;
   p.cArmRequired = !p.cArmRequired;
   await persistAndRerender(p);
-  showToast(p.cArmRequired ? 'C-arm required — will print on OT list' : 'C-arm cleared', { success: true });
+  showToast(p.cArmRequired ? 'C-arm required — banner prints once at bottom of OT list' : 'C-arm cleared', { success: true });
 }
 
 async function toggleOtArthroMonitor(id){
@@ -7827,7 +7827,7 @@ async function toggleOtArthroMonitor(id){
   if(!p) return;
   p.arthroMonitorRequired = !p.arthroMonitorRequired;
   await persistAndRerender(p);
-  showToast(p.arthroMonitorRequired ? 'Arthroscopic monitor required — will print on OT list' : 'Arthroscopic monitor cleared', { success: true });
+  showToast(p.arthroMonitorRequired ? 'Arthroscopic monitor required — banner prints once at bottom of OT list' : 'Arthroscopic monitor cleared', { success: true });
 }
 
 function buildOtExportPayload(){
@@ -7911,19 +7911,16 @@ function printOtListPdf(){
   const ARTHRO_BANNER = '&lt;--------------------------------------------- ARTHROSCOPIC MONITOR REQUIRED ----------------------------------------------&gt;';
   const mergeDocs = payload.patients.length > 1;
   const listDocs = (payload.patients[0]?.otDoctors || []).map(d => escapeHTML(d)).join('<br>');
-  const docsRowSpan = payload.patients.reduce((n, p) => {
-    n += 1;
-    if(p.cArmRequired) n += 1;
-    if(p.arthroMonitorRequired) n += 1;
-    return n;
-  }, 0);
+  const docsRowSpan = payload.patients.length;
+  const needCArm = payload.patients.some(p => !!p.cArmRequired);
+  const needArthro = payload.patients.some(p => !!p.arthroMonitorRequired);
   const rows = payload.patients.map((p, i) => {
     const name = escapeHTML((p.name || '').toUpperCase()) + (p.payer ? `<br><span class="payer">(${escapeHTML(String(p.payer).toUpperCase())})</span>` : '');
     const docs = (p.otDoctors || []).map(d => escapeHTML(d)).join('<br>');
     const docsCell = mergeDocs
       ? (i === 0 ? `<td rowspan="${docsRowSpan}" class="ot-docs-merged">${listDocs}</td>` : '')
       : `<td>${docs}</td>`;
-    let html = `<tr>
+    return `<tr>
       <td>${i + 1}</td>
       <td>${escapeHTML(p.uhid || '')}</td>
       <td>${name}</td>
@@ -7935,18 +7932,9 @@ function printOtListPdf(){
       ${docsCell}
       <td>${escapeHTML((p.anaesthesia || '').toUpperCase())}</td>
     </tr>`;
-    if(p.cArmRequired){
-      html += mergeDocs
-        ? `<tr class="ot-banner"><td colspan="8">${C_ARM_BANNER}</td><td></td></tr>`
-        : `<tr class="ot-banner"><td colspan="10">${C_ARM_BANNER}</td></tr>`;
-    }
-    if(p.arthroMonitorRequired){
-      html += mergeDocs
-        ? `<tr class="ot-banner"><td colspan="8">${ARTHRO_BANNER}</td><td></td></tr>`
-        : `<tr class="ot-banner"><td colspan="10">${ARTHRO_BANNER}</td></tr>`;
-    }
-    return html;
-  }).join('');
+  }).join('')
+    + (needCArm ? `<tr class="ot-banner"><td colspan="10">${C_ARM_BANNER}</td></tr>` : '')
+    + (needArthro ? `<tr class="ot-banner"><td colspan="10">${ARTHRO_BANNER}</td></tr>` : '');
 
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>OT List ${escapeHTML(formatOtListDateDisplay(payload.date))}</title>
   <style>

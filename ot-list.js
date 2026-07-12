@@ -80,46 +80,22 @@ function cellParagraphs(text, opts = {}){
 export const C_ARM_BANNER = '<--------------------------------------------- C ARM REQUIRED ---------------------------------------------->';
 export const ARTHRO_MONITOR_BANNER = '<--------------------------------------------- ARTHROSCOPIC MONITOR REQUIRED ---------------------------------------------->';
 
-/** Patient rows + equipment banner rows under them (for doctors rowspan). */
-export function countOtBodyRows(patients){
-  return (Array.isArray(patients) ? patients : []).reduce((n, p) => {
-    n += 1;
-    if(p?.cArmRequired) n += 1;
-    if(p?.arthroMonitorRequired) n += 1;
-    return n;
-  }, 0);
+/** True if any patient on the list needs a C-arm (one banner at bottom). */
+export function listNeedsCArm(patients){
+  return (Array.isArray(patients) ? patients : []).some(p => !!p?.cArmRequired);
 }
 
-function otBannerRow(totalWidth, colCount, text, opts = {}){
-  // When doctors are vertically merged, keep that column intact across banner rows.
-  if(opts.mergeDocs && opts.widths){
-    const w = opts.widths;
-    const left = totalWidth - w.docs - w.anaes;
-    return new TableRow({
-      children: [
-        new TableCell({
-          borders: BORDERS,
-          columnSpan: 8,
-          width: { size: left, type: WidthType.DXA },
-          verticalAlign: VerticalAlign.CENTER,
-          children: cellParagraphs(text, { bold: true, center: true, size: 18 })
-        }),
-        new TableCell({
-          borders: BORDERS,
-          width: { size: w.docs, type: WidthType.DXA },
-          verticalAlign: VerticalAlign.CENTER,
-          verticalMerge: VerticalMergeType.CONTINUE,
-          children: [new Paragraph({ children: [] })]
-        }),
-        new TableCell({
-          borders: BORDERS,
-          width: { size: w.anaes, type: WidthType.DXA },
-          verticalAlign: VerticalAlign.CENTER,
-          children: [new Paragraph({ children: [] })]
-        })
-      ]
-    });
-  }
+/** True if any patient needs an arthroscopic monitor (one banner at bottom). */
+export function listNeedsArthroMonitor(patients){
+  return (Array.isArray(patients) ? patients : []).some(p => !!p?.arthroMonitorRequired);
+}
+
+/** Patient data rows only (doctors rowspan); equipment banners sit below the list. */
+export function countOtBodyRows(patients){
+  return Array.isArray(patients) ? patients.length : 0;
+}
+
+function otBannerRow(totalWidth, colCount, text){
   return new TableRow({
     children: [
       new TableCell({
@@ -203,7 +179,6 @@ export async function buildOtListDocx(opts){
   const listDoctors = patients.length
     ? resolveOtDoctors(patients[0], defaults)
     : [...DEFAULT_OT_DOCTORS];
-  const bannerOpts = mergeDocs ? { mergeDocs: true, widths } : {};
 
   patients.forEach((p, i) => {
     const doctors = mergeDocs ? listDoctors : resolveOtDoctors(p, defaults);
@@ -230,13 +205,15 @@ export async function buildOtListDocx(opts){
         bodyCell(String(p.anaesthesia || '').toUpperCase(), widths.anaes, { size: 18 })
       ]
     }));
-    if(p.cArmRequired){
-      dataRows.push(otBannerRow(total, colCount, C_ARM_BANNER, bannerOpts));
-    }
-    if(p.arthroMonitorRequired){
-      dataRows.push(otBannerRow(total, colCount, ARTHRO_MONITOR_BANNER, bannerOpts));
-    }
   });
+
+  // Equipment banners once at the bottom if any patient needs them.
+  if(listNeedsCArm(patients)){
+    dataRows.push(otBannerRow(total, colCount, C_ARM_BANNER));
+  }
+  if(listNeedsArthroMonitor(patients)){
+    dataRows.push(otBannerRow(total, colCount, ARTHRO_MONITOR_BANNER));
+  }
 
   const table = new Table({
     width: { size: total, type: WidthType.DXA },

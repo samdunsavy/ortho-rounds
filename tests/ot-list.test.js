@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   DEFAULT_OT_DOCTORS, normalizeOtDoctors, resolveOtDoctors,
   formatOtListDate, formatOtAge, formatOtUnitLabel, buildOtListDocx,
-  sanitizeOtExportPatient, countOtBodyRows
+  sanitizeOtExportPatient, countOtBodyRows, listNeedsCArm, listNeedsArthroMonitor
 } from '../ot-list.js';
 
 describe('OT list helpers', () => {
@@ -70,12 +70,19 @@ describe('OT list helpers', () => {
     assert.equal(out.dailyPlan, undefined);
   });
 
-  test('countOtBodyRows includes equipment banners', () => {
+  test('equipment banners are list-level once any patient needs them', () => {
+    assert.equal(listNeedsCArm([{ cArmRequired: false }, { cArmRequired: true }]), true);
+    assert.equal(listNeedsCArm([{ cArmRequired: false }]), false);
+    assert.equal(listNeedsArthroMonitor([{ arthroMonitorRequired: true }]), true);
+    assert.equal(listNeedsArthroMonitor([{}]), false);
+  });
+
+  test('countOtBodyRows is patient rows only', () => {
     assert.equal(countOtBodyRows([
       { cArmRequired: true },
       { arthroMonitorRequired: true },
       {}
-    ]), 5);
+    ]), 3);
   });
 
   test('buildOtListDocx merges doctors column for multiple patients', async () => {
