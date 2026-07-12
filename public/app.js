@@ -7909,9 +7909,20 @@ function printOtListPdf(){
   const unitLabel = (payload.unit || '').replace(/^unit\s+/i, '').trim().toUpperCase();
   const C_ARM_BANNER = '&lt;--------------------------------------------- C ARM REQUIRED ----------------------------------------------&gt;';
   const ARTHRO_BANNER = '&lt;--------------------------------------------- ARTHROSCOPIC MONITOR REQUIRED ----------------------------------------------&gt;';
+  const mergeDocs = payload.patients.length > 1;
+  const listDocs = (payload.patients[0]?.otDoctors || []).map(d => escapeHTML(d)).join('<br>');
+  const docsRowSpan = payload.patients.reduce((n, p) => {
+    n += 1;
+    if(p.cArmRequired) n += 1;
+    if(p.arthroMonitorRequired) n += 1;
+    return n;
+  }, 0);
   const rows = payload.patients.map((p, i) => {
     const name = escapeHTML((p.name || '').toUpperCase()) + (p.payer ? `<br><span class="payer">(${escapeHTML(String(p.payer).toUpperCase())})</span>` : '');
     const docs = (p.otDoctors || []).map(d => escapeHTML(d)).join('<br>');
+    const docsCell = mergeDocs
+      ? (i === 0 ? `<td rowspan="${docsRowSpan}" class="ot-docs-merged">${listDocs}</td>` : '')
+      : `<td>${docs}</td>`;
     let html = `<tr>
       <td>${i + 1}</td>
       <td>${escapeHTML(p.uhid || '')}</td>
@@ -7921,14 +7932,18 @@ function printOtListPdf(){
       <td>${escapeHTML((p.ward || '').toUpperCase())}</td>
       <td>${escapeHTML((p.diagnosis || '').toUpperCase())}</td>
       <td>${escapeHTML((p.procedure || '').toUpperCase()).replace(/\n/g, '<br>')}</td>
-      <td>${docs}</td>
+      ${docsCell}
       <td>${escapeHTML((p.anaesthesia || '').toUpperCase())}</td>
     </tr>`;
     if(p.cArmRequired){
-      html += `<tr class="ot-banner"><td colspan="10">${C_ARM_BANNER}</td></tr>`;
+      html += mergeDocs
+        ? `<tr class="ot-banner"><td colspan="8">${C_ARM_BANNER}</td><td></td></tr>`
+        : `<tr class="ot-banner"><td colspan="10">${C_ARM_BANNER}</td></tr>`;
     }
     if(p.arthroMonitorRequired){
-      html += `<tr class="ot-banner"><td colspan="10">${ARTHRO_BANNER}</td></tr>`;
+      html += mergeDocs
+        ? `<tr class="ot-banner"><td colspan="8">${ARTHRO_BANNER}</td><td></td></tr>`
+        : `<tr class="ot-banner"><td colspan="10">${ARTHRO_BANNER}</td></tr>`;
     }
     return html;
   }).join('');
@@ -7946,6 +7961,7 @@ function printOtListPdf(){
     th{ font-size:11px; text-transform:uppercase; }
     .payer{ font-size:11px; }
     tr.ot-banner td{ font-weight:700; letter-spacing:0.02em; padding:8px 4px; }
+    td.ot-docs-merged{ vertical-align:middle; text-align:center; }
     .sig-block{ margin-top:42px; width:100%; border-collapse:collapse; font-size:12px; font-weight:700; }
     .sig-block td{ border:none; padding:2px 0; vertical-align:top; text-align:left; }
     .sig-block td.r{ text-align:right; }

@@ -2,7 +2,8 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   DEFAULT_OT_DOCTORS, normalizeOtDoctors, resolveOtDoctors,
-  formatOtListDate, formatOtAge, formatOtUnitLabel, buildOtListDocx, sanitizeOtExportPatient
+  formatOtListDate, formatOtAge, formatOtUnitLabel, buildOtListDocx,
+  sanitizeOtExportPatient, countOtBodyRows
 } from '../ot-list.js';
 
 describe('OT list helpers', () => {
@@ -67,5 +68,34 @@ describe('OT list helpers', () => {
     assert.equal(out.cArmRequired, true);
     assert.equal(out.arthroMonitorRequired, true);
     assert.equal(out.dailyPlan, undefined);
+  });
+
+  test('countOtBodyRows includes equipment banners', () => {
+    assert.equal(countOtBodyRows([
+      { cArmRequired: true },
+      { arthroMonitorRequired: true },
+      {}
+    ]), 5);
+  });
+
+  test('buildOtListDocx merges doctors column for multiple patients', async () => {
+    const buf = await buildOtListDocx({
+      date: '2026-07-13',
+      unit: 'IV',
+      patients: [
+        {
+          name: 'A', age: '28', sex: 'M', ward: '7MOW', uhid: '1',
+          diagnosis: 'DX', procedure: 'PROC', anaesthesia: 'GA', otOrder: 1,
+          otDoctors: [], cArmRequired: true
+        },
+        {
+          name: 'B', age: '40', sex: 'F', ward: '7MOW', uhid: '2',
+          diagnosis: 'DX', procedure: 'PROC', anaesthesia: 'SA', otOrder: 2,
+          otDoctors: []
+        }
+      ]
+    });
+    assert.ok(Buffer.isBuffer(buf));
+    assert.ok(buf.length > 1000);
   });
 });

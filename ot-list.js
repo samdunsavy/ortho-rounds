@@ -2,7 +2,7 @@
 
 import {
   Document, Packer, Paragraph, Table, TableRow, TableCell,
-  TextRun, AlignmentType, WidthType, BorderStyle, VerticalAlign
+  TextRun, AlignmentType, WidthType, BorderStyle, VerticalAlign, VerticalMergeType
 } from 'docx';
 
 /** Default operating team from the hospital OT list template. */
@@ -80,7 +80,46 @@ function cellParagraphs(text, opts = {}){
 export const C_ARM_BANNER = '<--------------------------------------------- C ARM REQUIRED ---------------------------------------------->';
 export const ARTHRO_MONITOR_BANNER = '<--------------------------------------------- ARTHROSCOPIC MONITOR REQUIRED ---------------------------------------------->';
 
-function otBannerRow(totalWidth, colCount, text){
+/** Patient rows + equipment banner rows under them (for doctors rowspan). */
+export function countOtBodyRows(patients){
+  return (Array.isArray(patients) ? patients : []).reduce((n, p) => {
+    n += 1;
+    if(p?.cArmRequired) n += 1;
+    if(p?.arthroMonitorRequired) n += 1;
+    return n;
+  }, 0);
+}
+
+function otBannerRow(totalWidth, colCount, text, opts = {}){
+  // When doctors are vertically merged, keep that column intact across banner rows.
+  if(opts.mergeDocs && opts.widths){
+    const w = opts.widths;
+    const left = totalWidth - w.docs - w.anaes;
+    return new TableRow({
+      children: [
+        new TableCell({
+          borders: BORDERS,
+          columnSpan: 8,
+          width: { size: left, type: WidthType.DXA },
+          verticalAlign: VerticalAlign.CENTER,
+          children: cellParagraphs(text, { bold: true, center: true, size: 18 })
+        }),
+        new TableCell({
+          borders: BORDERS,
+          width: { size: w.docs, type: WidthType.DXA },
+          verticalAlign: VerticalAlign.CENTER,
+          verticalMerge: VerticalMergeType.CONTINUE,
+          children: [new Paragraph({ children: [] })]
+        }),
+        new TableCell({
+          borders: BORDERS,
+          width: { size: w.anaes, type: WidthType.DXA },
+          verticalAlign: VerticalAlign.CENTER,
+          children: [new Paragraph({ children: [] })]
+        })
+      ]
+    });
+  }
   return new TableRow({
     children: [
       new TableCell({
@@ -104,11 +143,15 @@ function headerCell(text, width){
 }
 
 function bodyCell(text, width, opts = {}){
+  const { verticalMerge, ...paraOpts } = opts;
   return new TableCell({
     borders: BORDERS,
     width: { size: width, type: WidthType.DXA },
     verticalAlign: VerticalAlign.CENTER,
-    children: cellParagraphs(text, { center: true, size: 20, ...opts })
+    verticalMerge,
+    children: verticalMerge === VerticalMergeType.CONTINUE
+      ? [new Paragraph({ children: [] })]
+      : cellParagraphs(text, { center: true, size: 20, ...paraOpts })
   });
 }
 
@@ -155,12 +198,24 @@ export async function buildOtListDocx(opts){
 
   const dataRows = [];
   const colCount = Object.keys(widths).length;
+  // Same operating team for the list — merge DOCTORS NAME once when 2+ patients.
+  const mergeDocs = patients.length > 1;
+  const listDoctors = patients.length
+    ? resolveOtDoctors(patients[0], defaults)
+    : [...DEFAULT_OT_DOCTORS];
+  const bannerOpts = mergeDocs ? { mergeDocs: true, widths } : {};
+
   patients.forEach((p, i) => {
-    const doctors = resolveOtDoctors(p, defaults);
+    const doctors = mergeDocs ? listDoctors : resolveOtDoctors(p, defaults);
     const nameLines = [String(p.name || '').trim().toUpperCase()];
     const payer = String(p.payer || '').trim();
     if(payer) nameLines.push(`(${payer.toUpperCase()})`);
     const ward = String(p.ward || p.bed || '').trim().toUpperCase();
+    const docsOpts = mergeDocs
+      ? (i === 0
+        ? { size: 18, verticalMerge: VerticalMergeType.RESTART }
+        : { size: 18, verticalMerge: VerticalMergeType.CONTINUE })
+      : { size: 18 };
     dataRows.push(new TableRow({
       children: [
         bodyCell(String(p.otOrder || (i + 1)), widths.sl, { bold: true, size: 22 }),
@@ -171,15 +226,15 @@ export async function buildOtListDocx(opts){
         bodyCell(ward, widths.ward, { size: 20 }),
         bodyCell(String(p.diagnosis || '').toUpperCase(), widths.dx, { size: 18 }),
         bodyCell(String(p.procedure || '').toUpperCase(), widths.proc, { size: 18 }),
-        bodyCell(doctors.join('\n'), widths.docs, { size: 18 }),
+        bodyCell(i === 0 || !mergeDocs ? doctors.join('\n') : '', widths.docs, docsOpts),
         bodyCell(String(p.anaesthesia || '').toUpperCase(), widths.anaes, { size: 18 })
       ]
     }));
     if(p.cArmRequired){
-      dataRows.push(otBannerRow(total, colCount, C_ARM_BANNER));
+      dataRows.push(otBannerRow(total, colCount, C_ARM_BANNER, bannerOpts));
     }
     if(p.arthroMonitorRequired){
-      dataRows.push(otBannerRow(total, colCount, ARTHRO_MONITOR_BANNER));
+      dataRows.push(otBannerRow(total, colCount, ARTHRO_MONITOR_BANNER, bannerOpts));
     }
   });
 
