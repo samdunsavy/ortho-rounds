@@ -50,7 +50,7 @@ describe('OT list helpers', () => {
       patients: [{
         name: 'AFZAL PASHA', age: '28', sex: 'M', ward: '7MOW', uhid: '3439047',
         diagnosis: 'BOTH BONE FOREARM FRACTURE', procedure: 'ORIF WITH PLATES',
-        payer: 'ABARK', anaesthesia: 'GA', otOrder: 1, otDoctors: []
+        payer: 'ABARK', anaesthesia: 'GA', otOrder: 1, otDoctors: [], cArmRequired: true
       }]
     });
     assert.ok(Buffer.isBuffer(buf));
@@ -58,5 +58,14 @@ describe('OT list helpers', () => {
     // DOCX files are ZIP archives
     assert.equal(buf[0], 0x50);
     assert.equal(buf[1], 0x4b);
+  });
+
+  test('sanitizeOtExportPatient keeps equipment banners', () => {
+    const out = sanitizeOtExportPatient({
+      id: 'p1', name: 'A', cArmRequired: true, arthroMonitorRequired: true, dailyPlan: 'x'
+    });
+    assert.equal(out.cArmRequired, true);
+    assert.equal(out.arthroMonitorRequired, true);
+    assert.equal(out.dailyPlan, undefined);
   });
 });

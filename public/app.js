@@ -1981,15 +1981,30 @@ function showAppDialog(opts){
       if(f.type === 'textarea'){
         input = document.createElement('textarea');
         input.rows = f.rows || 4;
+        input.id = 'adf_' + f.id;
+        input.value = f.value ?? '';
+        if(f.placeholder) input.placeholder = f.placeholder;
+        wrap.appendChild(input);
+      }else if(f.type === 'select'){
+        input = document.createElement('select');
+        input.id = 'adf_' + f.id;
+        (f.options || []).forEach(opt => {
+          const o = document.createElement('option');
+          o.value = opt.value;
+          o.textContent = opt.label || opt.value;
+          if(String(f.value) === String(opt.value)) o.selected = true;
+          input.appendChild(o);
+        });
+        wrap.appendChild(input);
       }else{
         input = document.createElement('input');
         input.type = f.type || 'text';
+        input.id = 'adf_' + f.id;
+        input.value = f.value ?? '';
+        if(f.placeholder) input.placeholder = f.placeholder;
+        if(f.maxlength) input.maxLength = f.maxlength;
+        wrap.appendChild(input);
       }
-      input.id = 'adf_' + f.id;
-      input.value = f.value ?? '';
-      if(f.placeholder) input.placeholder = f.placeholder;
-      if(f.maxlength) input.maxLength = f.maxlength;
-      wrap.appendChild(input);
       fieldsEl.appendChild(wrap);
     });
 
@@ -2152,6 +2167,8 @@ function blankPatient(){
     anaesthesia: '',
     otDoctors: [],
     otOrder: 0,
+    cArmRequired: false,
+    arthroMonitorRequired: false,
     labs: { hb: '', crp: '', wcc: '', creatinine: '', updatedAt: '' },
     planUpdatedAt: 0,
     statusUpdatedAt: 0,
@@ -5945,6 +5962,12 @@ function renderModalForm(d){
       <textarea id="f_otDoctors" rows="4" placeholder="${escapeHTML(getDefaultOtDoctors().join('\n'))}">${escapeHTML((d.otDoctors && d.otDoctors.length ? d.otDoctors : []).join('\n'))}</textarea>
       <div class="form-hint">Default team: ${escapeHTML(getDefaultOtDoctors().join(', '))}. Used on the OT list Word/PDF export.</div>
     </div>
+    <div class="form-row">
+      <label class="scribe-check"><input type="checkbox" id="f_cArmRequired" ${d.cArmRequired ? 'checked' : ''}> C-arm required (prints banner on OT list)</label>
+    </div>
+    <div class="form-row">
+      <label class="scribe-check"><input type="checkbox" id="f_arthroMonitorRequired" ${d.arthroMonitorRequired ? 'checked' : ''}> Arthroscopic monitor required (prints banner on OT list)</label>
+    </div>
 
     <div class="form-row">
       <label>Today's plan</label>
@@ -6743,6 +6766,8 @@ async function savePatientFromModal(){
     d.payer = document.getElementById('f_payer')?.value.trim() || '';
     d.anaesthesia = document.getElementById('f_anaesthesia')?.value.trim() || '';
     d.otDoctors = parseOtDoctorsText(document.getElementById('f_otDoctors')?.value || '');
+    d.cArmRequired = !!document.getElementById('f_cArmRequired')?.checked;
+    d.arthroMonitorRequired = !!document.getElementById('f_arthroMonitorRequired')?.checked;
     const newPlan = document.getElementById('f_dailyPlan').value.trim();
     d.handoverNote = document.getElementById('f_handoverNote').value.trim();
     d.planHistory = d.planHistory || [];
@@ -7693,8 +7718,10 @@ function renderOtList(){
           <div class="ot-list-dx">${escapeHTML(p.diagnosis||'—')}</div>
           <div class="ot-list-proc">${escapeHTML(p.procedure||'—')}</div>
           <div class="ot-list-docs">${escapeHTML(doctors.join(' · '))}${Array.isArray(p.otDoctors) && p.otDoctors.length ? '' : ' <span class="small-muted">(default)</span>'}</div>
-          <div class="ot-list-anaes">${p.anaesthesia ? escapeHTML(p.anaesthesia) : '<span class="small-muted">Anaesthesia not set</span>'}</div>
+          <div class="ot-list-anaes">${p.anaesthesia ? escapeHTML(p.anaesthesia) : '<span class="small-muted">Anaesthesia not set</span>'}${p.cArmRequired ? ' · <strong>C-arm</strong>' : ''}${p.arthroMonitorRequired ? ' · <strong>Arthro monitor</strong>' : ''}</div>
           <div class="ot-list-actions">
+            <button type="button" class="btn btn-sm${p.cArmRequired ? ' primary' : ''}" data-ot-carm="${escapeHTML(p.id)}">${p.cArmRequired ? 'C-arm on' : 'C-arm'}</button>
+            <button type="button" class="btn btn-sm${p.arthroMonitorRequired ? ' primary' : ''}" data-ot-arthro="${escapeHTML(p.id)}">${p.arthroMonitorRequired ? 'Arthro on' : 'Arthro'}</button>
             <button type="button" class="btn btn-sm" data-ot-edit="${escapeHTML(p.id)}">Edit fields</button>
             <button type="button" class="btn btn-sm" data-ot-remove="${escapeHTML(p.id)}">Remove from list</button>
           </div>
@@ -7763,6 +7790,14 @@ async function editOtListFields(id){
     { id: 'diagnosis', label: 'Diagnosis', value: p.diagnosis || '', type: 'textarea', rows: 3 },
     { id: 'procedure', label: 'Procedure', value: p.procedure || '', type: 'textarea', rows: 3 },
     { id: 'anaesthesia', label: 'Anaesthesia', value: p.anaesthesia || '', placeholder: 'GA / SA / RA' },
+    { id: 'cArmRequired', label: 'C-arm required', value: p.cArmRequired ? 'yes' : 'no', type: 'select', options: [
+      { value: 'no', label: 'No' },
+      { value: 'yes', label: 'Yes — print C ARM REQUIRED banner' }
+    ]},
+    { id: 'arthroMonitorRequired', label: 'Arthroscopic monitor required', value: p.arthroMonitorRequired ? 'yes' : 'no', type: 'select', options: [
+      { value: 'no', label: 'No' },
+      { value: 'yes', label: 'Yes — print ARTHROSCOPIC MONITOR REQUIRED banner' }
+    ]},
     { id: 'otDoctors', label: 'Doctors (one per line; blank = unit default)', value: (p.otDoctors && p.otDoctors.length ? p.otDoctors : []).join('\n'), type: 'textarea', rows: 4, placeholder: getDefaultOtDoctors().join('\n') }
   ]);
   if(!fields) return;
@@ -7772,9 +7807,27 @@ async function editOtListFields(id){
   p.diagnosis = (fields.diagnosis || '').trim();
   p.procedure = (fields.procedure || '').trim();
   p.anaesthesia = (fields.anaesthesia || '').trim();
+  p.cArmRequired = fields.cArmRequired === 'yes';
+  p.arthroMonitorRequired = fields.arthroMonitorRequired === 'yes';
   p.otDoctors = parseOtDoctorsText(fields.otDoctors);
   await persistAndRerender(p);
   showToast('OT fields saved', { success: true });
+}
+
+async function toggleOtCArm(id){
+  const p = patients.find(x => x.id === id);
+  if(!p) return;
+  p.cArmRequired = !p.cArmRequired;
+  await persistAndRerender(p);
+  showToast(p.cArmRequired ? 'C-arm required — will print on OT list' : 'C-arm cleared', { success: true });
+}
+
+async function toggleOtArthroMonitor(id){
+  const p = patients.find(x => x.id === id);
+  if(!p) return;
+  p.arthroMonitorRequired = !p.arthroMonitorRequired;
+  await persistAndRerender(p);
+  showToast(p.arthroMonitorRequired ? 'Arthroscopic monitor required — will print on OT list' : 'Arthroscopic monitor cleared', { success: true });
 }
 
 function buildOtExportPayload(){
@@ -7798,6 +7851,8 @@ function buildOtExportPayload(){
       anaesthesia: p.anaesthesia || '',
       otDoctors: resolvePatientOtDoctors(p),
       otOrder: Number(p.otOrder) || (i + 1),
+      cArmRequired: !!p.cArmRequired,
+      arthroMonitorRequired: !!p.arthroMonitorRequired,
       unit: p.unit || getDefaultUnit(),
       surgeryDate: p.surgeryDate || date
     }))
@@ -7852,10 +7907,12 @@ function printOtListPdf(){
     return;
   }
   const unitLabel = (payload.unit || '').replace(/^unit\s+/i, '').trim().toUpperCase();
+  const C_ARM_BANNER = '&lt;--------------------------------------------- C ARM REQUIRED ----------------------------------------------&gt;';
+  const ARTHRO_BANNER = '&lt;--------------------------------------------- ARTHROSCOPIC MONITOR REQUIRED ----------------------------------------------&gt;';
   const rows = payload.patients.map((p, i) => {
     const name = escapeHTML((p.name || '').toUpperCase()) + (p.payer ? `<br><span class="payer">(${escapeHTML(String(p.payer).toUpperCase())})</span>` : '');
     const docs = (p.otDoctors || []).map(d => escapeHTML(d)).join('<br>');
-    return `<tr>
+    let html = `<tr>
       <td>${i + 1}</td>
       <td>${escapeHTML(p.uhid || '')}</td>
       <td>${name}</td>
@@ -7867,6 +7924,13 @@ function printOtListPdf(){
       <td>${docs}</td>
       <td>${escapeHTML((p.anaesthesia || '').toUpperCase())}</td>
     </tr>`;
+    if(p.cArmRequired){
+      html += `<tr class="ot-banner"><td colspan="10">${C_ARM_BANNER}</td></tr>`;
+    }
+    if(p.arthroMonitorRequired){
+      html += `<tr class="ot-banner"><td colspan="10">${ARTHRO_BANNER}</td></tr>`;
+    }
+    return html;
   }).join('');
 
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>OT List ${escapeHTML(formatOtListDateDisplay(payload.date))}</title>
@@ -7881,6 +7945,7 @@ function printOtListPdf(){
     th,td{ border:1px solid #000; padding:6px 7px; vertical-align:middle; text-align:center; }
     th{ font-size:11px; text-transform:uppercase; }
     .payer{ font-size:11px; }
+    tr.ot-banner td{ font-weight:700; letter-spacing:0.02em; padding:8px 4px; }
     .sig-block{ margin-top:42px; width:100%; border-collapse:collapse; font-size:12px; font-weight:700; }
     .sig-block td{ border:none; padding:2px 0; vertical-align:top; text-align:left; }
     .sig-block td.r{ text-align:right; }
@@ -7940,6 +8005,10 @@ function bindOtListUi(){
     if(rm){ void removePatientFromOtList(rm.dataset.otRemove); return; }
     const edit = e.target.closest('[data-ot-edit]');
     if(edit){ void editOtListFields(edit.dataset.otEdit); return; }
+    const carm = e.target.closest('[data-ot-carm]');
+    if(carm){ void toggleOtCArm(carm.dataset.otCarm); return; }
+    const arthro = e.target.closest('[data-ot-arthro]');
+    if(arthro){ void toggleOtArthroMonitor(arthro.dataset.otArthro); return; }
     const up = e.target.closest('[data-ot-up]');
     if(up){ void moveOtListPatient(up.dataset.otUp, -1); return; }
     const down = e.target.closest('[data-ot-down]');

@@ -77,6 +77,23 @@ function cellParagraphs(text, opts = {}){
   }));
 }
 
+export const C_ARM_BANNER = '<--------------------------------------------- C ARM REQUIRED ---------------------------------------------->';
+export const ARTHRO_MONITOR_BANNER = '<--------------------------------------------- ARTHROSCOPIC MONITOR REQUIRED ---------------------------------------------->';
+
+function otBannerRow(totalWidth, colCount, text){
+  return new TableRow({
+    children: [
+      new TableCell({
+        borders: BORDERS,
+        columnSpan: colCount,
+        width: { size: totalWidth, type: WidthType.DXA },
+        verticalAlign: VerticalAlign.CENTER,
+        children: cellParagraphs(text, { bold: true, center: true, size: 18 })
+      })
+    ]
+  });
+}
+
 function headerCell(text, width){
   return new TableCell({
     borders: BORDERS,
@@ -136,13 +153,15 @@ export async function buildOtListDocx(opts){
     ]
   });
 
-  const dataRows = patients.map((p, i) => {
+  const dataRows = [];
+  const colCount = Object.keys(widths).length;
+  patients.forEach((p, i) => {
     const doctors = resolveOtDoctors(p, defaults);
     const nameLines = [String(p.name || '').trim().toUpperCase()];
     const payer = String(p.payer || '').trim();
     if(payer) nameLines.push(`(${payer.toUpperCase()})`);
     const ward = String(p.ward || p.bed || '').trim().toUpperCase();
-    return new TableRow({
+    dataRows.push(new TableRow({
       children: [
         bodyCell(String(p.otOrder || (i + 1)), widths.sl, { bold: true, size: 22 }),
         bodyCell(String(p.uhid || ''), widths.ip, { size: 20 }),
@@ -155,7 +174,13 @@ export async function buildOtListDocx(opts){
         bodyCell(doctors.join('\n'), widths.docs, { size: 18 }),
         bodyCell(String(p.anaesthesia || '').toUpperCase(), widths.anaes, { size: 18 })
       ]
-    });
+    }));
+    if(p.cArmRequired){
+      dataRows.push(otBannerRow(total, colCount, C_ARM_BANNER));
+    }
+    if(p.arthroMonitorRequired){
+      dataRows.push(otBannerRow(total, colCount, ARTHRO_MONITOR_BANNER));
+    }
   });
 
   const table = new Table({
@@ -323,6 +348,8 @@ export function sanitizeOtExportPatient(p){
     anaesthesia: p.anaesthesia || '',
     otDoctors: normalizeOtDoctors(p.otDoctors),
     otOrder: Number(p.otOrder) || 0,
+    cArmRequired: !!p.cArmRequired,
+    arthroMonitorRequired: !!p.arthroMonitorRequired,
     unit: p.unit || '',
     surgeryDate: p.surgeryDate || ''
   };
