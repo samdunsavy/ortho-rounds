@@ -5794,8 +5794,10 @@ function isModalDirty(){
   }
 }
 
-async function closePatientModal(){
-  if(isModalDirty()){
+async function closePatientModal(opts = {}){
+  // After Save/Delete the form is intentionally different from the open baseline —
+  // skip the discard prompt so we don't ask to "discard" already-persisted data.
+  if(!opts.force && isModalDirty()){
     const ok = await showConfirm('Discard changes?', 'You have unsaved edits in this form.', { confirmLabel: 'Discard', danger: true });
     if(!ok) return;
   }
@@ -6855,7 +6857,7 @@ async function savePatientFromModal(){
       updateFilterUI();
     }
 
-    closePatientModal();
+    await closePatientModal({ force: true });
     renderAll();
   }catch(err){
     console.error(err);
@@ -6873,7 +6875,7 @@ async function deleteCurrentPatient(){
   if(!ok) return;
   try{
     await softDeletePatient(d.id);
-    closePatientModal();
+    await closePatientModal({ force: true });
     renderAll();
     showToast('Patient deleted');
   }catch(err){
