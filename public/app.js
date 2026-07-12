@@ -7848,35 +7848,37 @@ function printOtListPdf(){
     const name = escapeHTML((p.name || '').toUpperCase()) + (p.payer ? `<br><span class="payer">(${escapeHTML(String(p.payer).toUpperCase())})</span>` : '');
     const docs = (p.otDoctors || []).map(d => escapeHTML(d)).join('<br>');
     return `<tr>
-      <td class="c">${i + 1}</td>
-      <td class="c">${escapeHTML(p.uhid || '')}</td>
+      <td>${i + 1}</td>
+      <td>${escapeHTML(p.uhid || '')}</td>
       <td>${name}</td>
-      <td class="c">${escapeHTML(formatOtAgeDisplay(p.age))}</td>
-      <td class="c">${escapeHTML(p.sex || '')}</td>
-      <td class="c">${escapeHTML((p.ward || '').toUpperCase())}</td>
+      <td>${escapeHTML(formatOtAgeDisplay(p.age))}</td>
+      <td>${escapeHTML(p.sex || '')}</td>
+      <td>${escapeHTML((p.ward || '').toUpperCase())}</td>
       <td>${escapeHTML((p.diagnosis || '').toUpperCase())}</td>
       <td>${escapeHTML((p.procedure || '').toUpperCase()).replace(/\n/g, '<br>')}</td>
       <td>${docs}</td>
-      <td class="c">${escapeHTML((p.anaesthesia || '').toUpperCase())}</td>
+      <td>${escapeHTML((p.anaesthesia || '').toUpperCase())}</td>
     </tr>`;
   }).join('');
 
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>OT List ${escapeHTML(formatOtListDateDisplay(payload.date))}</title>
   <style>
-    @page { size: A4 landscape; margin: 12mm; }
-    body{ font-family: "Times New Roman", Times, serif; color:#000; margin:0; }
-    h1,h2,h3{ text-align:center; margin:4px 0; font-size:16px; }
-    h2{ font-size:15px; } .date{ text-align:center; font-weight:700; margin-bottom:10px; }
-    table{ width:100%; border-collapse:collapse; font-size:10px; }
-    th,td{ border:1px solid #000; padding:4px 5px; vertical-align:top; }
-    th{ font-size:9px; text-transform:uppercase; }
-    td.c{ text-align:center; }
-    .payer{ font-size:9px; }
-    .sigs{ margin-top:28px; display:flex; justify-content:space-between; gap:20px; font-size:11px; font-weight:700; }
+    @page { size: A4 landscape; margin: 18mm; }
+    body{ font-family: "Times New Roman", Times, serif; color:#000; margin:0; padding:0; }
+    .sheet{ padding: 4mm; }
+    h1,h2{ text-align:center; margin:6px 0; font-size:18px; }
+    h2{ font-size:16px; }
+    .date{ text-align:right; font-weight:700; margin:8px 0 14px; font-size:14px; }
+    table{ width:100%; border-collapse:collapse; font-size:12px; }
+    th,td{ border:1px solid #000; padding:6px 7px; vertical-align:middle; text-align:center; }
+    th{ font-size:11px; text-transform:uppercase; }
+    .payer{ font-size:11px; }
+    .sigs{ margin-top:28px; display:flex; justify-content:space-between; gap:20px; font-size:12px; font-weight:700; }
     .sigs .center{ text-align:center; width:100%; margin-bottom:18px; }
-    .foot{ display:flex; justify-content:space-between; margin-top:18px; font-size:11px; font-weight:700; }
+    .foot{ display:flex; justify-content:space-between; margin-top:18px; font-size:12px; font-weight:700; }
     @media print{ .noprint{ display:none; } }
   </style></head><body>
+  <div class="sheet">
   <button class="noprint" onclick="window.print()" style="margin:8px;">Print / Save as PDF</button>
   <h1>ORTHOPAEDICS DEPARTMENT</h1>
   <h2>OT LIST UNIT ${escapeHTML(unitLabel || '—')}</h2>
@@ -7893,6 +7895,7 @@ function printOtListPdf(){
   <div class="foot">
     <div>DEPT. OF ANAESTHESIA AND OT STAFF<br><br>DEPT. OF MRD AND CONCERNED WARD</div>
     <div>DEPT OF ORTHOPAEDIC</div>
+  </div>
   </div>
   <script>window.onload=()=>setTimeout(()=>window.print(),300);</script>
   </body></html>`;

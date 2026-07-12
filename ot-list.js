@@ -67,8 +67,8 @@ export function formatOtUnitLabel(unit){
 
 function cellParagraphs(text, opts = {}){
   const bold = !!opts.bold;
-  const center = !!opts.center;
-  const size = opts.size || 18; // half-points (18 = 9pt)
+  const center = opts.center !== false; // default centered for template columns
+  const size = opts.size || 20; // half-points (20 = 10pt)
   const lines = String(text ?? '').split(/\n/).map(l => l.trimEnd());
   if(!lines.length) lines.push('');
   return lines.map(line => new Paragraph({
@@ -82,7 +82,7 @@ function headerCell(text, width){
     borders: BORDERS,
     width: { size: width, type: WidthType.DXA },
     verticalAlign: VerticalAlign.CENTER,
-    children: cellParagraphs(text, { bold: true, center: true, size: 16 })
+    children: cellParagraphs(text, { bold: true, center: true, size: 18 })
   });
 }
 
@@ -91,7 +91,7 @@ function bodyCell(text, width, opts = {}){
     borders: BORDERS,
     width: { size: width, type: WidthType.DXA },
     verticalAlign: VerticalAlign.CENTER,
-    children: cellParagraphs(text, opts)
+    children: cellParagraphs(text, { center: true, size: 20, ...opts })
   });
 }
 
@@ -106,18 +106,18 @@ export async function buildOtListDocx(opts){
   const defaults = opts.defaultOtDoctors || DEFAULT_OT_DOCTORS;
   const patients = Array.isArray(opts.patients) ? opts.patients : [];
 
-  // Total usable width ~10080 DXA on A4 landscape-ish portrait with narrow margins
+  // A4 landscape content width with ~0.7" margins ≈ 14800 DXA
   const widths = {
-    sl: 500,
-    ip: 1100,
-    name: 1400,
-    age: 700,
-    sex: 500,
-    ward: 900,
-    dx: 2200,
-    proc: 2200,
-    docs: 1400,
-    anaes: 1000
+    sl: 620,
+    ip: 1300,
+    name: 1700,
+    age: 820,
+    sex: 620,
+    ward: 1100,
+    dx: 2600,
+    proc: 2600,
+    docs: 1800,
+    anaes: 1200
   };
   const total = Object.values(widths).reduce((a, b) => a + b, 0);
 
@@ -144,16 +144,16 @@ export async function buildOtListDocx(opts){
     const ward = String(p.ward || p.bed || '').trim().toUpperCase();
     return new TableRow({
       children: [
-        bodyCell(String(p.otOrder || (i + 1)), widths.sl, { center: true, bold: true }),
-        bodyCell(String(p.uhid || ''), widths.ip, { center: true }),
-        bodyCell(nameLines.join('\n'), widths.name, { bold: true, size: 16 }),
-        bodyCell(formatOtAge(p.age), widths.age, { center: true, size: 16 }),
-        bodyCell(formatOtSex(p.sex), widths.sex, { center: true, size: 16 }),
-        bodyCell(ward, widths.ward, { center: true, size: 16 }),
-        bodyCell(String(p.diagnosis || '').toUpperCase(), widths.dx, { size: 15 }),
-        bodyCell(String(p.procedure || '').toUpperCase(), widths.proc, { size: 15 }),
-        bodyCell(doctors.join('\n'), widths.docs, { size: 15 }),
-        bodyCell(String(p.anaesthesia || '').toUpperCase(), widths.anaes, { center: true, size: 15 })
+        bodyCell(String(p.otOrder || (i + 1)), widths.sl, { bold: true, size: 22 }),
+        bodyCell(String(p.uhid || ''), widths.ip, { size: 20 }),
+        bodyCell(nameLines.join('\n'), widths.name, { bold: true, size: 20 }),
+        bodyCell(formatOtAge(p.age), widths.age, { size: 20 }),
+        bodyCell(formatOtSex(p.sex), widths.sex, { size: 20 }),
+        bodyCell(ward, widths.ward, { size: 20 }),
+        bodyCell(String(p.diagnosis || '').toUpperCase(), widths.dx, { size: 18 }),
+        bodyCell(String(p.procedure || '').toUpperCase(), widths.proc, { size: 18 }),
+        bodyCell(doctors.join('\n'), widths.docs, { size: 18 }),
+        bodyCell(String(p.anaesthesia || '').toUpperCase(), widths.anaes, { size: 18 })
       ]
     });
   });
@@ -164,41 +164,46 @@ export async function buildOtListDocx(opts){
     rows: [headerRow, ...dataRows]
   });
 
+  // A4 landscape; ~18mm margins on all sides
+  const PAGE_W = 16838;
+  const PAGE_H = 11906;
+  const MARGIN = 1020;
+
   const doc = new Document({
     sections: [{
       properties: {
         page: {
-          size: { width: 12240, height: 15840 },
-          margin: { top: 540, bottom: 540, left: 540, right: 540 }
+          size: { width: PAGE_W, height: PAGE_H },
+          margin: { top: MARGIN, bottom: MARGIN, left: MARGIN, right: MARGIN }
         }
       },
       children: [
         new Paragraph({
           alignment: AlignmentType.CENTER,
-          spacing: { after: 60 },
-          children: [new TextRun({ text: 'ORTHOPAEDICS DEPARTMENT', bold: true, size: 28, font: 'Times New Roman' })]
+          spacing: { after: 80 },
+          children: [new TextRun({ text: 'ORTHOPAEDICS DEPARTMENT', bold: true, size: 32, font: 'Times New Roman' })]
         }),
         new Paragraph({
           alignment: AlignmentType.CENTER,
-          spacing: { after: 60 },
-          children: [new TextRun({ text: formatOtUnitLabel(unit), bold: true, size: 26, font: 'Times New Roman' })]
+          spacing: { after: 80 },
+          children: [new TextRun({ text: formatOtUnitLabel(unit), bold: true, size: 28, font: 'Times New Roman' })]
         }),
         new Paragraph({
-          alignment: AlignmentType.CENTER,
-          spacing: { after: 200 },
-          children: [new TextRun({ text: `Date : ${formatOtListDate(dateIso)}`, bold: true, size: 22, font: 'Times New Roman' })]
+          alignment: AlignmentType.RIGHT,
+          spacing: { after: 240 },
+          children: [new TextRun({ text: `Date : ${formatOtListDate(dateIso)}`, bold: true, size: 24, font: 'Times New Roman' })]
         }),
         table,
         new Paragraph({ spacing: { before: 400 }, children: [] }),
         new Paragraph({
           alignment: AlignmentType.CENTER,
           spacing: { after: 300 },
-          children: [new TextRun({ text: 'THE CHIEF OPERATING OFFICER', bold: true, size: 18, font: 'Times New Roman' })]
+          children: [new TextRun({ text: 'THE CHIEF OPERATING OFFICER', bold: true, size: 20, font: 'Times New Roman' })]
         }),
         new Paragraph({
           alignment: AlignmentType.RIGHT,
           spacing: { after: 300 },
-          children: [new TextRun({ text: 'UNIT CHIEF SIGNATURE', bold: true, size: 18, font: 'Times New Roman' })]
+          children: [new TextRun({ text: 'UNIT CHIEF SIGNATURE', bold: true, size: 20, font: 'Times New Roman' })]
         }),
         new Table({
           width: { size: total, type: WidthType.DXA },
@@ -213,14 +218,14 @@ export async function buildOtListDocx(opts){
                     new Paragraph({
                       children: [new TextRun({
                         text: 'DEPT. OF ANAESTHESIA AND OT STAFF',
-                        bold: true, size: 16, font: 'Times New Roman'
+                        bold: true, size: 18, font: 'Times New Roman'
                       })]
                     }),
                     new Paragraph({
                       spacing: { before: 120 },
                       children: [new TextRun({
                         text: 'DEPT. OF MRD AND CONCERNED WARD',
-                        bold: true, size: 16, font: 'Times New Roman'
+                        bold: true, size: 18, font: 'Times New Roman'
                       })]
                     })
                   ]
@@ -233,7 +238,7 @@ export async function buildOtListDocx(opts){
                       alignment: AlignmentType.RIGHT,
                       children: [new TextRun({
                         text: 'DEPT OF ORTHOPAEDIC',
-                        bold: true, size: 16, font: 'Times New Roman'
+                        bold: true, size: 18, font: 'Times New Roman'
                       })]
                     })
                   ]
