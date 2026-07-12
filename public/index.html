@@ -413,6 +413,7 @@
   body.consultant-mode .card-quick-bar,
   body.consultant-mode .card-quick-footer,
   body.consultant-mode .fab,
+  body.consultant-mode #desktopAddPatientBtn,
   body.consultant-mode .filter-chip,
   body.consultant-mode #bulkPlanBtn,
   body.consultant-mode .bottom-nav-item[data-nav="add"]{display:none !important;}
@@ -1303,6 +1304,7 @@
   .login-error{color:var(--bad);font-size:12.5px;margin-top:10px;min-height:16px;}
 
   @media (max-width:680px){
+    #desktopAddPatientBtn{display:none;}
     .tabs{display:none;}
     body.has-bottom-nav{padding-bottom:calc(72px + env(safe-area-inset-bottom));}
     /* Keep toasts clear of the bottom navigation bar. */
@@ -1588,6 +1590,7 @@
       </div>
     </div>
     <button class="ibtn pressable" id="presentBtn" title="Presentation mode for rounds">Present</button>
+    <button class="ibtn pressable" id="desktopAddPatientBtn" title="Add patient with smart fill">+ Add patient</button>
     <button type="button" class="theme-toggle pressable" id="themeToggleBtn" title="Toggle dark mode" data-mode="light" aria-label="Toggle theme">
       <svg class="icon-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
       <svg class="icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>

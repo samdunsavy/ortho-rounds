@@ -1303,6 +1303,9 @@ async function runSmartPaste(btn){
     return;
   }
   if(!canUseAi()){
+    await refreshAiStatus();
+  }
+  if(!canUseAi()){
     showToast('AI not available — check server key or connection');
     return;
   }
@@ -3653,6 +3656,9 @@ function bindEvents(){
     if(window._fabLongPress){ window._fabLongPress = false; return; }
     openPatientModal(null);
   });
+  document.getElementById('desktopAddPatientBtn')?.addEventListener('click', ()=>{
+    openPatientModal(null);
+  });
   let fabTimer = null;
   document.getElementById('addPatientFab').addEventListener('mousedown', ()=>{
     fabTimer = setTimeout(()=>{
@@ -5726,20 +5732,25 @@ function renderDischarged(){
 /* ---------------- ADD / EDIT MODAL ---------------- */
 
 function openPatientModal(p){
-  editingPatientId = p ? p.id : null;
+  // Treat as edit only when this id is already on the ward list.
+  // Clones use blankPatient() (new id) and must stay "Add" so Smart fill shows.
+  const isExisting = !!(p && p.id && patients.some(x => x.id === p.id));
+  editingPatientId = isExisting ? p.id : null;
   modalWorkingData = p ? JSON.parse(JSON.stringify(p)) : blankPatient();
   modalPendingImages = [];
   modalSuppressAutoTemplate = false;
   modalSmartPasteUsed = false;
   normalizeAntibioticCourses(modalWorkingData);
-  if(!p){
+  if(!isExisting){
     const ini = getPgInitials();
     if(ini && !modalWorkingData.assignedPg) modalWorkingData.assignedPg = ini;
     const defaultUnit = getDefaultUnit();
     if(defaultUnit && !modalWorkingData.unit) modalWorkingData.unit = defaultUnit;
+    // Ensure AI status is fresh so Smart fill is ready on desktop/FAB open.
+    void refreshAiStatus();
   }
-  document.getElementById('modalTitle').textContent = p ? 'Edit patient' : 'Add patient';
-  document.getElementById('deletePatientBtn').style.display = p ? 'inline-block' : 'none';
+  document.getElementById('modalTitle').textContent = isExisting ? 'Edit patient' : 'Add patient';
+  document.getElementById('deletePatientBtn').style.display = isExisting ? 'inline-block' : 'none';
   document.getElementById('modalBody').innerHTML = renderModalForm(modalWorkingData);
   bindModalDynamicLists();
   document.getElementById('patientModal').classList.add('active');
@@ -5854,8 +5865,11 @@ function flushChecklistsFromModal(d){
 }
 
 function renderModalForm(d){
+  // Smart fill on every Add (desktop FAB + mobile Add). Don't hide it just because
+  // AI status hasn't returned yet — Fill still checks canUseAi() when clicked.
+  const showSmartFill = !editingPatientId && !isConsultantMode();
   return `
-    ${!editingPatientId && canUseAi() ? `
+    ${showSmartFill ? `
     <div class="smart-paste-box">
       <label style="font-weight:700;">✨ Smart fill from admission note</label>
       <textarea id="f_smartPaste" placeholder="Paste the WhatsApp admission message — e.g. 'New admission sir / Shivappa SS / 53 years / Male / Imp : L3 wedge fracture+ … / ortho unit - IV / Free ward'"></textarea>
