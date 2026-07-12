@@ -57,6 +57,12 @@ describe('SQLite storage — users', () => {
     assert.equal(u.username, 'ppg2');
   });
 
+  test('can re-enable a disabled user', async () => {
+    await store.updateUser('u3', { active: true });
+    const u = await store.getUserById('u3');
+    assert.equal(u.active, 1);
+  });
+
   test('getAllUsers lists everyone successfully created so far', async () => {
     // u1 and u3 succeeded; u2 was rejected for a duplicate username above.
     const all = await store.getAllUsers();

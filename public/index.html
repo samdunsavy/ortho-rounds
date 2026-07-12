@@ -1526,6 +1526,34 @@
   .work-plan-input{width:100%;font-size:13px;padding:6px 8px;border-radius:8px;border:1px solid var(--border);}
   .work-inv-chips{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;}
   .work-inv-chip{font-size:10px !important;padding:2px 6px !important;}
+
+  /* ---------- OT list ---------- */
+  .ot-list-toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px 14px;}
+  .ot-date-label{font-size:12px;font-weight:600;color:var(--ink-soft);display:flex;align-items:center;gap:8px;}
+  .ot-date-label input{padding:6px 8px;border:1px solid var(--line);border-radius:8px;font:inherit;background:var(--card);color:var(--ink);}
+  .ot-list-meta{padding:12px 16px;text-align:center;font-family:var(--mono);font-size:13px;line-height:1.5;border-bottom:1px solid var(--line);}
+  .ot-list-rows{display:flex;flex-direction:column;gap:10px;padding:12px 14px 24px;}
+  .ot-list-row{
+    display:flex;gap:12px;background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+    padding:12px;box-shadow:var(--shadow-sm);
+  }
+  .ot-list-sl{display:flex;flex-direction:column;align-items:center;gap:6px;min-width:44px;}
+  .ot-sl-num{font-family:var(--mono);font-weight:700;font-size:18px;color:var(--accent);}
+  .ot-list-move{display:flex;flex-direction:column;gap:4px;}
+  .ot-list-body{flex:1;min-width:0;}
+  .ot-list-title{font-weight:700;font-size:15px;}
+  .ot-payer{color:var(--ink-soft);font-weight:600;font-size:12px;}
+  .ot-list-sub,.ot-list-docs,.ot-list-anaes{font-size:12px;color:var(--ink-soft);margin-top:3px;}
+  .ot-list-dx,.ot-list-proc{font-size:13px;margin-top:6px;line-height:1.35;}
+  .ot-list-proc{color:var(--accent-hover);}
+  .ot-list-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;}
+  .ot-candidates{padding:8px 14px 28px;border-top:1px solid var(--line);}
+  .ot-candidates h3{font-size:13px;margin:8px 0 10px;color:var(--ink-soft);text-transform:uppercase;letter-spacing:0.04em;}
+  .ot-candidate-row{
+    display:flex;justify-content:space-between;gap:10px;align-items:center;
+    padding:10px 0;border-bottom:1px solid var(--line-soft);font-size:13px;
+  }
+
   .card-copy-plan .copy-plan-icon{display:none;}
   @media (max-width:680px){
     .pg-scope-btn{display:none;}
@@ -1572,6 +1600,7 @@
           <button type="button" class="btn btn-sm" id="desktopLogoutBtn">Log out</button>
         </div>
         <button class="ibtn" id="desktopManageUsersBtn" style="display:none;">Manage users</button>
+        <button class="ibtn" id="desktopChangePasswordBtn">Change password</button>
         <button class="ibtn" id="desktopPushToggleBtn" style="display:none;">Enable reminders</button>
         <button class="ibtn" id="exportBtn">Export</button>
         <button class="ibtn" id="importBtn">Import</button>
@@ -1593,6 +1622,7 @@
 <div class="tabs">
   <div class="tab active" data-view="rounds">Rounds <span class="count" id="countRounds">0</span></div>
   <div class="tab" data-view="worklist">Worklist <span class="count" id="countWork">0</span></div>
+  <div class="tab" data-view="otlist">OT list <span class="count" id="countOtList">0</span></div>
   <div class="tab" data-view="discharged">Discharged <span class="count" id="countDischarged">0</span></div>
 </div>
 </div>
@@ -1661,6 +1691,19 @@
   <div id="worklistContent"></div>
 </div>
 
+<!-- OT LIST VIEW (hospital template) -->
+<div class="view" id="view-otlist">
+  <div class="toolbar ot-list-toolbar">
+    <label class="ot-date-label">OT date
+      <input type="date" id="otListDate">
+    </label>
+    <button type="button" class="btn primary" id="otListDocxBtn">Download Word</button>
+    <button type="button" class="btn" id="otListPdfBtn">Print / PDF</button>
+    <button type="button" class="btn" id="otListDoctorsBtn">Default doctors</button>
+  </div>
+  <div id="otListContent"></div>
+</div>
+
 <!-- DISCHARGED VIEW -->
 <div class="view" id="view-discharged">
   <div class="toolbar">
@@ -1704,8 +1747,10 @@
       </div>
       <div class="sheet-actions">
         <button type="button" class="sheet-action-btn" data-more-action="account" id="moreManageUsersBtn" style="display:none;"><span class="sa-icon">👤</span> Manage users</button>
+        <button type="button" class="sheet-action-btn" data-more-action="changepassword" id="moreChangePasswordBtn"><span class="sa-icon">🔑</span> Change password</button>
         <button type="button" class="sheet-action-btn" id="morePushToggleBtn" style="display:none;"><span class="sa-icon">🔔</span> <span id="morePushToggleLabel">Enable reminders</span></button>
         <button type="button" class="sheet-action-btn" data-more-action="present"><span class="sa-icon">▶</span> Presentation mode</button>
+        <button type="button" class="sheet-action-btn" data-more-action="otlist"><span class="sa-icon">OT</span> OT list</button>
         <button type="button" class="sheet-action-btn" data-more-action="export"><span class="sa-icon">↓</span> Export backup</button>
         <button type="button" class="sheet-action-btn" data-more-action="import"><span class="sa-icon">↑</span> Import backup</button>
         <button type="button" class="sheet-action-btn" data-more-action="templates"><span class="sa-icon">📋</span> Templates</button>
@@ -1713,6 +1758,7 @@
         <button type="button" class="sheet-action-btn" data-more-action="handover"><span class="sa-icon">↪</span> Handover sheet</button>
         <button type="button" class="sheet-action-btn" data-more-action="whatsapp"><span class="sa-icon">⎘</span> Copy handover</button>
         <button type="button" class="sheet-action-btn" data-more-action="defaultunit"><span class="sa-icon">U</span> Default unit</button>
+        <button type="button" class="sheet-action-btn" data-more-action="otdoctors"><span class="sa-icon">DR</span> Default OT doctors</button>
         <button type="button" class="sheet-action-btn" data-more-action="pgroster"><span class="sa-icon">PG</span> PG roster</button>
         <button type="button" class="sheet-action-btn" data-more-action="bulk"><span class="sa-icon">☑</span> Bulk plan select</button>
         <button type="button" class="sheet-action-btn" data-more-action="bulkapply"><span class="sa-icon">✎</span> Apply bulk plan</button>
@@ -1746,6 +1792,36 @@
     <div class="modal-foot">
       <button type="button" class="btn" id="accountModalCloseBtn">Close</button>
       <button type="button" class="btn linkish" id="revokeSessionsBtn">Log out everywhere</button>
+    </div>
+  </div>
+</div>
+
+<!-- CHANGE PASSWORD (any logged-in user) -->
+<div class="modal-overlay" id="changePasswordModal">
+  <div class="modal" style="max-width:420px;">
+    <div class="modal-head">
+      <h2>Change password</h2>
+      <button type="button" class="modal-close" id="changePasswordClose">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-row">
+        <label for="changePasswordCurrent">Current password</label>
+        <input type="password" id="changePasswordCurrent" autocomplete="current-password" placeholder="Current password">
+      </div>
+      <div class="form-row">
+        <label for="changePasswordNew">New password</label>
+        <input type="password" id="changePasswordNew" autocomplete="new-password" placeholder="At least 6 characters">
+      </div>
+      <div class="form-row">
+        <label for="changePasswordConfirm">Confirm new password</label>
+        <input type="password" id="changePasswordConfirm" autocomplete="new-password" placeholder="Repeat new password">
+      </div>
+      <div id="changePasswordResult" class="form-hint" style="margin-top:10px;"></div>
+    </div>
+    <div class="modal-foot">
+      <button type="button" class="btn" id="changePasswordCancelBtn">Cancel</button>
+      <button type="button" class="btn linkish" id="changePasswordRevokeBtn">Log out everywhere</button>
+      <button type="button" class="btn primary" id="changePasswordSaveBtn">Save</button>
     </div>
   </div>
 </div>

@@ -54,6 +54,8 @@ const START_HERE_LIMIT = 3;
 const START_HERE_MIN_SCORE = 30;
 const BULK_DRAFT_MAX = 20;
 const WARD_META_ID = "__ward_meta__";
+const DEFAULT_OT_DOCTORS = ['DR MAHESH', 'DR BALAKRISHNA', 'DR JACOB', 'DR DEEPAK'];
+const LS_OT_LIST_DATE = "ortho_otListDate";
 const FILTER_LABELS = {
   all: 'All',
   preop: 'Pre-op',
@@ -77,7 +79,7 @@ const LAB_SPEC = {
 const PLAN_HISTORY_MAX = 14;
 const FULL_RECONCILE_INTERVAL_MS = 5 * 60 * 1000; // periodic full reconcile
 let idb = null;
-let wardMeta = { handoverNote: '', defaultUnit: '', pgRoster: [], presentedToday: { date: '', ids: [] }, updatedAt: 0 };
+let wardMeta = { handoverNote: '', defaultUnit: '', defaultOtDoctors: [...DEFAULT_OT_DOCTORS], pgRoster: [], presentedToday: { date: '', ids: [] }, updatedAt: 0 };
 let syncing = false;
 let presentationUnpresentedOnly = localStorage.getItem(LS_PRESENT_UNPRESENTED) === '1';
 let presentationReadAloud = localStorage.getItem(LS_READ_ALOUD) === '1';
@@ -192,10 +194,14 @@ function normalizePresentedToday(pt){
 }
 
 function parseWardMetaFromRecord(metaRec){
-  if(!metaRec) return { handoverNote: '', defaultUnit: '', pgRoster: [], presentedToday: normalizePresentedToday(null), updatedAt: 0 };
+  if(!metaRec) return { handoverNote: '', defaultUnit: '', defaultOtDoctors: [...DEFAULT_OT_DOCTORS], pgRoster: [], presentedToday: normalizePresentedToday(null), updatedAt: 0 };
+  const docs = Array.isArray(metaRec.defaultOtDoctors) && metaRec.defaultOtDoctors.length
+    ? metaRec.defaultOtDoctors.map(s => String(s || '').trim()).filter(Boolean)
+    : [...DEFAULT_OT_DOCTORS];
   return {
     handoverNote: metaRec.handoverNote || '',
     defaultUnit: metaRec.defaultUnit || '',
+    defaultOtDoctors: docs,
     pgRoster: Array.isArray(metaRec.pgRoster) ? metaRec.pgRoster : [],
     presentedToday: normalizePresentedToday(metaRec.presentedToday),
     updatedAt: metaRec.updatedAt || 0
@@ -218,6 +224,9 @@ function mergeWardMetaFields(local, remote){
   return {
     handoverNote: (base.handoverNote || '').trim() ? base.handoverNote : (other.handoverNote || ''),
     defaultUnit: (base.defaultUnit || '').trim() ? base.defaultUnit : (other.defaultUnit || ''),
+    defaultOtDoctors: (base.defaultOtDoctors && base.defaultOtDoctors.length)
+      ? base.defaultOtDoctors
+      : (other.defaultOtDoctors && other.defaultOtDoctors.length ? other.defaultOtDoctors : [...DEFAULT_OT_DOCTORS]),
     pgRoster: (base.pgRoster && base.pgRoster.length) ? base.pgRoster : (other.pgRoster || []),
     presentedToday: mergePresentedToday(local.presentedToday, remote.presentedToday),
     updatedAt: Math.max(lt, rt)
@@ -1334,6 +1343,86 @@ function getDefaultUnit(){
   return (wardMeta.defaultUnit || '').trim();
 }
 
+function getDefaultOtDoctors(){
+  const docs = wardMeta.defaultOtDoctors;
+  if(Array.isArray(docs) && docs.length) return docs.map(s => String(s || '').trim()).filter(Boolean);
+  return [...DEFAULT_OT_DOCTORS];
+}
+
+function parseOtDoctorsText(text){
+  return String(text || '').split(/\n+/).map(s => s.trim()).filter(Boolean);
+}
+
+function resolvePatientOtDoctors(p){
+  const own = Array.isArray(p?.otDoctors) ? p.otDoctors.map(s => String(s || '').trim()).filter(Boolean) : [];
+  if(own.length) return own;
+  return getDefaultOtDoctors();
+}
+
+function getOtListDate(){
+  const saved = localStorage.getItem(LS_OT_LIST_DATE);
+  if(saved && /^\d{4}-\d{2}-\d{2}$/.test(saved)) return saved;
+  return todayISO();
+}
+
+function setOtListDate(iso){
+  if(iso && /^\d{4}-\d{2}-\d{2}$/.test(iso)) localStorage.setItem(LS_OT_LIST_DATE, iso);
+}
+
+function formatOtListDateDisplay(iso){
+  if(!iso || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) return '';
+  const [y, m, d] = iso.split('-');
+  return `${d}/${m}/${y.slice(2)}`;
+}
+
+function formatOtAgeDisplay(age){
+  const raw = String(age || '').trim();
+  if(!raw) return '';
+  if(/yr/i.test(raw)) return raw.toUpperCase().replace(/\s+/g, ' ');
+  return `${raw} YR`;
+}
+
+function getOtListPatients(dateIso){
+  const date = dateIso || getOtListDate();
+  const unitFilter = (getDefaultUnit() || '').trim().toUpperCase();
+  let items = patients.filter(p =>
+    p.status !== 'discharged' && p.surgeryDate === date && p.status === 'preop'
+  );
+  if(unitFilter){
+    const matched = items.filter(p => (p.unit || '').trim().toUpperCase() === unitFilter);
+    if(matched.length) items = matched;
+  }
+  items.sort((a, b) => {
+    const ao = Number(a.otOrder) || 0;
+    const bo = Number(b.otOrder) || 0;
+    if(ao && bo && ao !== bo) return ao - bo;
+    if(ao && !bo) return -1;
+    if(!ao && bo) return 1;
+    return (a.theatreTime || '').localeCompare(b.theatreTime || '')
+      || (a.name || '').localeCompare(b.name || '');
+  });
+  return items;
+}
+
+function getOtListCandidates(dateIso){
+  const date = dateIso || getOtListDate();
+  const onList = new Set(getOtListPatients(date).map(p => p.id));
+  return patients.filter(p =>
+    p.status === 'preop' && !onList.has(p.id) && (!p.surgeryDate || p.surgeryDate !== date)
+  ).sort((a, b) => (a.bed || '').localeCompare(b.bed || '') || (a.name || '').localeCompare(b.name || ''));
+}
+
+async function persistOtOrder(list){
+  for(let i = 0; i < list.length; i++){
+    const p = list[i];
+    const next = i + 1;
+    if(Number(p.otOrder) === next) continue;
+    p.otOrder = next;
+    await savePatient(p);
+  }
+  renderAll();
+}
+
 function formatAdmissionMessage(p){
   const fmt = window.Admission;
   if(!fmt?.formatAdmissionWhatsApp){
@@ -2059,6 +2148,10 @@ function blankPatient(){
     dvtDays: 0,
     theatreTime: '',
     handoverPin: '',
+    payer: '',
+    anaesthesia: '',
+    otDoctors: [],
+    otOrder: 0,
     labs: { hb: '', crp: '', wcc: '', creatinine: '', updatedAt: '' },
     planUpdatedAt: 0,
     statusUpdatedAt: 0,
@@ -3083,6 +3176,7 @@ function buildExportPatientList(){
   const list = patients.map(p => Object.assign({}, p));
   const hasWardMeta = (wardMeta.handoverNote || '').trim()
     || (wardMeta.defaultUnit || '').trim()
+    || (wardMeta.defaultOtDoctors || []).length
     || (wardMeta.pgRoster || []).length
     || (wardMeta.presentedToday?.ids || []).length;
   if(hasWardMeta){
@@ -3265,9 +3359,19 @@ function bindAuthEvents(){
   document.getElementById('accountModalCloseBtn')?.addEventListener('click', closeAccountModal);
   document.getElementById('createUserBtn')?.addEventListener('click', ()=> void createUserFromModal());
   document.getElementById('revokeSessionsBtn')?.addEventListener('click', ()=> void revokeSessionsEverywhere());
+  document.getElementById('changePasswordClose')?.addEventListener('click', closeChangePasswordModal);
+  document.getElementById('changePasswordCancelBtn')?.addEventListener('click', closeChangePasswordModal);
+  document.getElementById('changePasswordSaveBtn')?.addEventListener('click', ()=> void submitChangePassword());
+  document.getElementById('changePasswordRevokeBtn')?.addEventListener('click', ()=> void revokeSessionsEverywhere());
+  document.getElementById('desktopChangePasswordBtn')?.addEventListener('click', ()=>{
+    document.getElementById('moreMenuPanel')?.classList.remove('open');
+    openChangePasswordModal();
+  });
   document.getElementById('accountUsersList')?.addEventListener('click', (e)=>{
     const disableBtn = e.target.closest('[data-disable-user]');
     if(disableBtn){ void disableUser(disableBtn.dataset.disableUser); return; }
+    const enableBtn = e.target.closest('[data-enable-user]');
+    if(enableBtn){ void enableUser(enableBtn.dataset.enableUser); return; }
     const resetBtn = e.target.closest('[data-reset-user]');
     if(resetBtn){ void resetUserPassword(resetBtn.dataset.resetUser); return; }
   });
@@ -3396,7 +3500,9 @@ async function refreshAccountUsersList(){
           <div class="u-meta">${escapeHTML(u.role)}${u.active ? '' : ' · disabled'}</div>
         </div>
         <div class="account-user-actions">
-          ${u.active ? `<button type="button" class="btn btn-sm" data-disable-user="${escapeHTML(u.id)}">Disable</button>` : ''}
+          ${u.active
+            ? (u.username === me ? '' : `<button type="button" class="btn btn-sm" data-disable-user="${escapeHTML(u.id)}">Disable</button>`)
+            : `<button type="button" class="btn btn-sm" data-enable-user="${escapeHTML(u.id)}">Enable</button>`}
           <button type="button" class="btn btn-sm" data-reset-user="${escapeHTML(u.id)}">Reset password</button>
         </div>
       </div>
@@ -3437,6 +3543,16 @@ async function disableUser(id){
   }
 }
 
+async function enableUser(id){
+  try{
+    await api(`/api/admin/users/${id}/enable`, { method: 'POST' });
+    showToast('User re-enabled', { success: true });
+    await refreshAccountUsersList();
+  }catch(err){
+    showToast('Could not enable user — ' + (err.message || 'error'));
+  }
+}
+
 async function resetUserPassword(id){
   try{
     const res = await api(`/api/admin/users/${id}/reset-password`, { method: 'POST' });
@@ -3446,12 +3562,60 @@ async function resetUserPassword(id){
   }
 }
 
+function openChangePasswordModal(){
+  document.getElementById('changePasswordCurrent').value = '';
+  document.getElementById('changePasswordNew').value = '';
+  document.getElementById('changePasswordConfirm').value = '';
+  document.getElementById('changePasswordResult').textContent = '';
+  document.getElementById('changePasswordModal').classList.add('active');
+  setTimeout(()=> document.getElementById('changePasswordCurrent')?.focus(), 50);
+}
+
+function closeChangePasswordModal(){
+  document.getElementById('changePasswordModal')?.classList.remove('active');
+}
+
+async function submitChangePassword(){
+  const currentPassword = document.getElementById('changePasswordCurrent').value;
+  const newPassword = document.getElementById('changePasswordNew').value;
+  const confirmPassword = document.getElementById('changePasswordConfirm').value;
+  const resultEl = document.getElementById('changePasswordResult');
+  const btn = document.getElementById('changePasswordSaveBtn');
+  if(!currentPassword || !newPassword){
+    resultEl.textContent = 'Enter your current and new password';
+    return;
+  }
+  if(newPassword.length < 6){
+    resultEl.textContent = 'New password must be at least 6 characters';
+    return;
+  }
+  if(newPassword !== confirmPassword){
+    resultEl.textContent = 'New passwords do not match';
+    return;
+  }
+  btn.disabled = true;
+  try{
+    const res = await api('/api/account/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ currentPassword, newPassword })
+    });
+    if(res.token) localStorage.setItem(LS_TOKEN, res.token);
+    closeChangePasswordModal();
+    showToast('Password updated — other devices were logged out', { success: true });
+  }catch(err){
+    resultEl.textContent = err.message || 'Could not change password';
+  }finally{
+    btn.disabled = false;
+  }
+}
+
 async function revokeSessionsEverywhere(){
   if(!confirm('Log out of every device using your account? You will need to log in again here too.')) return;
   try{
     await api('/api/account/revoke-sessions', { method: 'POST' });
   }catch{ /* token is about to be discarded regardless */ }
   closeAccountModal();
+  closeChangePasswordModal();
   logout();
 }
 
@@ -3459,6 +3623,7 @@ function bindEvents(){
   document.querySelectorAll('.tab').forEach(tab=>{
     tab.addEventListener('click', ()=> switchView(tab.dataset.view));
   });
+  bindOtListUi();
   document.querySelectorAll('#filterChips .filter-chip').forEach(chip=>{
     chip.addEventListener('click', ()=> applyFilter(chip.dataset.filter));
   });
@@ -3668,6 +3833,7 @@ function switchView(name){
   updateBottomNavActive(name);
   if(name==='worklist') renderWorklist();
   if(name==='discharged') renderDischarged();
+  if(name==='otlist') renderOtList();
   if(name==='rounds') renderSummaryStrip();
 }
 
@@ -3679,6 +3845,7 @@ function renderAll(){
   renderRounds();
   renderWorklist();
   renderDischarged();
+  renderOtList();
   updateCounts();
   renderWardHandoverBanner();
   updateStickyHeaderOffset();
@@ -3700,6 +3867,8 @@ function updateCounts(){
   document.getElementById('countRounds').textContent = active.length;
   document.getElementById('countDischarged').textContent = patients.filter(p=>p.status==='discharged').length;
   document.getElementById('countWork').textContent = countPendingItems();
+  const otCountEl = document.getElementById('countOtList');
+  if(otCountEl) otCountEl.textContent = getOtListPatients().length;
   updatePresentBtnProgress(active);
   updateBottomNavBadge();
 }
@@ -3907,6 +4076,8 @@ function bindSheets(){
       closeSheet('moreSheetOverlay');
       const a = btn.dataset.moreAction;
       if(a === 'account') void openAccountModal();
+      else if(a === 'changepassword') openChangePasswordModal();
+      else if(a === 'otlist') switchView('otlist');
       else if(a === 'present') openPresentationMode();
       else if(a === 'export') exportData();
       else if(a === 'import') document.getElementById('hiddenImportInput').click();
@@ -3915,6 +4086,7 @@ function bindSheets(){
       else if(a === 'handover') printHandoverSheet();
       else if(a === 'whatsapp') copyHandoverWhatsApp();
       else if(a === 'defaultunit') editDefaultUnit();
+      else if(a === 'otdoctors') void editDefaultOtDoctors();
       else if(a === 'pgroster') editPgRoster();
       else if(a === 'bulk') toggleBulkSelectMode();
       else if(a === 'bulkapply') applyBulkPlan();
@@ -5756,6 +5928,15 @@ function renderModalForm(d){
       <div><label>Surgeon</label><input id="f_surgeon" value="${escapeHTML(d.surgeon)}" placeholder="Operating surgeon"></div>
       <div><label>Implant details</label><input id="f_implant" value="${escapeHTML(d.implant)}" placeholder="e.g. 3.5mm LCP, 6 holes"></div>
     </div>
+    <div class="form-row two">
+      <div><label>Payer / insurance (OT list)</label><input id="f_payer" value="${escapeHTML(d.payer||'')}" placeholder="e.g. ABARK, TATA AIG"></div>
+      <div><label>Anaesthesia (OT list)</label><input id="f_anaesthesia" value="${escapeHTML(d.anaesthesia||'')}" placeholder="e.g. GA / SA / RA"></div>
+    </div>
+    <div class="form-row">
+      <label>OT doctors (one per line — blank uses unit default)</label>
+      <textarea id="f_otDoctors" rows="4" placeholder="${escapeHTML(getDefaultOtDoctors().join('\n'))}">${escapeHTML((d.otDoctors && d.otDoctors.length ? d.otDoctors : []).join('\n'))}</textarea>
+      <div class="form-hint">Default team: ${escapeHTML(getDefaultOtDoctors().join(', '))}. Used on the OT list Word/PDF export.</div>
+    </div>
 
     <div class="form-row">
       <label>Today's plan</label>
@@ -6551,6 +6732,9 @@ async function savePatientFromModal(){
     d.procedure = document.getElementById('f_procedure').value.trim();
     d.surgeon = document.getElementById('f_surgeon').value.trim();
     d.implant = document.getElementById('f_implant').value.trim();
+    d.payer = document.getElementById('f_payer')?.value.trim() || '';
+    d.anaesthesia = document.getElementById('f_anaesthesia')?.value.trim() || '';
+    d.otDoctors = parseOtDoctorsText(document.getElementById('f_otDoctors')?.value || '');
     const newPlan = document.getElementById('f_dailyPlan').value.trim();
     d.handoverNote = document.getElementById('f_handoverNote').value.trim();
     d.planHistory = d.planHistory || [];
@@ -7434,11 +7618,311 @@ async function editPgRoster(){
 
 async function editDefaultUnit(){
   const fields = await showPromptFields('Default ortho unit', [
-    { id: 'unit', label: 'Used in WhatsApp admissions when a patient has no unit set', value: getDefaultUnit(), placeholder: 'e.g. IV' }
+    { id: 'unit', label: 'Used in WhatsApp admissions and OT list header when a patient has no unit set', value: getDefaultUnit(), placeholder: 'e.g. IV' }
   ]);
   if(!fields) return;
   await saveWardMeta({ defaultUnit: (fields.unit || '').trim() });
   showToast(getDefaultUnit() ? `Default unit set to ${getDefaultUnit()}` : 'Default unit cleared');
+  renderOtList();
+}
+
+async function editDefaultOtDoctors(){
+  const fields = await showPromptFields('Default OT doctors', [
+    {
+      id: 'lines',
+      label: 'One doctor per line (used on OT list when a patient has no team set)',
+      value: getDefaultOtDoctors().join('\n'),
+      type: 'textarea',
+      rows: 5,
+      placeholder: DEFAULT_OT_DOCTORS.join('\n')
+    }
+  ]);
+  if(!fields) return;
+  const docs = parseOtDoctorsText(fields.lines);
+  await saveWardMeta({ defaultOtDoctors: docs.length ? docs : [...DEFAULT_OT_DOCTORS] });
+  showToast('Default OT doctors saved');
+  renderOtList();
+}
+
+/* ---------------- OT LIST (hospital template) ---------------- */
+
+function renderOtList(){
+  const root = document.getElementById('otListContent');
+  const dateInput = document.getElementById('otListDate');
+  if(!root) return;
+  if(dateInput && !dateInput.value) dateInput.value = getOtListDate();
+  const date = dateInput?.value || getOtListDate();
+  setOtListDate(date);
+  const list = getOtListPatients(date);
+  const candidates = getOtListCandidates(date);
+  const unit = getDefaultUnit() || '—';
+
+  let html = `
+    <div class="ot-list-meta">
+      <div><strong>ORTHOPAEDICS DEPARTMENT</strong></div>
+      <div>OT LIST UNIT ${escapeHTML(String(unit).replace(/^unit\s+/i, '').toUpperCase() || '—')}</div>
+      <div>Date : ${escapeHTML(formatOtListDateDisplay(date))}</div>
+      <div class="form-hint">Doctors default: ${escapeHTML(getDefaultOtDoctors().join(', '))}</div>
+    </div>`;
+
+  if(!list.length){
+    html += `<div class="empty-state">No pre-op patients with surgery date ${escapeHTML(formatOtListDateDisplay(date))}. Add patients below or set surgery date on a pre-op card.</div>`;
+  }else{
+    html += `<div class="ot-list-rows">` + list.map((p, idx) => {
+      const doctors = resolvePatientOtDoctors(p);
+      const ward = (p.ward || p.bed || '').trim();
+      return `<div class="ot-list-row" data-ot-id="${escapeHTML(p.id)}">
+        <div class="ot-list-sl">
+          <span class="ot-sl-num">${idx + 1}</span>
+          <div class="ot-list-move">
+            <button type="button" class="btn btn-sm" data-ot-up="${escapeHTML(p.id)}" ${idx===0?'disabled':''}>↑</button>
+            <button type="button" class="btn btn-sm" data-ot-down="${escapeHTML(p.id)}" ${idx===list.length-1?'disabled':''}>↓</button>
+          </div>
+        </div>
+        <div class="ot-list-body">
+          <div class="ot-list-title">${escapeHTML((p.name||'').toUpperCase())}${p.payer ? ` <span class="ot-payer">(${escapeHTML(p.payer)})</span>` : ''}</div>
+          <div class="ot-list-sub">IP ${escapeHTML(p.uhid||'—')} · ${escapeHTML(formatOtAgeDisplay(p.age)||'?')} / ${escapeHTML(p.sex||'?')} · ${escapeHTML(ward||'—')}</div>
+          <div class="ot-list-dx">${escapeHTML(p.diagnosis||'—')}</div>
+          <div class="ot-list-proc">${escapeHTML(p.procedure||'—')}</div>
+          <div class="ot-list-docs">${escapeHTML(doctors.join(' · '))}${Array.isArray(p.otDoctors) && p.otDoctors.length ? '' : ' <span class="small-muted">(default)</span>'}</div>
+          <div class="ot-list-anaes">${p.anaesthesia ? escapeHTML(p.anaesthesia) : '<span class="small-muted">Anaesthesia not set</span>'}</div>
+          <div class="ot-list-actions">
+            <button type="button" class="btn btn-sm" data-ot-edit="${escapeHTML(p.id)}">Edit fields</button>
+            <button type="button" class="btn btn-sm" data-ot-remove="${escapeHTML(p.id)}">Remove from list</button>
+          </div>
+        </div>
+      </div>`;
+    }).join('') + `</div>`;
+  }
+
+  if(candidates.length){
+    html += `<div class="ot-candidates"><h3>Add pre-op to this OT date</h3>`;
+    html += candidates.slice(0, 30).map(p => `
+      <div class="ot-candidate-row">
+        <div><strong>${escapeHTML(p.name||'Unnamed')}</strong> · ${escapeHTML(p.bed||p.ward||'')} · ${escapeHTML(p.diagnosis||'')}</div>
+        <button type="button" class="btn btn-sm primary" data-ot-add="${escapeHTML(p.id)}">Add</button>
+      </div>`).join('');
+    html += `</div>`;
+  }
+
+  root.innerHTML = html;
+}
+
+async function addPatientToOtList(id){
+  const p = patients.find(x => x.id === id);
+  if(!p) return;
+  const date = getOtListDate();
+  p.status = 'preop';
+  p.surgeryDate = date;
+  if(!p.unit && getDefaultUnit()) p.unit = getDefaultUnit();
+  if(!(p.otDoctors && p.otDoctors.length)) p.otDoctors = [];
+  const list = getOtListPatients(date);
+  p.otOrder = list.length + 1;
+  await persistAndRerender(p);
+  showToast(`Added to OT list ${formatOtListDateDisplay(date)}`, { success: true });
+}
+
+async function removePatientFromOtList(id){
+  const p = patients.find(x => x.id === id);
+  if(!p) return;
+  const ok = await showConfirm('Remove from OT list?', 'Clears surgery date for this patient so they leave today’s list. Patient record stays.', { confirmLabel: 'Remove' });
+  if(!ok) return;
+  p.surgeryDate = '';
+  p.otOrder = 0;
+  await persistAndRerender(p);
+}
+
+async function moveOtListPatient(id, dir){
+  const date = getOtListDate();
+  const list = getOtListPatients(date);
+  const idx = list.findIndex(p => p.id === id);
+  if(idx < 0) return;
+  const j = idx + dir;
+  if(j < 0 || j >= list.length) return;
+  const tmp = list[idx];
+  list[idx] = list[j];
+  list[j] = tmp;
+  await persistOtOrder(list);
+}
+
+async function editOtListFields(id){
+  const p = patients.find(x => x.id === id);
+  if(!p) return;
+  const fields = await showPromptFields('OT list fields', [
+    { id: 'uhid', label: 'IP NO', value: p.uhid || '' },
+    { id: 'payer', label: 'Payer / insurance (shown under name)', value: p.payer || '', placeholder: 'e.g. ABARK' },
+    { id: 'ward', label: 'Ward', value: p.ward || p.bed || '' },
+    { id: 'diagnosis', label: 'Diagnosis', value: p.diagnosis || '', type: 'textarea', rows: 3 },
+    { id: 'procedure', label: 'Procedure', value: p.procedure || '', type: 'textarea', rows: 3 },
+    { id: 'anaesthesia', label: 'Anaesthesia', value: p.anaesthesia || '', placeholder: 'GA / SA / RA' },
+    { id: 'otDoctors', label: 'Doctors (one per line; blank = unit default)', value: (p.otDoctors && p.otDoctors.length ? p.otDoctors : []).join('\n'), type: 'textarea', rows: 4, placeholder: getDefaultOtDoctors().join('\n') }
+  ]);
+  if(!fields) return;
+  p.uhid = (fields.uhid || '').trim();
+  p.payer = (fields.payer || '').trim();
+  p.ward = (fields.ward || '').trim();
+  p.diagnosis = (fields.diagnosis || '').trim();
+  p.procedure = (fields.procedure || '').trim();
+  p.anaesthesia = (fields.anaesthesia || '').trim();
+  p.otDoctors = parseOtDoctorsText(fields.otDoctors);
+  await persistAndRerender(p);
+  showToast('OT fields saved', { success: true });
+}
+
+function buildOtExportPayload(){
+  const date = getOtListDate();
+  const list = getOtListPatients(date);
+  return {
+    date,
+    unit: getDefaultUnit(),
+    defaultOtDoctors: getDefaultOtDoctors(),
+    patients: list.map((p, i) => ({
+      id: p.id,
+      name: p.name || '',
+      age: p.age || '',
+      sex: p.sex || '',
+      ward: p.ward || p.bed || '',
+      bed: p.bed || '',
+      uhid: p.uhid || '',
+      diagnosis: p.diagnosis || '',
+      procedure: p.procedure || '',
+      payer: p.payer || '',
+      anaesthesia: p.anaesthesia || '',
+      otDoctors: resolvePatientOtDoctors(p),
+      otOrder: Number(p.otOrder) || (i + 1),
+      unit: p.unit || getDefaultUnit(),
+      surgeryDate: p.surgeryDate || date
+    }))
+  };
+}
+
+async function downloadOtListDocx(){
+  const payload = buildOtExportPayload();
+  if(!payload.patients.length){
+    showToast('No patients on the OT list for this date');
+    return;
+  }
+  try{
+    const token = localStorage.getItem(LS_TOKEN);
+    const res = await fetch('/api/ot-list/docx', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: 'Bearer ' + token } : {})
+      },
+      body: JSON.stringify(payload)
+    });
+    if(res.status === 401){
+      localStorage.removeItem(LS_TOKEN);
+      showLogin();
+      throw new Error('unauthorized');
+    }
+    if(!res.ok){
+      let msg = 'Export failed';
+      try{ const j = await res.json(); if(j.error) msg = j.error; }catch{ /* ignore */ }
+      throw new Error(msg);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `OT_LIST_UNIT_${(payload.unit || 'list').replace(/\s+/g, '_')}_${payload.date.replace(/-/g, '')}.docx`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    showToast('OT list Word file downloaded', { success: true });
+  }catch(err){
+    if(err.message !== 'unauthorized') showToast('Could not export Word — ' + (err.message || 'error'));
+  }
+}
+
+function printOtListPdf(){
+  const payload = buildOtExportPayload();
+  if(!payload.patients.length){
+    showToast('No patients on the OT list for this date');
+    return;
+  }
+  const unitLabel = (payload.unit || '').replace(/^unit\s+/i, '').trim().toUpperCase();
+  const rows = payload.patients.map((p, i) => {
+    const name = escapeHTML((p.name || '').toUpperCase()) + (p.payer ? `<br><span class="payer">(${escapeHTML(String(p.payer).toUpperCase())})</span>` : '');
+    const docs = (p.otDoctors || []).map(d => escapeHTML(d)).join('<br>');
+    return `<tr>
+      <td class="c">${i + 1}</td>
+      <td class="c">${escapeHTML(p.uhid || '')}</td>
+      <td>${name}</td>
+      <td class="c">${escapeHTML(formatOtAgeDisplay(p.age))}</td>
+      <td class="c">${escapeHTML(p.sex || '')}</td>
+      <td class="c">${escapeHTML((p.ward || '').toUpperCase())}</td>
+      <td>${escapeHTML((p.diagnosis || '').toUpperCase())}</td>
+      <td>${escapeHTML((p.procedure || '').toUpperCase()).replace(/\n/g, '<br>')}</td>
+      <td>${docs}</td>
+      <td class="c">${escapeHTML((p.anaesthesia || '').toUpperCase())}</td>
+    </tr>`;
+  }).join('');
+
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>OT List ${escapeHTML(formatOtListDateDisplay(payload.date))}</title>
+  <style>
+    @page { size: A4 landscape; margin: 12mm; }
+    body{ font-family: "Times New Roman", Times, serif; color:#000; margin:0; }
+    h1,h2,h3{ text-align:center; margin:4px 0; font-size:16px; }
+    h2{ font-size:15px; } .date{ text-align:center; font-weight:700; margin-bottom:10px; }
+    table{ width:100%; border-collapse:collapse; font-size:10px; }
+    th,td{ border:1px solid #000; padding:4px 5px; vertical-align:top; }
+    th{ font-size:9px; text-transform:uppercase; }
+    td.c{ text-align:center; }
+    .payer{ font-size:9px; }
+    .sigs{ margin-top:28px; display:flex; justify-content:space-between; gap:20px; font-size:11px; font-weight:700; }
+    .sigs .center{ text-align:center; width:100%; margin-bottom:18px; }
+    .foot{ display:flex; justify-content:space-between; margin-top:18px; font-size:11px; font-weight:700; }
+    @media print{ .noprint{ display:none; } }
+  </style></head><body>
+  <button class="noprint" onclick="window.print()" style="margin:8px;">Print / Save as PDF</button>
+  <h1>ORTHOPAEDICS DEPARTMENT</h1>
+  <h2>OT LIST UNIT ${escapeHTML(unitLabel || '—')}</h2>
+  <div class="date">Date : ${escapeHTML(formatOtListDateDisplay(payload.date))}</div>
+  <table>
+    <thead><tr>
+      <th>SL NO</th><th>IP NO</th><th>PATIENT NAME</th><th>AGE</th><th>SEX</th>
+      <th>WARD</th><th>DIAGNOSIS</th><th>PROCEDURE</th><th>DOCTORS NAME</th><th>ANAESTHESIA</th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+  </table>
+  <div class="sigs"><div class="center">THE CHIEF OPERATING OFFICER</div></div>
+  <div class="sigs" style="justify-content:flex-end;"><div>UNIT CHIEF SIGNATURE</div></div>
+  <div class="foot">
+    <div>DEPT. OF ANAESTHESIA AND OT STAFF<br><br>DEPT. OF MRD AND CONCERNED WARD</div>
+    <div>DEPT OF ORTHOPAEDIC</div>
+  </div>
+  <script>window.onload=()=>setTimeout(()=>window.print(),300);</script>
+  </body></html>`;
+
+  const w = window.open('', '_blank');
+  if(!w){ showToast('Allow pop-ups to print / save PDF'); return; }
+  w.document.write(html);
+  w.document.close();
+}
+
+function bindOtListUi(){
+  document.getElementById('otListDate')?.addEventListener('change', (e)=>{
+    setOtListDate(e.target.value);
+    renderOtList();
+  });
+  document.getElementById('otListDocxBtn')?.addEventListener('click', ()=> void downloadOtListDocx());
+  document.getElementById('otListPdfBtn')?.addEventListener('click', ()=> printOtListPdf());
+  document.getElementById('otListDoctorsBtn')?.addEventListener('click', ()=> void editDefaultOtDoctors());
+  document.getElementById('otListContent')?.addEventListener('click', (e)=>{
+    const add = e.target.closest('[data-ot-add]');
+    if(add){ void addPatientToOtList(add.dataset.otAdd); return; }
+    const rm = e.target.closest('[data-ot-remove]');
+    if(rm){ void removePatientFromOtList(rm.dataset.otRemove); return; }
+    const edit = e.target.closest('[data-ot-edit]');
+    if(edit){ void editOtListFields(edit.dataset.otEdit); return; }
+    const up = e.target.closest('[data-ot-up]');
+    if(up){ void moveOtListPatient(up.dataset.otUp, -1); return; }
+    const down = e.target.closest('[data-ot-down]');
+    if(down){ void moveOtListPatient(down.dataset.otDown, 1); return; }
+  });
 }
 
 function buildHandoverSheetHtml(){

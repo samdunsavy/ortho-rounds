@@ -13,6 +13,7 @@
     "test": "node --no-warnings --test"
   },
   "dependencies": {
+    "docx": "^9.7.1",
     "mongodb": "^7.5.0",
     "web-push": "^3.6.7"
   }

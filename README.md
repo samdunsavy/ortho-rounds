@@ -60,12 +60,18 @@ one-time password for each new user to share with them directly.
 
 - Each person has their own username + password — there is no shared
   ward login anymore.
-- Admins can add/disable users and reset passwords from **More → Manage
-  users**, no server access needed after the first run.
+- Admins can add, disable, **re-enable**, and reset passwords from **More →
+  Manage users**, no server access needed after the first run.
+- Any user can change their own password from **More → Change password**
+  (other devices are logged out; this device stays signed in).
 - Disabling a user immediately invalidates any device they're logged in on.
-- Lost your own phone? **More → Manage users → Log out everywhere** logs out
-  every device signed in as you, so you can re-login from one you still hold.
+- Lost your own phone? **More → Change password → Log out everywhere** (or
+  the same button in Manage users) logs out every device signed in as you.
 - Login attempts are rate-limited per username to resist brute-forcing.
+- On Render: set `ORTHO_ADMIN_PASSWORD` (and optional `ORTHO_ADMIN_USERNAME`)
+  for first boot only. Prefer `MONGODB_URI` or a persistent disk so the
+  `users` table/collection survives redeploys — otherwise a wipe recreates
+  a fresh admin and existing tokens stop working.
 
 ### Change the port
 
@@ -186,6 +192,20 @@ unconfigured.
 - AI output is a **draft only** — PGs must review before saving
 - Recommend hospital IT review before using with real patient data on a cloud API
 
+## OT list (hospital Word / PDF)
+
+Pre-op patients with a **surgery date** appear on the **OT list** tab. The
+printed list matches the orthopaedics department template columns only
+(SL NO, IP NO, name + payer, age, sex, ward, diagnosis, procedure, doctors,
+anaesthesia).
+
+- Default operating team is **DR MAHESH / DR BALAKRISHNA / DR JACOB / DR DEEPAK**
+  (editable under OT list → Default doctors, or More → Default OT doctors).
+- **Download Word** builds a `.docx` on the server (`POST /api/ot-list/docx`).
+- **Print / PDF** opens a landscape print view — use the browser’s Save as PDF.
+
+Set the unit header via **More → Default unit** (e.g. `IV`).
+
 ## Deploy to Railway (optional cloud)
 
 For access off the ward Wi‑Fi, you can host the same app on
@@ -196,8 +216,9 @@ For access off the ward Wi‑Fi, you can host the same app on
    `config.json`, and `images/`).
 3. Set environment variables:
    - `ORTHO_ADMIN_PASSWORD` — first admin account's password (optional; a
-     random one is printed on first boot if you skip this)
-   - `PORT` — Railway sets this automatically
+     random one is printed on first boot if you skip this). Same vars apply
+     on Render — see `render.yaml` (do **not** use the old `ORTHO_PASSWORD`).
+   - `PORT` — Railway/Render sets this automatically
 4. Use the generated HTTPS URL on phones (Add to Home Screen still works).
 
 **Important:** Without a volume, patient data is lost on every redeploy.
