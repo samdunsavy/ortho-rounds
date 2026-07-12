@@ -7873,9 +7873,13 @@ function printOtListPdf(){
     th,td{ border:1px solid #000; padding:6px 7px; vertical-align:middle; text-align:center; }
     th{ font-size:11px; text-transform:uppercase; }
     .payer{ font-size:11px; }
-    .sigs{ margin-top:28px; display:flex; justify-content:space-between; gap:20px; font-size:12px; font-weight:700; }
-    .sigs .center{ text-align:center; width:100%; margin-bottom:18px; }
-    .foot{ display:flex; justify-content:space-between; margin-top:18px; font-size:12px; font-weight:700; }
+    .sig-block{ margin-top:42px; width:100%; border-collapse:collapse; font-size:12px; font-weight:700; }
+    .sig-block td{ border:none; padding:2px 0; vertical-align:top; text-align:left; }
+    .sig-block td.r{ text-align:right; }
+    .sig-block td.c{ text-align:center; }
+    .sig-block tr.gap td{ padding-top:14px; }
+    .sig-block .stack{ line-height:1.35; }
+    .sig-coo{ text-align:center; font-weight:700; font-size:12px; margin:42px 0 12px; }
     @media print{ .noprint{ display:none; } }
   </style></head><body>
   <div class="sheet">
@@ -7890,12 +7894,18 @@ function printOtListPdf(){
     </tr></thead>
     <tbody>${rows}</tbody>
   </table>
-  <div class="sigs"><div class="center">THE CHIEF OPERATING OFFICER</div></div>
-  <div class="sigs" style="justify-content:flex-end;"><div>UNIT CHIEF SIGNATURE</div></div>
-  <div class="foot">
-    <div>DEPT. OF ANAESTHESIA AND OT STAFF<br><br>DEPT. OF MRD AND CONCERNED WARD</div>
-    <div>DEPT OF ORTHOPAEDIC</div>
-  </div>
+  <div class="sig-coo">THE CHIEF OPERATING OFFICER</div>
+  <table class="sig-block" style="margin-top:0;">
+    <colgroup><col style="width:55%"><col style="width:45%"></colgroup>
+    <tr>
+      <td></td>
+      <td class="r">UNIT CHIEF SIGNATURE</td>
+    </tr>
+    <tr class="gap">
+      <td><div class="stack">DEPT. OF ANAESTHESIA AND OT STAFF<br>DEPT. OF MRD AND CONCERNED WARD</div></td>
+      <td class="r">DEPT OF ORTHOPAEDIC</td>
+    </tr>
+  </table>
   </div>
   <script>window.onload=()=>setTimeout(()=>window.print(),300);</script>
   </body></html>`;

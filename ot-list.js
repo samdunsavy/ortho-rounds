@@ -194,35 +194,62 @@ export async function buildOtListDocx(opts){
           children: [new TextRun({ text: `Date : ${formatOtListDate(dateIso)}`, bold: true, size: 24, font: 'Times New Roman' })]
         }),
         table,
-        new Paragraph({ spacing: { before: 400 }, children: [] }),
-        new Paragraph({
-          alignment: AlignmentType.CENTER,
-          spacing: { after: 300 },
-          children: [new TextRun({ text: 'THE CHIEF OPERATING OFFICER', bold: true, size: 20, font: 'Times New Roman' })]
-        }),
-        new Paragraph({
-          alignment: AlignmentType.RIGHT,
-          spacing: { after: 300 },
-          children: [new TextRun({ text: 'UNIT CHIEF SIGNATURE', bold: true, size: 20, font: 'Times New Roman' })]
-        }),
+        // Clear gap between patient table and signature block
+        new Paragraph({ spacing: { before: 900, after: 0 }, children: [] }),
+        // Two-column signature grid so left/right labels share exact edges
         new Table({
           width: { size: total, type: WidthType.DXA },
-          columnWidths: [Math.floor(total / 2), Math.ceil(total / 2)],
+          columnWidths: [Math.floor(total * 0.55), Math.ceil(total * 0.45)],
           rows: [
+            // COO alone, centered across the full signature width
             new TableRow({
               children: [
                 new TableCell({
                   borders: NO_BORDER,
-                  width: { size: Math.floor(total / 2), type: WidthType.DXA },
+                  columnSpan: 2,
+                  width: { size: total, type: WidthType.DXA },
                   children: [
                     new Paragraph({
+                      alignment: AlignmentType.CENTER,
+                      spacing: { after: 40 },
+                      children: [new TextRun({
+                        text: 'THE CHIEF OPERATING OFFICER',
+                        bold: true, size: 20, font: 'Times New Roman'
+                      })]
+                    })
+                  ]
+                })
+              ]
+            }),
+            new TableRow({
+              children: [
+                sigCell(Math.floor(total * 0.55), '', { before: 120, after: 0 }),
+                sigCell(Math.ceil(total * 0.45), 'UNIT CHIEF SIGNATURE', {
+                  align: AlignmentType.RIGHT, size: 20, before: 120, after: 40
+                })
+              ]
+            }),
+            new TableRow({
+              children: [
+                sigCell(Math.floor(total * 0.55), '', { before: 140, after: 0 }),
+                sigCell(Math.ceil(total * 0.45), '', { before: 140, after: 0 })
+              ]
+            }),
+            new TableRow({
+              children: [
+                new TableCell({
+                  borders: NO_BORDER,
+                  width: { size: Math.floor(total * 0.55), type: WidthType.DXA },
+                  children: [
+                    new Paragraph({
+                      spacing: { after: 40 },
                       children: [new TextRun({
                         text: 'DEPT. OF ANAESTHESIA AND OT STAFF',
                         bold: true, size: 18, font: 'Times New Roman'
                       })]
                     }),
                     new Paragraph({
-                      spacing: { before: 120 },
+                      spacing: { before: 20, after: 0 },
                       children: [new TextRun({
                         text: 'DEPT. OF MRD AND CONCERNED WARD',
                         bold: true, size: 18, font: 'Times New Roman'
@@ -232,10 +259,12 @@ export async function buildOtListDocx(opts){
                 }),
                 new TableCell({
                   borders: NO_BORDER,
-                  width: { size: Math.ceil(total / 2), type: WidthType.DXA },
+                  width: { size: Math.ceil(total * 0.45), type: WidthType.DXA },
+                  verticalAlign: VerticalAlign.TOP,
                   children: [
                     new Paragraph({
                       alignment: AlignmentType.RIGHT,
+                      spacing: { after: 0 },
                       children: [new TextRun({
                         text: 'DEPT OF ORTHOPAEDIC',
                         bold: true, size: 18, font: 'Times New Roman'
@@ -252,6 +281,29 @@ export async function buildOtListDocx(opts){
   });
 
   return Packer.toBuffer(doc);
+}
+
+function sigCell(width, text, opts = {}){
+  const children = text
+    ? [new Paragraph({
+        alignment: opts.align || AlignmentType.LEFT,
+        spacing: { before: opts.before || 0, after: opts.after || 0 },
+        children: [new TextRun({
+          text,
+          bold: true,
+          size: opts.size || 18,
+          font: 'Times New Roman'
+        })]
+      })]
+    : [new Paragraph({
+        spacing: { before: opts.before || 0, after: opts.after || 0 },
+        children: []
+      })];
+  return new TableCell({
+    borders: NO_BORDER,
+    width: { size: width, type: WidthType.DXA },
+    children
+  });
 }
 
 /** Snapshot shape sent from the browser for export. */
