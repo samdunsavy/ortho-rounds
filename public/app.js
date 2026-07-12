@@ -3672,6 +3672,14 @@ function bindEvents(){
   document.getElementById('templatesBtn').addEventListener('click', openTemplateManager);
   document.getElementById('handoverSheetBtn')?.addEventListener('click', printHandoverSheet);
   document.getElementById('pgRosterBtn')?.addEventListener('click', editPgRoster);
+  document.getElementById('defaultUnitBtn')?.addEventListener('click', ()=>{
+    document.getElementById('moreMenuPanel')?.classList.remove('open');
+    void editDefaultUnit();
+  });
+  document.getElementById('defaultOtDoctorsBtn')?.addEventListener('click', ()=>{
+    document.getElementById('moreMenuPanel')?.classList.remove('open');
+    void editDefaultOtDoctors();
+  });
   document.getElementById('bulkPlanBtn')?.addEventListener('click', toggleBulkSelectMode);
   document.getElementById('bulkPlanApplyBtn')?.addEventListener('click', applyBulkPlan);
   document.getElementById('whatsappHandoverBtn')?.addEventListener('click', copyHandoverWhatsApp);
@@ -7923,6 +7931,7 @@ function bindOtListUi(){
   });
   document.getElementById('otListDocxBtn')?.addEventListener('click', ()=> void downloadOtListDocx());
   document.getElementById('otListPdfBtn')?.addEventListener('click', ()=> printOtListPdf());
+  document.getElementById('otListUnitBtn')?.addEventListener('click', ()=> void editDefaultUnit());
   document.getElementById('otListDoctorsBtn')?.addEventListener('click', ()=> void editDefaultOtDoctors());
   document.getElementById('otListContent')?.addEventListener('click', (e)=>{
     const add = e.target.closest('[data-ot-add]');
