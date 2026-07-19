@@ -21,7 +21,7 @@ tonight, silently, since nothing would catch it.
 
 **Done:** a jsdom-based harness (`tests/helpers/frontend-env.js`) that loads
 the real `index.html` + `app.js` into a test environment without a browser
-binary, plus two real test files:
+binary, plus four real test files:
 
 - `tests/frontend-icons-and-xray-viewer.test.js` (7 tests) — the icon
   registry and the X-ray zoom/pan state machine, the newest, least-protected
@@ -68,13 +68,40 @@ binary, plus two real test files:
   order (no per-entry timestamp exists to compare); a stale (not-`today`)
   `presentedToday` value from either side is dropped rather than merged in.
 
+- `tests/frontend-worklist.test.js` (17 tests) — `collectWorklistData`
+  (every bucket: pending/abnormal investigations, pending fitness, handover
+  notes, plan missing/today, post-op overdue/due/upcoming, discharge
+  checklist, abnormal labs, antibiotic-stop overdue/last-day/ending-soon,
+  numeric bed sort, PG-scope filtering, discharged-patient exclusion) and
+  the "Start here" triage ranking (`scorePatientForStartHere`,
+  `collectStartHereItems`: priority ordering across reason types, tie-break
+  by bed, the top-3 cap). This is the single screen a PG on call actually
+  works from, built fresh from the patient list on every render — untested
+  before this.
+
+  Both `collectWorklistData` and `collectStartHereItems` read the
+  module-level `patients` array directly rather than taking it as a
+  parameter, which the sync/merge functions above didn't need to deal with.
+  Reaching that state from a test isn't possible via a second, separate
+  `window.eval('patients = [...]')` call after the harness has already
+  loaded `app.js` — this jsdom setup does not share top-level `let`
+  bindings across separate eval invocations (only `window` properties, i.e.
+  function declarations and `var`, persist across calls), so a later eval
+  silently writes to an unrelated implicit global that the already-defined
+  functions' closures never see. First attempt at this file hit exactly
+  that: every single assertion silently saw an empty patient list. Fixed by
+  extending `tests/helpers/frontend-env.js` with an optional `initScript`
+  parameter, appended to `app.js`'s own source text before the one eval
+  call that defines it — same parse, same scope, no cross-eval sharing
+  involved. Fully backward compatible (existing tests don't pass the
+  option, behavior unchanged for them).
+
 Both files run in CI as-is (jsdom is pure JS, no native binary, so `npm ci`
 picks it up fine on GitHub Actions' runner, unlike Playwright/Chromium which
 needs system libraries this sandbox couldn't install). Full suite is now
-154 tests (107 → 123 → 154), all passing. **Still open:** the other
-~7,500 lines of `app.js` remain untested — this is still a start, not full
-coverage. Next candidates: worklist item collection (`collectWorklistData`,
-`collectStartHereItems`), and the admission/scribe parsing bridges.
+171 tests (107 → 123 → 154 → 171), all passing. **Still open:** the other
+~7,300 lines of `app.js` remain untested — this is still a start, not full
+coverage. Next candidate: the admission/scribe parsing bridges.
 
 Full pixel/visual testing isn't viable in every environment (headless
 Chromium needs system libraries this sandbox doesn't have and can't install

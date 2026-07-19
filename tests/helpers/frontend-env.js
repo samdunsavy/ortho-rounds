@@ -18,6 +18,23 @@
      import { loadFrontendEnv } from './helpers/frontend-env.js';
      const { window } = loadFrontendEnv();
      window.uiIcon('mic'); // etc.
+
+   Seeding module-level state (e.g. the top-level `let patients = []` that
+   collectWorklistData()/collectStartHereItems() read from): pass
+   `initScript`, a string of statements appended to app.js's own source
+   before the single window.eval() call. This has to happen as part of the
+   SAME eval invocation that defines app.js's functions, not a later,
+   separate window.eval() call -- this jsdom setup does not share top-level
+   `let`/`const` bindings across separate eval() calls (only `window`
+   properties, i.e. function declarations and `var`, persist across calls),
+   so a second eval doing `patients = [...]` after the fact is invisible to
+   any function whose closure captured the *first* eval's `patients`
+   binding, even though a *later* eval reading `patients` back would appear
+   to see it (it's silently reading/writing an unrelated implicit global).
+   Appending to the same source string sidesteps the whole issue since it's
+   one parse, one scope, no cross-eval sharing involved.
+
+     const { window } = loadFrontendEnv({ initScript: `patients = ${JSON.stringify([...])};` });
 */
 
 import { readFileSync } from 'node:fs';
@@ -28,7 +45,8 @@ import { JSDOM } from 'jsdom';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', '..', 'public');
 
-export function loadFrontendEnv(){
+export function loadFrontendEnv(options){
+  const { initScript = '' } = options || {};
   const html = readFileSync(path.join(PUBLIC_DIR, 'index.html'), 'utf8');
   const dom = new JSDOM(html, {
     url: 'http://localhost/',
@@ -56,7 +74,7 @@ export function loadFrontendEnv(){
   const appJs = readFileSync(path.join(PUBLIC_DIR, 'app.js'), 'utf8');
   const milestonesJs = readFileSync(path.join(PUBLIC_DIR, 'milestones.js'), 'utf8');
   window.eval(milestonesJs);
-  window.eval(appJs);
+  window.eval(initScript ? `${appJs}\n${initScript}` : appJs);
 
   return { dom, window, document: window.document };
 }
