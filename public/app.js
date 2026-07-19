@@ -8483,5 +8483,12 @@ function importData(e){
   reader.readAsText(file);
 }
 
-/* ---------------- go ---------------- */
-init();
+/* ---------------- go ----------------
+   Test harness sets globalThis.__ORTHO_SKIP_AUTOINIT__ = true before
+   evaluating this file (see tests/helpers/frontend-env.js), so unit tests
+   can load app.js for its function definitions without triggering a full
+   app bootstrap (IndexedDB, service worker, network calls, etc.) in a
+   browser this is always false/undefined, so nothing changes there. */
+if(typeof globalThis === 'undefined' || !globalThis.__ORTHO_SKIP_AUTOINIT__){
+  init();
+}

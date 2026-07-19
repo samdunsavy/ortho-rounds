@@ -1,6 +1,6 @@
 {
   "name": "ortho-rounds-server",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "private": true,
   "type": "module",
   "description": "Self-hosted server for the Ortho Rounds patient tracker. SQLite by default; optional MongoDB backend for persistent cloud hosting.",
@@ -16,5 +16,8 @@
     "docx": "^9.7.1",
     "mongodb": "^7.5.0",
     "web-push": "^3.6.7"
+  },
+  "devDependencies": {
+    "jsdom": "^29.1.1"
   }
 }

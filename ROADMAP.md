@@ -39,7 +39,18 @@ What's shipped today, and what the roadmap is built on top of:
 
 ---
 
-## Phase 1 — Multi-tenant foundation (Months 1–4) — 🟡 IN PROGRESS
+## Polish sprint — before resuming Phase 1
+
+Deliberate pause here: rather than jumping straight into the highest-risk
+Phase 1 item (auth/sync scoping), we're first working through a prioritized
+punch list on the current product — see `POLISH.md`. Top of that list:
+standing up real frontend test coverage (currently zero, despite `app.js`
+being the most actively changed file in the codebase), then the
+desktop/tablet responsive layout, a deliberate device-testing pass on touch
+gestures, presentation-mode readability, and a contrast/print audit.
+Phase 1's auth/sync scoping resumes once this list is worked through.
+
+## Phase 1 — Multi-tenant foundation (Months 1–4) — 🟡 IN PROGRESS (paused for polish sprint)
 
 **Goal:** one codebase serves both the existing single-hospital self-host deploys *and* a new hosted multi-tenant product — a hospital shouldn't need its own server anymore unless it wants one.
 
