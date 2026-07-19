@@ -56,6 +56,8 @@ import {
 import { mergePatientRecords, stampAttribution } from './merge.js';
 import { logError, logWarn } from './logger.js';
 import { runDigestPass } from './notifications.js';
+import { listFlags } from './flags.js';
+import { recordEvent, getSnapshot, isExportEnabled, startExportLoop } from './telemetry.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -69,6 +71,14 @@ const MONGODB_URI = process.env.MONGODB_URI || '';
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
 const MAX_BODY_BYTES = 64 * 1024 * 1024; // 64MB — patients can carry base64 X-rays
+
+// The sync wire format (request/response shape below) is versioned from here
+// on. `/api/sync` (unversioned) and `/api/sync/v1` are the same handler and
+// will stay that way for as long as v1 is current — this lets existing
+// clients keep calling the bare path forever while new clients can pin to
+// `/api/sync/v1` explicitly. A future breaking change ships as `/api/sync/v2`
+// alongside v1, never by changing v1's behavior in place.
+const SYNC_API_VERSION = 1;
 
 /* ---------------- config secret (token signing only) ---------------- */
 
@@ -209,7 +219,9 @@ async function handleApi(req, res, pathname){
       storage: store ? store.kind : 'starting',
       time: Date.now(),
       ai: getAiConfig(),
-      vapidPublicKey: config ? config.vapidPublicKey : null
+      vapidPublicKey: config ? config.vapidPublicKey : null,
+      apiVersion: SYNC_API_VERSION,
+      flags: listFlags()
     });
   }
   if(pathname === '/api/login' && req.method === 'POST'){
@@ -226,6 +238,7 @@ async function handleApi(req, res, pathname){
       return sendJSON(res, 401, { error: 'Invalid username or password' });
     }
     const token = signToken({ sub: user.id, username: user.username, tokenVersion: user.tokenVersion }, config.tokenSecret);
+    recordEvent('login');
     return sendJSON(res, 200, { token, username: user.username, role: user.role });
   }
 
@@ -262,6 +275,11 @@ async function handleApi(req, res, pathname){
     const body = await readBody(req) || {};
     if(typeof body.endpoint === 'string') await store.deleteSubscription(body.endpoint);
     return sendJSON(res, 200, { ok: true });
+  }
+
+  if(pathname === '/api/admin/telemetry' && req.method === 'GET'){
+    if(actor.role !== 'admin') return sendJSON(res, 403, { error: 'Admin only' });
+    return sendJSON(res, 200, { exportEnabled: isExportEnabled(), ...getSnapshot() });
   }
 
   if(pathname === '/api/admin/users' && req.method === 'GET'){
@@ -326,7 +344,8 @@ async function handleApi(req, res, pathname){
     });
   }
 
-  if(pathname === '/api/sync' && req.method === 'POST'){
+  if((pathname === '/api/sync' || pathname === '/api/sync/v1') && req.method === 'POST'){
+    recordEvent('sync');
     const body = await readBody(req) || {};
     const since = Number(body.since) || 0;
     const changes = Array.isArray(body.changes) ? body.changes : [];
@@ -359,7 +378,10 @@ async function handleApi(req, res, pathname){
     }
 
     const rows = await store.getChangedSince(since);
-    return sendJSON(res, 200, { serverTime: now, patients: rows.map(rowToPatient) });
+    // apiVersion is additive: existing clients that don't read it are
+    // unaffected; new clients can use it to confirm they're talking to the
+    // version of the sync contract they expect.
+    return sendJSON(res, 200, { serverTime: now, patients: rows.map(rowToPatient), apiVersion: SYNC_API_VERSION });
   }
 
   if(pathname === '/api/backup' && req.method === 'GET'){
@@ -432,6 +454,7 @@ async function handleApi(req, res, pathname){
       return sendJSON(res, 429, { error: `AI rate limit — try again in ${rate.retryAfterSec}s` });
     }
     const body = await readBody(req) || {};
+    recordEvent(`ai:${pathname.slice('/api/ai/'.length)}`);
     try{
       if(pathname === '/api/ai/draft-plan'){
         if(!body.patient || typeof body.patient !== 'object'){
@@ -591,6 +614,7 @@ async function printStartupBanner(bootstrap){
   }
   console.log('  ------------------------------------------');
   console.log(`  Storage:   ${store.kind === 'mongo' ? 'MongoDB' : 'SQLite'} — ${store.location}`);
+  console.log(`  Telemetry: ${isExportEnabled() ? 'local counts + export to ' + process.env.ORTHO_TELEMETRY_URL : 'local counts only, nothing leaves this machine'}`);
   if(bootstrap.created){
     console.log(`\n  >> First run — created admin account "${bootstrap.username}"`);
     if(bootstrap.usingEnvPassword){
@@ -638,6 +662,7 @@ async function main(){
   await store.autoBackup();
   digestIntervalHandle = setInterval(runDigestPassSafely, DIGEST_INTERVAL_MS);
   digestIntervalHandle.unref();
+  startExportLoop(); // no-op unless both ORTHO_TELEMETRY_URL and ORTHO_FLAG_TELEMETRY_EXPORT=1 are set
   server.listen(PORT, HOST, ()=>{
     printStartupBanner(bootstrap).catch(err => logWarn('startup_banner_failed', { errMessage: err.message }));
   });

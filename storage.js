@@ -26,7 +26,12 @@ import { DatabaseSync } from 'node:sqlite';
 import { logWarn } from './logger.js';
 
 const MAX_BACKUPS = 7;
-const USER_PATCH_FIELDS = ['passwordHash', 'passwordSalt', 'active', 'role', 'tokenVersion'];
+// orgId/wardId are additive, nullable fields for the roadmap Phase 1
+// multi-tenant model (see DESIGN-multitenant.md). Every existing user row
+// gets NULL for both, which self-host/single-tenant code paths never read —
+// they're inert until something behind the MULTI_TENANT flag starts using
+// them.
+const USER_PATCH_FIELDS = ['passwordHash', 'passwordSalt', 'active', 'role', 'tokenVersion', 'orgId', 'wardId'];
 const SUBSCRIPTION_PATCH_FIELDS = ['lastDigestAt'];
 
 export async function createStore(opts){
@@ -43,6 +48,15 @@ function extToContentType(ext){
 }
 
 /* ---------------- SQLite ---------------- */
+
+// Adds `column` to `table` if it doesn't already exist. Used to evolve the
+// schema of a database that was created before a given column existed,
+// without ever needing a destructive migration or a fresh install.
+function addColumnIfMissing(db, table, column, type){
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+  if(cols.some(c => c.name === column)) return;
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+}
 
 function createSqliteStore({ dataDir }){
   const DB_PATH = path.join(dataDir, 'ortho.db');
@@ -79,9 +93,50 @@ function createSqliteStore({ dataDir }){
           role         TEXT NOT NULL DEFAULT 'member',
           active       INTEGER NOT NULL DEFAULT 1,
           tokenVersion INTEGER NOT NULL DEFAULT 0,
-          createdAt    INTEGER NOT NULL
+          createdAt    INTEGER NOT NULL,
+          orgId        TEXT,
+          wardId       TEXT
         );
       `);
+      // Existing databases created before orgId/wardId existed won't have
+      // these columns yet — add them if missing. NULL for every existing
+      // row, which is exactly the "not part of any org yet" state.
+      addColumnIfMissing(db, 'users', 'orgId', 'TEXT');
+      addColumnIfMissing(db, 'users', 'wardId', 'TEXT');
+
+      // ---- multi-tenant hierarchy (roadmap Phase 1, see DESIGN-multitenant.md) ----
+      // These tables are created unconditionally (cheap, and avoids ever
+      // running with a half-migrated schema) but nothing in this codebase
+      // queries them yet outside of the CRUD methods below, which nothing
+      // calls unless the MULTI_TENANT flag is on. A self-hosted install that
+      // never touches that flag never has rows in these tables.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS organizations (
+          id        TEXT PRIMARY KEY,
+          name      TEXT NOT NULL,
+          plan      TEXT NOT NULL DEFAULT 'free',
+          createdAt INTEGER NOT NULL
+        );
+      `);
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS hospitals (
+          id        TEXT PRIMARY KEY,
+          orgId     TEXT NOT NULL,
+          name      TEXT NOT NULL,
+          createdAt INTEGER NOT NULL
+        );
+      `);
+      db.exec('CREATE INDEX IF NOT EXISTS idx_hospitals_orgId ON hospitals(orgId);');
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS wards (
+          id         TEXT PRIMARY KEY,
+          hospitalId TEXT NOT NULL,
+          name       TEXT NOT NULL,
+          specialty  TEXT NOT NULL DEFAULT 'ortho',
+          createdAt  INTEGER NOT NULL
+        );
+      `);
+      db.exec('CREATE INDEX IF NOT EXISTS idx_wards_hospitalId ON wards(hospitalId);');
       db.exec(`
         CREATE TABLE IF NOT EXISTS pushSubscriptions (
           id           TEXT PRIMARY KEY,
@@ -190,6 +245,38 @@ function createSqliteStore({ dataDir }){
       db.prepare(`UPDATE pushSubscriptions SET ${setClause} WHERE endpoint = ?`).run(...fields.map(f => patch[f]), endpoint);
     },
 
+    // ---- multi-tenant hierarchy (roadmap Phase 1) — unused until MULTI_TENANT is on ----
+    async createOrganization(org){
+      db.prepare(`INSERT INTO organizations (id, name, plan, createdAt) VALUES (?, ?, ?, ?)`)
+        .run(org.id, org.name, org.plan || 'free', org.createdAt || Date.now());
+    },
+    async getOrganization(id){
+      return db.prepare('SELECT * FROM organizations WHERE id = ?').get(id) || null;
+    },
+    async listOrganizations(){
+      return db.prepare('SELECT * FROM organizations ORDER BY createdAt ASC').all();
+    },
+    async createHospital(hospital){
+      db.prepare(`INSERT INTO hospitals (id, orgId, name, createdAt) VALUES (?, ?, ?, ?)`)
+        .run(hospital.id, hospital.orgId, hospital.name, hospital.createdAt || Date.now());
+    },
+    async getHospital(id){
+      return db.prepare('SELECT * FROM hospitals WHERE id = ?').get(id) || null;
+    },
+    async listHospitalsByOrg(orgId){
+      return db.prepare('SELECT * FROM hospitals WHERE orgId = ? ORDER BY createdAt ASC').all(orgId);
+    },
+    async createWard(ward){
+      db.prepare(`INSERT INTO wards (id, hospitalId, name, specialty, createdAt) VALUES (?, ?, ?, ?, ?)`)
+        .run(ward.id, ward.hospitalId, ward.name, ward.specialty || 'ortho', ward.createdAt || Date.now());
+    },
+    async getWard(id){
+      return db.prepare('SELECT * FROM wards WHERE id = ?').get(id) || null;
+    },
+    async listWardsByHospital(hospitalId){
+      return db.prepare('SELECT * FROM wards WHERE hospitalId = ? ORDER BY createdAt ASC').all(hospitalId);
+    },
+
     async begin(){ db.exec('BEGIN'); },
     async commit(){ db.exec('COMMIT'); },
     async rollback(){ db.exec('ROLLBACK'); },
@@ -267,17 +354,26 @@ async function createMongoStore({ mongoUri }){
   const images = database.collection('images');
   const users = database.collection('users');
   const pushSubscriptions = database.collection('pushSubscriptions');
+  // Multi-tenant hierarchy (roadmap Phase 1) — see DESIGN-multitenant.md.
+  // Collections exist from the start (cheap, schemaless) but stay empty
+  // unless something behind the MULTI_TENANT flag writes to them.
+  const organizations = database.collection('organizations');
+  const hospitals = database.collection('hospitals');
+  const wards = database.collection('wards');
   await patients.createIndex({ updatedAt: 1 });
   await users.createIndex({ username: 1 }, { unique: true });
   await pushSubscriptions.createIndex({ endpoint: 1 }, { unique: true });
   await pushSubscriptions.createIndex({ userId: 1 });
+  await hospitals.createIndex({ orgId: 1 });
+  await wards.createIndex({ hospitalId: 1 });
 
   const freshStart = (await patients.estimatedDocumentCount()) === 0;
   const mapRow = d => d ? { id: d._id, updatedAt: d.updatedAt, deleted: d.deleted ? 1 : 0, data: d.data } : null;
   const mapUser = d => d ? {
     id: d._id, username: d.username, passwordHash: d.passwordHash, passwordSalt: d.passwordSalt,
     role: d.role || 'member', active: d.active === false ? 0 : 1,
-    tokenVersion: d.tokenVersion || 0, createdAt: d.createdAt
+    tokenVersion: d.tokenVersion || 0, createdAt: d.createdAt,
+    orgId: d.orgId || null, wardId: d.wardId || null
   } : null;
   const mapSubscription = d => d ? {
     id: d._id, userId: d.userId, endpoint: d.endpoint, p256dh: d.p256dh, auth: d.auth,
@@ -387,6 +483,48 @@ async function createMongoStore({ mongoUri }){
       const set = {};
       for(const f of fields) set[f] = patch[f];
       await pushSubscriptions.updateOne({ endpoint }, { $set: set });
+    },
+
+    // ---- multi-tenant hierarchy (roadmap Phase 1) — unused until MULTI_TENANT is on ----
+    async createOrganization(org){
+      await organizations.insertOne({
+        _id: org.id, name: org.name, plan: org.plan || 'free', createdAt: org.createdAt || Date.now()
+      });
+    },
+    async getOrganization(id){
+      const d = await organizations.findOne({ _id: id });
+      return d ? { id: d._id, name: d.name, plan: d.plan, createdAt: d.createdAt } : null;
+    },
+    async listOrganizations(){
+      const arr = await organizations.find({}).sort({ createdAt: 1 }).toArray();
+      return arr.map(d => ({ id: d._id, name: d.name, plan: d.plan, createdAt: d.createdAt }));
+    },
+    async createHospital(hospital){
+      await hospitals.insertOne({
+        _id: hospital.id, orgId: hospital.orgId, name: hospital.name, createdAt: hospital.createdAt || Date.now()
+      });
+    },
+    async getHospital(id){
+      const d = await hospitals.findOne({ _id: id });
+      return d ? { id: d._id, orgId: d.orgId, name: d.name, createdAt: d.createdAt } : null;
+    },
+    async listHospitalsByOrg(orgId){
+      const arr = await hospitals.find({ orgId }).sort({ createdAt: 1 }).toArray();
+      return arr.map(d => ({ id: d._id, orgId: d.orgId, name: d.name, createdAt: d.createdAt }));
+    },
+    async createWard(ward){
+      await wards.insertOne({
+        _id: ward.id, hospitalId: ward.hospitalId, name: ward.name,
+        specialty: ward.specialty || 'ortho', createdAt: ward.createdAt || Date.now()
+      });
+    },
+    async getWard(id){
+      const d = await wards.findOne({ _id: id });
+      return d ? { id: d._id, hospitalId: d.hospitalId, name: d.name, specialty: d.specialty, createdAt: d.createdAt } : null;
+    },
+    async listWardsByHospital(hospitalId){
+      const arr = await wards.find({ hospitalId }).sort({ createdAt: 1 }).toArray();
+      return arr.map(d => ({ id: d._id, hospitalId: d.hospitalId, name: d.name, specialty: d.specialty, createdAt: d.createdAt }));
     },
 
     // MongoDB upserts are individually atomic; multi-doc transactions aren't

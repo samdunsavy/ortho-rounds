@@ -155,3 +155,99 @@ describe('SQLite storage — patients (regression check alongside new users tabl
     assert.equal(await store.countUsers(), 0);
   });
 });
+
+describe('SQLite storage — multi-tenant hierarchy (roadmap Phase 1, unused until MULTI_TENANT flag is on)', () => {
+  let dataDir;
+  let store;
+
+  before(async () => {
+    dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ortho-test-'));
+    store = await createStore({ dataDir });
+    await store.init();
+  });
+
+  after(async () => {
+    await store.close();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  test('a fresh install has no orgs/hospitals/wards', async () => {
+    assert.deepEqual(await store.listOrganizations(), []);
+  });
+
+  test('creates the org -> hospital -> ward chain and reads it back', async () => {
+    await store.createOrganization({ id: 'org1', name: 'City Hospital Group', plan: 'paid', createdAt: 1 });
+    await store.createHospital({ id: 'hosp1', orgId: 'org1', name: 'City General', createdAt: 2 });
+    await store.createWard({ id: 'ward1', hospitalId: 'hosp1', name: 'Ortho A', specialty: 'ortho', createdAt: 3 });
+
+    const org = await store.getOrganization('org1');
+    assert.equal(org.name, 'City Hospital Group');
+    assert.equal(org.plan, 'paid');
+
+    const hospitals = await store.listHospitalsByOrg('org1');
+    assert.equal(hospitals.length, 1);
+    assert.equal(hospitals[0].name, 'City General');
+
+    const wards = await store.listWardsByHospital('hosp1');
+    assert.equal(wards.length, 1);
+    assert.equal(wards[0].specialty, 'ortho');
+  });
+
+  test('a fresh user has orgId/wardId as null (single-tenant default)', async () => {
+    await store.createUser({
+      id: 'mt-u1', username: 'mtuser', passwordHash: 'h', passwordSalt: 's',
+      role: 'member', active: true, tokenVersion: 0, createdAt: Date.now()
+    });
+    const u = await store.getUserById('mt-u1');
+    assert.equal(u.orgId, null);
+    assert.equal(u.wardId, null);
+  });
+
+  test('updateUser can assign orgId/wardId once multi-tenant is in use', async () => {
+    await store.updateUser('mt-u1', { orgId: 'org1', wardId: 'ward1' });
+    const u = await store.getUserById('mt-u1');
+    assert.equal(u.orgId, 'org1');
+    assert.equal(u.wardId, 'ward1');
+  });
+});
+
+describe('SQLite storage — upgrading a pre-multi-tenant database', () => {
+  test('a users table created before orgId/wardId existed gets the columns added automatically', async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ortho-test-'));
+    try{
+      // Simulate an old install: create the users table exactly as the
+      // original (pre-Phase-1) schema did, with no orgId/wardId columns.
+      const { DatabaseSync } = await import('node:sqlite');
+      const dbPath = path.join(dataDir, 'ortho.db');
+      const raw = new DatabaseSync(dbPath);
+      raw.exec(`
+        CREATE TABLE users (
+          id           TEXT PRIMARY KEY,
+          username     TEXT NOT NULL UNIQUE,
+          passwordHash TEXT NOT NULL,
+          passwordSalt TEXT NOT NULL,
+          role         TEXT NOT NULL DEFAULT 'member',
+          active       INTEGER NOT NULL DEFAULT 1,
+          tokenVersion INTEGER NOT NULL DEFAULT 0,
+          createdAt    INTEGER NOT NULL
+        );
+      `);
+      raw.exec(`INSERT INTO users (id, username, passwordHash, passwordSalt, role, active, tokenVersion, createdAt)
+        VALUES ('old1', 'legacyuser', 'h', 's', 'admin', 1, 0, 1000)`);
+      raw.close();
+
+      // Now open it through the real store, exactly like a version upgrade would.
+      const store = await createStore({ dataDir });
+      await store.init();
+
+      const u = await store.getUserById('old1');
+      assert.equal(u.username, 'legacyuser', 'pre-existing user survives the upgrade untouched');
+      assert.equal(u.orgId, null, 'new column defaults to null for pre-existing rows');
+      assert.equal(u.wardId, null);
+
+      await store.close();
+    } finally {
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+});
