@@ -36,9 +36,15 @@
     --accent-hover:#244c58;
     --bone:#f1ece2;
     --bone-line:#d8cfb8;
-    --good:#3f7d5c;
+    /* good/warn/bone-ink nudged slightly darker than the original design —
+       #3f7d5c-on-#e8f3ec, #a6622a-on-#fbf0e2, and #7a6a44-on-#f1ece2 all
+       measured just under WCAG AA's 4.5:1 text-contrast threshold (4.24-
+       4.49:1). This is the minimal darkening that clears 4.5:1 for each —
+       imperceptible as a color shift, but now compliant at normal text
+       sizes, not just the 3:1 large-text/UI threshold. */
+    --good:#3d7959;
     --good-bg:#e8f3ec;
-    --warn:#a6622a;
+    --warn:#9f5e28;
     --warn-bg:#fbf0e2;
     --bad:#a33d3d;
     --bad-bg:#faeaea;
@@ -46,12 +52,12 @@
     --status-preop:#2c5f6e;
     --status-conservative:#6b8f71;
     --status-postop:#7a9cad;
-    --status-fordischarge:#3f7d5c;
+    --status-fordischarge:#3d7959;
     --status-conservative-bg:#e8f0e9;
     --status-conservative-fg:#3d6b47;
     --status-postop-bg:#e8eef2;
     --status-postop-fg:#4a6270;
-    --bone-ink:#7a6a44;
+    --bone-ink:#796943;
     --bg-mesh:radial-gradient(ellipse 80% 50% at 10% -10%,rgba(44,95,110,0.09),transparent 55%),
       radial-gradient(ellipse 60% 40% at 95% 5%,rgba(63,125,92,0.06),transparent 50%),
       radial-gradient(ellipse 50% 30% at 50% 100%,rgba(166,98,42,0.04),transparent 45%);
@@ -761,6 +767,23 @@
     border:1px solid rgba(74,154,173,0.35);border-left:4px solid var(--accent);
     border-radius:0 var(--radius) var(--radius) 0;padding:16px 18px;
   }
+
+  /* ---------- presentation mode: "Large text" variant ----------
+     The type scale above was sized for a phone/tablet held at arm's
+     length. Read from across a room off a projector or a wall-mounted
+     display, it's still too small, and the muted secondary text (meta,
+     labels) drops too much contrast to read from a distance. This is an
+     opt-in toggle (Options -> Large text), not a redesign of the default —
+     day-to-day presenting on a handheld device keeps the existing scale. */
+  .presentation-overlay.pres-large-text .presentation-body{max-width:920px;}
+  .presentation-overlay.pres-large-text .pres-head h2{font-size:clamp(36px,7vw,48px);}
+  .presentation-overlay.pres-large-text .pres-hero-line{font-size:17px;}
+  .presentation-overlay.pres-large-text .pres-meta{font-size:19px;color:#fff;}
+  .presentation-overlay.pres-large-text .pres-label{font-size:13px;color:#e2e6ee;}
+  .presentation-overlay.pres-large-text .pres-plan,
+  .presentation-overlay.pres-large-text .pres-script{font-size:22px;line-height:1.6;}
+  .presentation-overlay.pres-large-text .pres-handover{font-size:18px;}
+  .presentation-overlay.pres-large-text .flag{font-size:15px;padding:6px 12px;}
   .pres-xray-row{display:flex;gap:10px;flex-wrap:wrap;margin-top:4px;}
   .pres-xray-thumb{
     position:relative;width:120px;height:120px;padding:0;border:2px solid rgba(255,255,255,0.25);
@@ -1222,7 +1245,7 @@
       --ink:#e8eaef;--ink-soft:#9aa3b5;--line:#2e3544;--line-soft:#252b38;
       --paper:#12151c;--card:#1a1f2a;--surface:#1a1f2a;
       --chrome:#0e1016;--chrome-fg:#f0f2f6;--chrome-muted:#9aa3b5;
-      --accent:#4a9aad;--accent-soft:#1e3338;
+      --accent:#52a2b5;--accent-soft:#1e3338;
       --accent-hover:#5eb0c4;--bone:#2a2820;--bone-line:#3d3828;
       --good:#5fcf8e;--good-bg:#1a2e24;--warn:#e6b84c;--warn-bg:#2e2618;
       --bad:#e07070;--bad-bg:#2e1a1a;
@@ -1249,7 +1272,14 @@
     --ink:#e8eaef;--ink-soft:#9aa3b5;--line:#2e3544;--line-soft:#252b38;
     --paper:#12151c;--card:#1a1f2a;--surface:#1a1f2a;
     --chrome:#0e1016;--chrome-fg:#f0f2f6;--chrome-muted:#9aa3b5;
-    --accent:#4a9aad;--accent-soft:#1e3338;
+    --accent:#52a2b5;--accent-soft:#1e3338;
+    /* accent was lightened slightly from #4a9aad (dark mode only) — it
+       measured 4.11:1 against --accent-soft, just under WCAG AA's 4.5:1
+       for the normal-size text that uses this pairing (active tabs,
+       status-badge.preop, ward count, filter chips). This is the minimal
+       lightening that clears 4.5:1; --accent is used pervasively (buttons,
+       glows, borders) so fixing it once here fixes every one of those
+       consistently rather than patching each usage separately. */
     --accent-hover:#5eb0c4;--bone:#2a2820;--bone-line:#3d3828;
     --good:#5fcf8e;--good-bg:#1a2e24;--warn:#e6b84c;--warn-bg:#2e2618;
     --bad:#e07070;--bad-bg:#2e1a1a;
@@ -1276,9 +1306,9 @@
     --chrome:#1c2230;--chrome-fg:#ffffff;--chrome-muted:#aab3c2;
     --accent:#2c5f6e;--accent-soft:#e7f0f0;
     --accent-hover:#244c58;--bone:#f1ece2;--bone-line:#d8cfb8;
-    --good:#3f7d5c;--good-bg:#e8f3ec;--warn:#a6622a;--warn-bg:#fbf0e2;
+    --good:#3d7959;--good-bg:#e8f3ec;--warn:#9f5e28;--warn-bg:#fbf0e2;
     --bad:#a33d3d;--bad-bg:#faeaea;
-    --status-preop:#2c5f6e;--status-conservative:#6b8f71;--status-postop:#7a9cad;--status-fordischarge:#3f7d5c;
+    --status-preop:#2c5f6e;--status-conservative:#6b8f71;--status-postop:#7a9cad;--status-fordischarge:#3d7959;
     --status-conservative-bg:#e8f0e9;--status-conservative-fg:#3d6b47;
     --status-postop-bg:#e8eef2;--status-postop-fg:#4a6270;
     --bg-mesh:radial-gradient(ellipse 80% 50% at 10% -10%,rgba(44,95,110,0.09),transparent 55%),
@@ -1970,6 +2000,7 @@
       </label>
       <label class="pres-toggle"><input type="checkbox" id="presentUnpresentedOnly"> Unpresented only</label>
       <label class="pres-toggle"><input type="checkbox" id="presentationReadAloud"> Read aloud</label>
+      <label class="pres-toggle"><input type="checkbox" id="presentationLargeText"> Large text (projector/across-room)</label>
     </div>
   </div>
   <div class="presentation-progress"><div class="presentation-progress-fill" id="presentationProgress"></div></div>

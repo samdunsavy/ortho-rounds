@@ -55,6 +55,7 @@ const LS_BACKUP_NUDGE = "ortho_backupNudge";
 const LS_DARK_MODE = "ortho_darkMode";
 const LS_PG_SCOPE = "ortho_pgScope";
 const LS_READ_ALOUD = "ortho_readAloud";
+const LS_PRESENT_LARGE_TEXT = "ortho_presentLargeText";
 const LS_MORNING_VIEW = "ortho_morningView";
 const LS_TIP_MINE_EMPTY = "ortho_tipMineEmpty";
 const LS_TIP_WORKLIST = "ortho_tipWorklist";
@@ -96,6 +97,13 @@ let wardMeta = { handoverNote: '', defaultUnit: '', defaultOtDoctors: [...DEFAUL
 let syncing = false;
 let presentationUnpresentedOnly = localStorage.getItem(LS_PRESENT_UNPRESENTED) === '1';
 let presentationReadAloud = localStorage.getItem(LS_READ_ALOUD) === '1';
+// Presentation mode's own type scale is already larger than the everyday
+// ward list, but that was sized for a phone/tablet at arm's length — read
+// from across a room off a projector or a wall-mounted display, it's still
+// too small. This toggles a higher-contrast, further-enlarged variant on
+// the presentation overlay specifically, sticky across sessions like the
+// other presentation options.
+let presentationLargeText = localStorage.getItem(LS_PRESENT_LARGE_TEXT) === '1';
 let modalBaselineJson = null;
 let bulkSelectMode = false;
 let bulkSelectedIds = new Set();
@@ -1932,7 +1940,15 @@ function uiIcon(name){
     stop:'<rect x="6" y="6" width="12" height="12" rx="2"/>',
     pin:'<path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>'
   };
-  return `<svg class="icon-svg" viewBox="0 0 24 24">${icons[name] || icons.checkmark}</svg>`;
+  // width/height/fill/stroke are set as real SVG attributes, not just the
+  // icon-svg CSS class — this icon gets written into buildHandoverSheetHtml
+  // (a standalone popup document with its own <style>, no access to the
+  // main page's stylesheet at all), where a bare, unstyled <svg> would fall
+  // back to the browser's ~300x150px default size and break the print
+  // table layout. Presentation attributes still lose to any CSS that *is*
+  // present (e.g. .sa-icon svg{width:18px}), so context-specific sizing on
+  // the main page is unaffected.
+  return `<svg class="icon-svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${icons[name] || icons.checkmark}</svg>`;
 }
 
 function workItemIcon(kind, urgency){
@@ -3782,6 +3798,14 @@ function bindEvents(){
   });
   const readAloudCb = document.getElementById('presentationReadAloud');
   if(readAloudCb) readAloudCb.checked = presentationReadAloud;
+  document.getElementById('presentationLargeText')?.addEventListener('change', (e)=>{
+    presentationLargeText = e.target.checked;
+    localStorage.setItem(LS_PRESENT_LARGE_TEXT, presentationLargeText ? '1' : '0');
+    document.getElementById('presentationOverlay')?.classList.toggle('pres-large-text', presentationLargeText);
+  });
+  const largeTextCb = document.getElementById('presentationLargeText');
+  if(largeTextCb) largeTextCb.checked = presentationLargeText;
+  document.getElementById('presentationOverlay')?.classList.toggle('pres-large-text', presentationLargeText);
   document.getElementById('wardHandoverDismiss').addEventListener('click', ()=>{
     document.getElementById('wardHandoverBanner').style.display = 'none';
   });

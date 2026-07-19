@@ -104,22 +104,47 @@ needs a real phone/tablet, ideally by someone trying to break it the way a
 tired PG on night rounds would. The code-level half of this priority is
 done; the device-in-hand half isn't.
 
-## Priority 4 — Presentation-mode readability variant
+## Priority 4 — Presentation-mode readability variant — ✅ DONE
 
-Not yet done. Presentation mode is read from a few feet away, in front of an
-audience, but currently shares the same compact type scale as the everyday
-ward-list view. A larger, higher-contrast variant for presentation mode
-specifically (distinct from the dense day-to-day list) is a cheap, visible
-win for the feature most likely to be seen by someone deciding whether this
-tool looks credible.
+Presentation mode's existing type scale was sized for a phone/tablet held
+at arm's length. Added an opt-in "Large text" toggle (Options panel,
+sticky across sessions like the other presentation options) that further
+enlarges the headline, meta, plan, script, and flag text and boosts muted
+text to full white — for reading from across a room off a projector or a
+wall-mounted display. Day-to-day presenting on a handheld device is
+unaffected; this is additive, not a redesign of the default.
 
-## Priority 5 — Contrast + print-safety audit
+## Priority 5 — Contrast + print-safety audit — ✅ DONE
 
-Two related, still-open items from the earlier visual review: the status
-colors (good/warn/bad, phase tints) haven't been checked against WCAG AA
-formally, and the print stylesheet's status pills lean on color alone,
-which won't survive a plain black-and-white hospital printer. Both are
-cheap to verify, neither has been done yet.
+**Contrast:** ran the actual WCAG relative-luminance formula (not eyeballed)
+against every status color pair in both themes. Found four real failures,
+all narrowly under the 4.5:1 normal-text threshold (they all already passed
+the 3:1 large-text/UI threshold, so nothing looked obviously broken):
+`--good` on `--good-bg` (4.29:1), `--warn` on `--warn-bg` (4.24:1), and
+`--bone-ink` on `--bone` (4.49:1) in light mode; `--accent` on
+`--accent-soft` (4.11:1) in dark mode. Fixed each with the minimal color
+nudge that clears 4.5:1 — all four adjustments are small enough to be
+visually imperceptible as a color shift (e.g. `#3f7d5c` → `#3d7959`),
+verified by recomputing the ratios after the change (4.53–4.56:1 across
+the board).
+
+**Print-safety:** the assumption going in — that the app's generic
+`@media print` CSS was what actually gets printed — turned out to be
+wrong. The two real print features (OT list export, handover sheet) both
+open a separate popup window and write a fully self-contained HTML
+document via `buildHandoverSheetHtml()`, with their own `<style>` block
+that never touches the main page's CSS at all. The handover sheet already
+shows status and flags as plain text in dedicated table columns, not color
+alone, so that specific worry didn't apply. But the audit surfaced a real
+bug instead: the handover-pin `uiIcon('pin')` SVG (added during icon
+unification) had no size/color of its own outside the main page's
+`.icon-svg` CSS class — inside the popup's isolated stylesheet, it would
+have rendered at the browser's ~300×150px default SVG size and broken that
+table's layout. Fixed by making every `uiIcon()` output self-contained
+(explicit `width`/`height`/`fill`/`stroke` attributes on the `<svg>` itself,
+not just a CSS class), so it degrades gracefully with zero external CSS —
+protects against the same class of bug in any future export/print/email
+context, not just this one.
 
 ## Priority 6 — Housekeeping
 
@@ -138,10 +163,13 @@ New features, and Phase 1's auth/sync scoping. This is a polish pass on
 what exists, not feature work — the point is to reduce risk and rough edges
 before adding more surface area, not to add more surface area.
 
-## Suggested order
+## Suggested order — all six priorities now have work done against them
 
-1. Frontend test harness (Priority 1) — protects everything that comes after it, including the polish work itself.
-2. Responsive desktop/tablet layout (Priority 2) — highest visible impact.
-3. Device-testing pass (Priority 3) — cheap, catches real bugs like the zoom one before users do.
-4. Presentation-mode readability (Priority 4) and contrast/print audit (Priority 5) — bundle together, similar surface area.
-5. Housekeeping (Priority 6) — do whenever, lowest stakes.
+1. ~~Frontend test harness (Priority 1)~~ — harness + first tests shipped; broader coverage of the rest of `app.js` remains open.
+2. ~~Responsive desktop/tablet layout (Priority 2)~~ — Rounds view done; Worklist/OT list intentionally deferred to their own pass.
+3. ~~Device-testing pass (Priority 3)~~ — code-audit half done (found and fixed a real bug); device-in-hand half still needs an actual phone/tablet.
+4. ~~Presentation-mode readability (Priority 4)~~ — done.
+5. ~~Contrast/print audit (Priority 5)~~ — done; also fixed a real print-layout bug the audit surfaced.
+6. ~~Housekeeping (Priority 6)~~ — done.
+
+**What's left across the whole plan:** broader `app.js` test coverage beyond the first file, the Worklist/OT list responsive layout, and real device testing of touch surfaces. Everything else on this list has shipped.

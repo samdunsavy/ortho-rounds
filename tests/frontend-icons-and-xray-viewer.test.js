@@ -26,7 +26,14 @@ describe('uiIcon — shared SVG icon registry', () => {
     ];
     for(const name of names){
       const markup = window.uiIcon(name);
-      assert.match(markup, /^<svg class="icon-svg" viewBox="0 0 24 24">/, `${name} should render an icon-svg wrapper`);
+      assert.match(markup, /^<svg class="icon-svg" viewBox="0 0 24 24"/, `${name} should render an icon-svg wrapper`);
+      // width/height/stroke are real SVG attributes, not just the icon-svg
+      // class — this icon gets written into a standalone print popup
+      // (buildHandoverSheetHtml) with its own <style>, no access to the
+      // main page's stylesheet, where a bare <svg> would fall back to the
+      // browser's ~300x150px default size and break that table's layout.
+      assert.match(markup, /width="16" height="16"/, `${name} must be self-sized without relying on external CSS`);
+      assert.match(markup, /stroke="currentColor"/, `${name} must be self-colored without relying on external CSS`);
       assert.match(markup, /<\/svg>$/, `${name} should close its svg tag`);
       assert.ok(markup.length > 40, `${name} should contain real path data, not an empty shell`);
     }
@@ -35,7 +42,7 @@ describe('uiIcon — shared SVG icon registry', () => {
   test('falls back to a known icon for an unrecognized name instead of rendering blank', () => {
     const { window } = loadFrontendEnv();
     const markup = window.uiIcon('not-a-real-icon-name');
-    assert.match(markup, /^<svg class="icon-svg" viewBox="0 0 24 24">/);
+    assert.match(markup, /^<svg class="icon-svg" viewBox="0 0 24 24"/);
     assert.ok(markup.length > 40);
   });
 
