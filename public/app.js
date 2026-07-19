@@ -25,6 +25,14 @@ let viewingImageContext = null; // { patientId, imgId }
 // carries over between X-rays.
 let ivScale = 1, ivPanX = 0, ivPanY = 0;
 const IV_MIN_SCALE = 1, IV_MAX_SCALE = 4;
+// The image's actual on-screen rect at rest (scale 1, no pan) — captured in
+// resetImgViewerZoom(), the one moment the transform is guaranteed clear.
+// Needed because the viewer's flex column centers the WHOLE stack (image +
+// dots + label + hint + delete button) via justify-content:center, not the
+// image alone, so the image's rest position sits above the container's true
+// geometric center — a symmetric "half the overflow" clamp assumption around
+// that center is wrong; the real rest position has to be measured, not assumed.
+let ivRestRect = null;
 
 /* ---------------- storage / sync keys ---------------- */
 
@@ -5369,12 +5377,43 @@ function applyImgViewerTransform(){
     // from a higher zoom level gets pulled back to center automatically.
     const viewer = document.getElementById('imgViewer');
     const viewerRect = viewer ? viewer.getBoundingClientRect() : null;
-    const naturalW = imgEl.offsetWidth, naturalH = imgEl.offsetHeight;
-    if(viewerRect && naturalW && naturalH){
-      const maxPanX = Math.max(0, (naturalW * ivScale - viewerRect.width) / 2);
-      const maxPanY = Math.max(0, (naturalH * ivScale - viewerRect.height) / 2);
-      ivPanX = Math.max(-maxPanX, Math.min(maxPanX, ivPanX));
-      ivPanY = Math.max(-maxPanY, Math.min(maxPanY, ivPanY));
+    if(viewerRect && ivRestRect && ivRestRect.width && ivRestRect.height){
+      const scaledW = ivRestRect.width * ivScale;
+      const scaledH = ivRestRect.height * ivScale;
+      const restCenterX = ivRestRect.left + ivRestRect.width / 2;
+      const restCenterY = ivRestRect.top + ivRestRect.height / 2;
+
+      // Horizontal: the flex column's cross-axis centers each item
+      // independently (unlike the main axis, siblings don't share/compete
+      // for this axis), so restCenterX already equals the viewer's own
+      // horizontal center in practice — derived the same way as Y anyway,
+      // so this stays correct if horizontal safe-area padding is ever added.
+      const panXAtLeft = viewerRect.left - (restCenterX - scaledW / 2);
+      const panXAtRight = viewerRect.right - (restCenterX + scaledW / 2);
+      const loPanX = Math.min(panXAtLeft, panXAtRight);
+      const hiPanX = Math.max(panXAtLeft, panXAtRight);
+      ivPanX = Math.max(loPanX, Math.min(hiPanX, ivPanX));
+
+      // Vertical is NOT symmetric: the viewer's justify-content:center
+      // centers the WHOLE stack (image + dots + label + hint + delete
+      // button), so the image's rest position sits above the container's
+      // true geometric center to make room for everything below it — a
+      // "half the overflow around center" assumption here quietly let the
+      // image's top edge drift up underneath a phone's status bar even
+      // though the CSS below reserves safe-area-inset-top as padding.
+      // Deriving bounds from the image's actual measured rest rect (not
+      // the theoretical container center) is what makes this correct.
+      const safeAreaTop = parseFloat(getComputedStyle(viewer).paddingTop) || 0;
+      const safeTop = viewerRect.top + safeAreaTop;
+      // panY this negative would put the top edge exactly at safeTop;
+      // panY this positive would put the bottom edge exactly at the
+      // viewer's bottom edge. Sorted with min/max since whichever is more
+      // restrictive depends on how much the image overflows at this scale.
+      const panYAtSafeTop = safeTop - (restCenterY - scaledH / 2);
+      const panYAtBottom = viewerRect.bottom - (restCenterY + scaledH / 2);
+      const loPanY = Math.min(panYAtSafeTop, panYAtBottom);
+      const hiPanY = Math.max(panYAtSafeTop, panYAtBottom);
+      ivPanY = Math.max(loPanY, Math.min(hiPanY, ivPanY));
     }
   }
   imgEl.style.transform = (ivScale > 1.001) ? `translate(${ivPanX}px, ${ivPanY}px) scale(${ivScale})` : '';
@@ -5395,7 +5434,13 @@ function applyImgViewerTransform(){
 function resetImgViewerZoom(){
   ivScale = 1; ivPanX = 0; ivPanY = 0;
   const imgEl = document.getElementById('imgViewerImg');
-  if(imgEl){ imgEl.style.transform = ''; imgEl.classList.remove('iv-zoomed'); }
+  if(imgEl){
+    imgEl.style.transform = '';
+    imgEl.classList.remove('iv-zoomed');
+    // Transform is guaranteed clear right here — capture the image's real
+    // rest position for the pan clamp in applyImgViewerTransform() to use.
+    ivRestRect = imgEl.getBoundingClientRect();
+  }
   document.getElementById('imgViewer')?.classList.remove('iv-zoomed-mode');
 }
 
@@ -5497,6 +5542,15 @@ function bindImgViewerGestures(){
   const viewer = document.getElementById('imgViewer');
   const imgEl = document.getElementById('imgViewerImg');
   if(!viewer || !imgEl) return;
+
+  // renderImgViewer() calls resetImgViewerZoom() (which captures ivRestRect)
+  // BEFORE it sets imgEl.src for the new image, so that capture reflects
+  // whatever image (or nothing) was previously loaded — a 'load' listener
+  // is what actually gets the rest rect right for every image shown,
+  // including the very first one in a fresh viewer session.
+  imgEl.addEventListener('load', ()=>{
+    if(ivScale <= 1.001) ivRestRect = imgEl.getBoundingClientRect();
+  });
 
   let startX = 0, startY = 0;
   let pinching = false, pinchStartDist = 0, pinchStartScale = 1;
