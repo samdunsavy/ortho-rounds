@@ -3932,11 +3932,6 @@ function bindEvents(){
   bindImgViewerGestures();
   document.getElementById('hiddenFileInput').addEventListener('change', handleImageFileSelected);
   document.getElementById('modalFileInput')?.addEventListener('change', handleModalImageSelected);
-  document.getElementById('labPhotoFileInput')?.addEventListener('change', (e) => {
-    const file = e.target.files[0];
-    e.target.value = '';
-    void handleLabPhotoSelected(file);
-  });
   document.getElementById('imgTypeCloseBtn').addEventListener('click', closeImageTypeModal);
   document.getElementById('imgTypePreop').addEventListener('click', ()=> confirmImageType('preop'));
   document.getElementById('imgTypePostop').addEventListener('click', ()=> confirmImageType('postop'));
@@ -6703,6 +6698,17 @@ function bindModalDynamicLists(){
   renderPlanStatus();
   renderModalPendingXrays();
   document.getElementById('f_dailyPlan').addEventListener('input', renderPlanStatus);
+
+  // labPhotoFileInput lives inside renderModalForm()'s output, so — like
+  // every other dynamically-rendered modal control bound in this function —
+  // its listener has to be (re)attached here, on every modal open, not in
+  // the one-time page-init block (that pattern only works for elements that
+  // are part of the static index.html shell, e.g. #modalFileInput itself).
+  document.getElementById('labPhotoFileInput')?.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    void handleLabPhotoSelected(file);
+  });
 
   const addAbxBtn = document.getElementById('addAntibioticBtn');
   if(addAbxBtn){

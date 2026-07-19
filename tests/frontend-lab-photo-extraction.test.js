@@ -65,6 +65,52 @@ describe('save flow — expanded labs object', () => {
   });
 });
 
+describe('labPhotoFileInput wiring', () => {
+  // Regression test for a real bug: labPhotoFileInput is rendered inside
+  // renderModalForm()'s output (part of #modalBody, rebuilt from scratch
+  // every time the modal opens), not the static index.html shell. Binding
+  // its 'change' listener once at page-init time (like the truly-static
+  // #modalFileInput) silently no-ops, because the element doesn't exist
+  // yet when init runs — the file picker still opens fine (button clicks
+  // are handled via delegation), but selecting a photo does nothing. The
+  // fix is binding inside bindModalDynamicLists(), which reruns on every
+  // modal open. This test drives the real 'change' event end-to-end
+  // instead of calling handleLabPhotoSelected() directly, so it would have
+  // caught the original bug.
+  test('selecting a file via the real input dispatches to handleLabPhotoSelected', () => {
+    const { window, document } = loadFrontendEnv({ initScript: MODAL_FLOW_INIT_SCRIPT });
+    window.openPatientModal(window.blankPatient());
+
+    let receivedFile = null;
+    window.handleLabPhotoSelected = (file) => { receivedFile = file; };
+
+    const input = document.getElementById('labPhotoFileInput');
+    assert.ok(input, 'labPhotoFileInput must exist in the rendered modal');
+    const fakeFile = new window.File(['fake-bytes'], 'report.jpg', { type: 'image/jpeg' });
+    Object.defineProperty(input, 'files', { value: [fakeFile], configurable: true });
+    input.dispatchEvent(new window.Event('change'));
+
+    assert.equal(receivedFile, fakeFile);
+  });
+
+  test('re-opening the modal keeps the listener working (rebinds each open, not just the first)', () => {
+    const { window, document } = loadFrontendEnv({ initScript: MODAL_FLOW_INIT_SCRIPT });
+    window.openPatientModal(window.blankPatient());
+    window.closePatientModal({ force: true });
+    window.openPatientModal(window.blankPatient());
+
+    let calls = 0;
+    window.handleLabPhotoSelected = () => { calls++; };
+
+    const input = document.getElementById('labPhotoFileInput');
+    const fakeFile = new window.File(['fake-bytes'], 'report.jpg', { type: 'image/jpeg' });
+    Object.defineProperty(input, 'files', { value: [fakeFile], configurable: true });
+    input.dispatchEvent(new window.Event('change'));
+
+    assert.equal(calls, 1);
+  });
+});
+
 describe('handleLabPhotoSelected', () => {
   test('fills the labs grid from the AI response and reports the fill count', async () => {
     const { window, document } = loadFrontendEnv({ initScript: MODAL_FLOW_INIT_SCRIPT });
