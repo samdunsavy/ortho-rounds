@@ -5356,6 +5356,27 @@ function getImgViewerGallery(){
 function applyImgViewerTransform(){
   const imgEl = document.getElementById('imgViewerImg');
   if(!imgEl) return;
+  if(ivScale > 1.001){
+    // Clamp pan to the image's actual overflow at the CURRENT scale. This is
+    // what stops the X-ray from ending up off-screen when zooming back out
+    // after panning while zoomed in: translate() is a fixed pixel offset
+    // applied after scale(), so without this it stays put in screen pixels
+    // as the image shrinks around it, pushing a growing fraction of the
+    // (now smaller) image out of view. Re-deriving the max pan from the
+    // live scale on every update means the allowed range shrinks right
+    // along with the image, so it can never drift further than half its
+    // own overflow — and at scale 1 that overflow is 0, so a pan left over
+    // from a higher zoom level gets pulled back to center automatically.
+    const viewer = document.getElementById('imgViewer');
+    const viewerRect = viewer ? viewer.getBoundingClientRect() : null;
+    const naturalW = imgEl.offsetWidth, naturalH = imgEl.offsetHeight;
+    if(viewerRect && naturalW && naturalH){
+      const maxPanX = Math.max(0, (naturalW * ivScale - viewerRect.width) / 2);
+      const maxPanY = Math.max(0, (naturalH * ivScale - viewerRect.height) / 2);
+      ivPanX = Math.max(-maxPanX, Math.min(maxPanX, ivPanX));
+      ivPanY = Math.max(-maxPanY, Math.min(maxPanY, ivPanY));
+    }
+  }
   imgEl.style.transform = (ivScale > 1.001) ? `translate(${ivPanX}px, ${ivPanY}px) scale(${ivScale})` : '';
   imgEl.classList.toggle('iv-zoomed', ivScale > 1.001);
 }
