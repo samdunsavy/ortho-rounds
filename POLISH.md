@@ -48,13 +48,33 @@ binary, plus two real test files:
   components, not `toISOString()` — so no equivalent production bug exists,
   but it was worth verifying rather than assuming.
 
+- `tests/frontend-sync-merge.test.js` (31 tests) — the client-side
+  sync/merge glue: `mergePatientRecords`, `mergeChecklistById`,
+  `mergePlanHistory`, `mergeLabsHistory`, `mergeWardMetaFields`,
+  `mergePresentedToday`, `parseWardMetaFromRecord`, and
+  `detectPatientConflicts`. This is the offline-first reconciliation logic
+  that decides what happens when the same patient was edited on two
+  devices, or a phone reconnects after hours offline: which side's
+  checklist wins outright vs. merges item-by-item, which fields are
+  resolved by their own independent timestamp (`dailyPlan`/`planUpdatedAt`,
+  `status`/`statusUpdatedAt`) rather than the record's overall `updatedAt`,
+  and when a conflict gets surfaced to a human instead of silently merged.
+  A bug here doesn't look like a bug — it looks like a checklist tick or a
+  plan update that quietly vanished, discovered days later. Confirmed and
+  pinned down several rules that weren't obvious from a first read: a tied
+  `updatedAt` always favors local; per-patient `labs` (the current snapshot)
+  merges shallowly with local winning key conflicts regardless of
+  timestamp, but `labsHistory`/`planHistory` favor local only via merge
+  order (no per-entry timestamp exists to compare); a stale (not-`today`)
+  `presentedToday` value from either side is dropped rather than merged in.
+
 Both files run in CI as-is (jsdom is pure JS, no native binary, so `npm ci`
 picks it up fine on GitHub Actions' runner, unlike Playwright/Chromium which
 needs system libraries this sandbox couldn't install). Full suite is now
-123 tests (107 → 123), all passing. **Still open:** the other ~7,800 lines
-of `app.js` remain untested — this is still a start, not full coverage.
-Next candidates: the sync/merge glue on the client side, worklist item
-collection, and the admission/scribe parsing bridges.
+154 tests (107 → 123 → 154), all passing. **Still open:** the other
+~7,500 lines of `app.js` remain untested — this is still a start, not full
+coverage. Next candidates: worklist item collection (`collectWorklistData`,
+`collectStartHereItems`), and the admission/scribe parsing bridges.
 
 Full pixel/visual testing isn't viable in every environment (headless
 Chromium needs system libraries this sandbox doesn't have and can't install
