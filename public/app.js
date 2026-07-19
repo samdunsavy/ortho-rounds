@@ -7512,13 +7512,31 @@ function bindPresentationSwipe(){
   const overlay = document.getElementById('presentationOverlay');
   if(!overlay) return;
   let startX = 0, startY = 0;
+  // Same class of bug the X-ray viewer had: reading only changedTouches[0]
+  // with no idea whether one or two fingers were on screen. Presentation
+  // mode shows X-ray thumbnails inline (renderPresentationXrays) — a user
+  // pinching one of those to try to zoom, before realizing they need to
+  // tap it open first, would have each finger move tens of pixels apart,
+  // clearing the swipe threshold and flipping to the next/previous patient
+  // mid-pinch. Track whether any touchmove ever saw a second finger, and if
+  // so, never treat that gesture as a swipe, no matter how it ends.
+  let wasMultiTouch = false;
   overlay.addEventListener('touchstart', (e)=>{
     if(!overlay.classList.contains('active')) return;
+    wasMultiTouch = e.touches.length > 1;
     startX = e.changedTouches[0].screenX;
     startY = e.changedTouches[0].screenY;
   }, { passive: true });
+  overlay.addEventListener('touchmove', (e)=>{
+    if(!overlay.classList.contains('active')) return;
+    if(e.touches.length > 1) wasMultiTouch = true;
+  }, { passive: true });
   overlay.addEventListener('touchend', (e)=>{
     if(!overlay.classList.contains('active')) return;
+    if(e.touches.length > 0) return; // one finger of a multi-touch gesture lifted — still in progress
+    const multi = wasMultiTouch;
+    wasMultiTouch = false;
+    if(multi) return; // never treat a pinch/multi-touch gesture as a swipe
     const dx = e.changedTouches[0].screenX - startX;
     const dy = e.changedTouches[0].screenY - startY;
     // Ignore mostly-vertical gestures so scrolling never flips the slide.

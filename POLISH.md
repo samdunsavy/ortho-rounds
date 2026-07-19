@@ -73,15 +73,36 @@ they're both used on the same wide-viewport devices, but their structure
 (single-column item lists / table-like OT list) needs its own look rather
 than reusing the ward-grid approach.
 
-## Priority 3 — Deliberate device-testing pass on touch/gesture surfaces
+## Priority 3 — Deliberate device-testing pass on touch/gesture surfaces — 🟡 STARTED (code audit done)
 
 The X-ray pinch-zoom bug existed because nobody tested pinch gestures on a
-real touchscreen until a user hit it live. That's a pattern, not a one-off —
-other touch-heavy surfaces (presentation-mode swipe between patients, bulk
-plan select, the scribe voice modal) were built the same way and haven't
-had the same scrutiny yet. Recommend one deliberate pass: open each on an
-actual phone/tablet, try to break it the way a tired PG on night rounds
-would, before the next feature builds on top of any of them.
+real touchscreen until a user hit it live. That's a pattern, not a one-off,
+so the first thing worth doing — without needing a physical device — is a
+code-level audit for the exact same bug shape everywhere it could recur.
+
+**Done:** audited every custom touch-gesture handler in `app.js` (there are
+three; searched for every `addEventListener('touchstart', ...)`):
+
+- `bindImgViewerGestures` (X-ray viewer) — already fixed.
+- `bindPresentationSwipe` (swipe between patients in presentation mode) —
+  **had the identical bug.** It only ever read `changedTouches[0]` with no
+  idea whether one or two fingers were down. Presentation mode shows X-ray
+  thumbnails inline (`renderPresentationXrays`); a user pinching one of
+  those before realizing they need to tap it open first would have each
+  finger clear the swipe threshold and flip to the next/previous patient
+  mid-pinch — same failure, different screen. Fixed the same way: track
+  whether any touchmove ever saw a second finger, and never treat that
+  gesture as a swipe if so.
+- The FAB long-press handler (tap-and-hold to clone the last patient) —
+  reviewed, single-touch only by design, no multi-touch or competing
+  gesture system involved, no issue found.
+
+**Still open:** turned up nothing during the audit doesn't mean nothing's
+there — actual finger-on-glass testing (bulk plan select, the scribe voice
+modal's mic button under real conditions, general scroll/tap feel) still
+needs a real phone/tablet, ideally by someone trying to break it the way a
+tired PG on night rounds would. The code-level half of this priority is
+done; the device-in-hand half isn't.
 
 ## Priority 4 — Presentation-mode readability variant
 
