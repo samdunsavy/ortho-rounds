@@ -17,6 +17,7 @@ let editingPatientId = null; // null = adding new
 let modalWorkingData = null; // in-memory draft while add/edit modal is open
 let modalSuppressAutoTemplate = false; // user removed milestones — don't refill on save
 let modalSmartPasteUsed = false; // AI admission fill — don't auto-apply milestone templates
+let modalLabReportDate = null; // set by lab-photo extraction when the report's own date differs from today
 let pendingImageSlot = null;  // {type: 'preop'|'postop'|'followup'}
 let modalPendingImages = [];  // { id, dataURL, type } — staged X-rays before modal save
 let viewingImageContext = null; // { patientId, imgId }
@@ -88,7 +89,14 @@ const LAB_SPEC = {
   hb:         { unit: 'g/dL',        low: 12,    siLow: 100,   siIfAbove: 25 },
   crp:        { unit: 'mg/L',        high: 10 },
   wcc:        { unit: 'cells/cu.mm', high: 11000, siHigh: 11, siIfBelow: 100 },
-  creatinine: { unit: 'mg/dL',       high: 1.3,  siHigh: 120,  siIfAbove: 20 }
+  creatinine: { unit: 'mg/dL',       high: 1.3,  siHigh: 120,  siIfAbove: 20 },
+  platelets:  { unit: 'cells/cu.mm', low: 150000 },
+  esr:        { unit: 'mm/hr',       high: 20 },
+  urea:       { unit: 'mg/dL',       high: 40 },
+  sodium:     { unit: 'mEq/L',       low: 135,   high: 145 },
+  potassium:  { unit: 'mEq/L',       low: 3.5,   high: 5.5 },
+  ptinr:      { unit: '',            high: 1.5 },
+  rbs:        { unit: 'mg/dL',       low: 70,    high: 200 }
 };
 const PLAN_HISTORY_MAX = 14;
 const FULL_RECONCILE_INTERVAL_MS = 5 * 60 * 1000; // periodic full reconcile
@@ -945,6 +953,14 @@ function bindAiEvents(){
       return;
     }
 
+    const labPhotoBtn = e.target.closest('#labPhotoBtn');
+    if(labPhotoBtn){
+      e.stopPropagation();
+      e.preventDefault();
+      document.getElementById('labPhotoFileInput')?.click();
+      return;
+    }
+
     const scribeBtn = e.target.closest('[data-scribe]');
     if(scribeBtn){
       e.stopPropagation();
@@ -1268,7 +1284,14 @@ function applySmartPasteLabs(labs){
     ['hb', 'f_lab_hb'],
     ['crp', 'f_lab_crp'],
     ['wcc', 'f_lab_wcc'],
-    ['creatinine', 'f_lab_creatinine']
+    ['creatinine', 'f_lab_creatinine'],
+    ['platelets', 'f_lab_platelets'],
+    ['esr', 'f_lab_esr'],
+    ['urea', 'f_lab_urea'],
+    ['sodium', 'f_lab_sodium'],
+    ['potassium', 'f_lab_potassium'],
+    ['ptinr', 'f_lab_ptinr'],
+    ['rbs', 'f_lab_rbs']
   ];
   for(const [key, id] of pairs){
     if(!labs[key]) continue;
@@ -1556,6 +1579,42 @@ async function handleModalImageSelected(e){
   }catch(err){
     console.warn('Modal image attach failed:', err);
     showToast('Could not read image — try another file');
+  }
+}
+
+async function handleLabPhotoSelected(file){
+  if(!file) return 0;
+  if(!canUseAi()){
+    await refreshAiStatus();
+  }
+  if(!canUseAi()){
+    showToast('AI not available — check server key or connection');
+    return 0;
+  }
+  const btn = document.getElementById('labPhotoBtn');
+  setAiButtonBusy(btn, true);
+  try{
+    const raw = await fileToDataURL(file);
+    const compressed = await compressImage(raw);
+    const { labs, reportDate } = await callAi('parse-labs-image', { image: compressed });
+    const filled = applySmartPasteLabs(labs);
+    if(reportDate && reportDate !== todayISO()){
+      const useReportDate = await showConfirm(
+        'Use report date?',
+        `This report is dated ${reportDate} — use that date for this lab entry instead of today?`,
+        { confirmLabel: 'Use report date' }
+      );
+      setModalLabReportDate(useReportDate ? reportDate : null);
+    }else{
+      setModalLabReportDate(null);
+    }
+    showToast(filled ? `Filled ${filled} field${filled > 1 ? 's' : ''} — review before saving` : 'Nothing recognisable in that photo');
+    return filled;
+  }catch(err){
+    showToast(err.message || 'Could not read that lab report photo');
+    return 0;
+  }finally{
+    setAiButtonBusy(btn, false);
   }
 }
 
@@ -2651,6 +2710,17 @@ function labValueClass(key, val){
   if(key === 'crp'){
     return n > spec.high ? 'lab-high' : '';
   }
+  if(key === 'platelets'){
+    return n < spec.low ? 'lab-low' : '';
+  }
+  if(key === 'esr' || key === 'urea' || key === 'ptinr'){
+    return n > spec.high ? 'lab-high' : '';
+  }
+  if(key === 'sodium' || key === 'potassium' || key === 'rbs'){
+    if(spec.low != null && n < spec.low) return 'lab-low';
+    if(spec.high != null && n > spec.high) return 'lab-high';
+    return '';
+  }
   return '';
 }
 
@@ -2695,7 +2765,11 @@ function upsertLabsHistoryEntry(p, patch, date){
 
 /* ---------------- labs trend sparklines ---------------- */
 
-const LAB_TREND_LABELS = { hb: 'Hb', crp: 'CRP', wcc: 'TLC', creatinine: 'Creatinine' };
+const LAB_TREND_LABELS = {
+  hb: 'Hb', crp: 'CRP', wcc: 'TLC', creatinine: 'Creatinine',
+  platelets: 'Platelets', esr: 'ESR', urea: 'Urea',
+  sodium: 'Na', potassium: 'K', ptinr: 'PT/INR', rbs: 'RBS'
+};
 const LAB_TREND_W = 130;
 const LAB_TREND_H = 34;
 const LAB_TREND_PAD = 4;
@@ -3858,6 +3932,11 @@ function bindEvents(){
   bindImgViewerGestures();
   document.getElementById('hiddenFileInput').addEventListener('change', handleImageFileSelected);
   document.getElementById('modalFileInput')?.addEventListener('change', handleModalImageSelected);
+  document.getElementById('labPhotoFileInput')?.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    void handleLabPhotoSelected(file);
+  });
   document.getElementById('imgTypeCloseBtn').addEventListener('click', closeImageTypeModal);
   document.getElementById('imgTypePreop').addEventListener('click', ()=> confirmImageType('preop'));
   document.getElementById('imgTypePostop').addEventListener('click', ()=> confirmImageType('postop'));
@@ -6041,6 +6120,7 @@ function openPatientModal(p){
   modalPendingImages = [];
   modalSuppressAutoTemplate = false;
   modalSmartPasteUsed = false;
+  modalLabReportDate = null;
   normalizeAntibioticCourses(modalWorkingData);
   if(!isExisting){
     const ini = getPgInitials();
@@ -6110,6 +6190,7 @@ async function closePatientModal(opts = {}){
   modalPendingImages = [];
   modalSuppressAutoTemplate = false;
   modalSmartPasteUsed = false;
+  modalLabReportDate = null;
 }
 
 /** Read checklist rows from the modal DOM into working data (source of truth on save). */
@@ -6253,11 +6334,23 @@ function renderModalForm(d){
 
     <div class="form-row">
       <label>Key labs (optional) <span class="small-muted">— Indian report units</span></label>
+      <div class="labs-photo-row">
+        <button type="button" class="btn ai-btn" id="labPhotoBtn">📷 Read lab report photo</button>
+        <input type="file" id="labPhotoFileInput" accept="image/*" capture="environment" hidden>
+        <div class="form-hint">AI fills the fields below for your review — nothing is saved until you press Save.</div>
+      </div>
       <div class="labs-grid">
         <div><span>Hb (g/dL)</span><input id="f_lab_hb" inputmode="decimal" placeholder="e.g. 12.5" value="${escapeHTML((d.labs||{}).hb||'')}" class="${labValueClass('hb', (d.labs||{}).hb)}"></div>
         <div><span>CRP (mg/L)</span><input id="f_lab_crp" inputmode="decimal" placeholder="e.g. 5" value="${escapeHTML((d.labs||{}).crp||'')}" class="${labValueClass('crp', (d.labs||{}).crp)}"></div>
         <div><span>TLC (cells/cu.mm)</span><input id="f_lab_wcc" inputmode="decimal" placeholder="e.g. 8500" value="${escapeHTML((d.labs||{}).wcc||'')}" class="${labValueClass('wcc', (d.labs||{}).wcc)}"></div>
         <div><span>Creatinine (mg/dL)</span><input id="f_lab_creatinine" inputmode="decimal" placeholder="e.g. 0.9" value="${escapeHTML((d.labs||{}).creatinine||'')}" class="${labValueClass('creatinine', (d.labs||{}).creatinine)}"></div>
+        <div><span>Platelets (cells/cu.mm)</span><input id="f_lab_platelets" inputmode="decimal" placeholder="e.g. 250000" value="${escapeHTML((d.labs||{}).platelets||'')}" class="${labValueClass('platelets', (d.labs||{}).platelets)}"></div>
+        <div><span>ESR (mm/hr)</span><input id="f_lab_esr" inputmode="decimal" placeholder="e.g. 15" value="${escapeHTML((d.labs||{}).esr||'')}" class="${labValueClass('esr', (d.labs||{}).esr)}"></div>
+        <div><span>Urea (mg/dL)</span><input id="f_lab_urea" inputmode="decimal" placeholder="e.g. 28" value="${escapeHTML((d.labs||{}).urea||'')}" class="${labValueClass('urea', (d.labs||{}).urea)}"></div>
+        <div><span>Sodium (mEq/L)</span><input id="f_lab_sodium" inputmode="decimal" placeholder="e.g. 138" value="${escapeHTML((d.labs||{}).sodium||'')}" class="${labValueClass('sodium', (d.labs||{}).sodium)}"></div>
+        <div><span>Potassium (mEq/L)</span><input id="f_lab_potassium" inputmode="decimal" placeholder="e.g. 4.2" value="${escapeHTML((d.labs||{}).potassium||'')}" class="${labValueClass('potassium', (d.labs||{}).potassium)}"></div>
+        <div><span>PT/INR</span><input id="f_lab_ptinr" inputmode="decimal" placeholder="e.g. 1.1" value="${escapeHTML((d.labs||{}).ptinr||'')}" class="${labValueClass('ptinr', (d.labs||{}).ptinr)}"></div>
+        <div><span>RBS (mg/dL)</span><input id="f_lab_rbs" inputmode="decimal" placeholder="e.g. 110" value="${escapeHTML((d.labs||{}).rbs||'')}" class="${labValueClass('rbs', (d.labs||{}).rbs)}"></div>
       </div>
       ${renderLabsTrendPanel(d)}
     </div>
@@ -6387,6 +6480,13 @@ function getWorkingData(){
 }
 function setWorkingData(d){
   modalWorkingData = d;
+}
+
+function getModalLabReportDate(){
+  return modalLabReportDate;
+}
+function setModalLabReportDate(dateOrNull){
+  modalLabReportDate = dateOrNull;
 }
 
 // Shows whether the current plan counts as "today's" and lets the user carry
@@ -7072,10 +7172,23 @@ async function savePatientFromModal(){
       crp: document.getElementById('f_lab_crp')?.value.trim() || '',
       wcc: document.getElementById('f_lab_wcc')?.value.trim() || '',
       creatinine: document.getElementById('f_lab_creatinine')?.value.trim() || '',
-      updatedAt: todayISO()
+      platelets: document.getElementById('f_lab_platelets')?.value.trim() || '',
+      esr: document.getElementById('f_lab_esr')?.value.trim() || '',
+      urea: document.getElementById('f_lab_urea')?.value.trim() || '',
+      sodium: document.getElementById('f_lab_sodium')?.value.trim() || '',
+      potassium: document.getElementById('f_lab_potassium')?.value.trim() || '',
+      ptinr: document.getElementById('f_lab_ptinr')?.value.trim() || '',
+      rbs: document.getElementById('f_lab_rbs')?.value.trim() || '',
+      updatedAt: getModalLabReportDate() || todayISO()
     };
-    if(d.labs.hb || d.labs.crp || d.labs.wcc || d.labs.creatinine){
-      upsertLabsHistoryEntry(d, { hb: d.labs.hb, crp: d.labs.crp, wcc: d.labs.wcc, creatinine: d.labs.creatinine }, d.labs.updatedAt);
+    const hasAnyLabValue = ['hb', 'crp', 'wcc', 'creatinine', 'platelets', 'esr', 'urea', 'sodium', 'potassium', 'ptinr', 'rbs']
+      .some(key => d.labs[key]);
+    if(hasAnyLabValue){
+      upsertLabsHistoryEntry(d, {
+        hb: d.labs.hb, crp: d.labs.crp, wcc: d.labs.wcc, creatinine: d.labs.creatinine,
+        platelets: d.labs.platelets, esr: d.labs.esr, urea: d.labs.urea,
+        sodium: d.labs.sodium, potassium: d.labs.potassium, ptinr: d.labs.ptinr, rbs: d.labs.rbs
+      }, d.labs.updatedAt);
     }
     d.procedure = document.getElementById('f_procedure').value.trim();
     d.surgeon = document.getElementById('f_surgeon').value.trim();

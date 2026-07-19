@@ -189,6 +189,11 @@ unconfigured.
 ### Privacy
 
 - Patient snapshots sent to OpenAI **exclude images and UHID**
+- **Exception:** the lab report photo-extraction feature sends the photo
+  itself to OpenAI to transcribe — this is the one AI flow where an image
+  leaves the server, since there's no way to redact a name printed inside
+  a photo the way sanitized text fields can be. Every other AI feature
+  never sends images.
 - AI output is a **draft only** — PGs must review before saving
 - Recommend hospital IT review before using with real patient data on a cloud API
 

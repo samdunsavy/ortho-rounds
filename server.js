@@ -47,7 +47,8 @@ import {
   wardBrief,
   wardRiskFlags,
   parseAdmission,
-  scribeRoundNote
+  scribeRoundNote,
+  parseLabsFromImage
 } from './ai.js';
 import {
   hashPassword,
@@ -590,6 +591,13 @@ async function handleApi(req, res, pathname){
         }
         const result = await scribeRoundNote(body.patient, body.transcript);
         return sendJSON(res, 200, { result });
+      }
+      if(pathname === '/api/ai/parse-labs-image'){
+        if(typeof body.image !== 'string' || !body.image.startsWith('data:image/')){
+          return sendJSON(res, 400, { error: 'lab report image required' });
+        }
+        const { labs, reportDate } = await parseLabsFromImage(body.image);
+        return sendJSON(res, 200, { labs, reportDate });
       }
       return sendJSON(res, 404, { error: 'Unknown AI endpoint' });
     }catch(err){

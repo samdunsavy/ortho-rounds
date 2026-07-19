@@ -412,3 +412,23 @@ Do not put content in notes that already fits another field.`;
 
   return normalizePatientClinicalFields(out);
 }
+
+export async function parseLabsFromImage(imageDataUrl){
+  const systemPrompt = `You transcribe values from a photo of a printed or handwritten hospital lab report (Indian ward setting) into structured data. This is a transcription task — read what is printed, do not interpret, diagnose, or comment on the values.
+Return ONLY a JSON object with these keys:
+"labs": object with optional string keys — hb, platelets, wcc, esr, crp, urea, creatinine, sodium, potassium, ptinr, rbs. Use the exact numeric value as printed (no units in the value). Omit any key not legible or not present on the report — never guess or invent a value.
+"reportDate": the report's own collection/reporting date if printed on it, as ISO YYYY-MM-DD, else null. Do not substitute today's date.
+Do not include the patient's name, hospital name, or any other identifying text anywhere in your response — only the "labs" and "reportDate" keys.`;
+
+  const userContent = [
+    { type: 'text', text: 'Transcribe the lab values from this report photo. Return the JSON.' },
+    { type: 'image_url', image_url: { url: imageDataUrl } }
+  ];
+  const raw = await callOpenAiJson(systemPrompt, userContent, { maxTokens: 500, temperature: 0.1 });
+  const labs = sanitizeLabs(raw?.labs);
+  let reportDate = null;
+  if(typeof raw?.reportDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw.reportDate.trim())){
+    reportDate = raw.reportDate.trim();
+  }
+  return { labs, reportDate };
+}
