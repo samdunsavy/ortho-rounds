@@ -20,6 +20,11 @@ let modalSmartPasteUsed = false; // AI admission fill — don't auto-apply miles
 let pendingImageSlot = null;  // {type: 'preop'|'postop'|'followup'}
 let modalPendingImages = [];  // { id, dataURL, type } — staged X-rays before modal save
 let viewingImageContext = null; // { patientId, imgId }
+// X-ray viewer zoom/pan state (pinch-zoom, wheel-zoom, double-tap). Reset
+// whenever a different image is shown (see resetImgViewerZoom) so zoom never
+// carries over between X-rays.
+let ivScale = 1, ivPanX = 0, ivPanY = 0;
+const IV_MIN_SCALE = 1, IV_MAX_SCALE = 4;
 
 /* ---------------- storage / sync keys ---------------- */
 
@@ -665,7 +670,7 @@ function startVoicePlanDictation(patientId, target, btn){
 function voicePlanButtonHtml(patientId, target){
   if(!isVoicePlanSupported() || isConsultantMode()) return '';
   const targetAttr = target ? ` data-voice-target="${escapeHTML(target)}"` : '';
-  return `<button type="button" class="btn btn-sm voice-plan-btn" data-voice-plan data-patient-id="${escapeHTML(patientId)}"${targetAttr} title="Dictate plan" aria-label="Dictate plan">🎤</button>`;
+  return `<button type="button" class="btn btn-sm voice-plan-btn" data-voice-plan data-patient-id="${escapeHTML(patientId)}"${targetAttr} title="Dictate plan" aria-label="Dictate plan">${uiIcon('mic')}</button>`;
 }
 
 function planActionButtonsHtml(patientId, target){
@@ -675,7 +680,7 @@ function planActionButtonsHtml(patientId, target){
 
 function scribeButtonHtml(patientId){
   if(!canUseAi()) return '';
-  return `<button type="button" class="btn btn-sm ai-btn" data-scribe data-patient-id="${escapeHTML(patientId)}" title="Dictate the bedside note — AI fills plan, milestones and handover">🎤 Scribe</button>`;
+  return `<button type="button" class="btn btn-sm ai-btn" data-scribe data-patient-id="${escapeHTML(patientId)}" title="Dictate the bedside note — AI fills plan, milestones and handover">${uiIcon('mic')} Scribe</button>`;
 }
 
 function updateAiButtonsVisibility(){
@@ -991,7 +996,7 @@ function openScribeModal(patientId){
   document.getElementById('scribeApplyBtn').disabled = true;
   const micBtn = document.getElementById('scribeMicBtn');
   micBtn.style.display = isVoicePlanSupported() ? '' : 'none';
-  micBtn.textContent = '🎤 Start dictation';
+  micBtn.innerHTML = `${uiIcon('mic')} Start dictation`;
   micBtn.classList.remove('listening');
   document.getElementById('scribeModal').classList.add('active');
 }
@@ -1004,7 +1009,7 @@ function stopScribeDictation(){
   const micBtn = document.getElementById('scribeMicBtn');
   if(micBtn){
     micBtn.classList.remove('listening');
-    micBtn.textContent = '🎤 Start dictation';
+    micBtn.innerHTML = `${uiIcon('mic')} Start dictation`;
   }
 }
 
@@ -1049,7 +1054,7 @@ function toggleScribeDictation(){
   scribeRecognition = rec;
   const micBtn = document.getElementById('scribeMicBtn');
   micBtn.classList.add('listening');
-  micBtn.textContent = '⏹ Stop dictation';
+  micBtn.innerHTML = `${uiIcon('stop')} Stop dictation`;
   rec.start();
 }
 
@@ -1801,6 +1806,33 @@ function emptyStateSvg(kind){
     clipboard:'<svg viewBox="0 0 24 24"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg>'
   };
   return icons[kind] || icons.bed;
+}
+
+/* ---------------- shared inline icon set ----------------
+   One small monochrome SVG set (stroke=currentColor, matches the nav/
+   theme-toggle icons already in index.html) used everywhere a raw emoji
+   used to stand in for an icon — worklist section headers, the scribe mic
+   button, and handover pin markers. Emoji render differently per OS/font;
+   these render identically everywhere. Wrap the returned markup in an
+   element with class "icon-svg" (CSS in index.html sizes it). */
+function uiIcon(name){
+  const icons = {
+    handover:'<path d="M9 14 4 9l5-5"/><path d="M4 9h10a5 5 0 0 1 5 5v3"/>',
+    pill:'<g transform="rotate(-45 12 12)"><rect x="2" y="8" width="20" height="8" rx="4"/><line x1="12" y1="8" x2="12" y2="16"/></g>',
+    flask:'<path d="M9 2v6L4 20a1 1 0 0 0 1 2h14a1 1 0 0 0 1-2L15 8V2"/><line x1="9" y1="2" x2="15" y2="2"/><line x1="7" y1="16" x2="17" y2="16"/>',
+    alert:'<path d="M12 2 1 21h22L12 2z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
+    stopwatch:'<circle cx="12" cy="13" r="8"/><path d="M12 9v4l3 2"/><path d="M9 2h6"/>',
+    clock:'<circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/>',
+    circleOutline:'<circle cx="12" cy="12" r="9"/>',
+    square:'<rect x="4" y="4" width="16" height="16" rx="2"/>',
+    clipboard:'<path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/>',
+    pencil:'<path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/>',
+    checkmark:'<polyline points="20 6 9 17 4 12"/>',
+    mic:'<path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/>',
+    stop:'<rect x="6" y="6" width="12" height="12" rx="2"/>',
+    pin:'<path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>'
+  };
+  return `<svg class="icon-svg" viewBox="0 0 24 24">${icons[name] || icons.checkmark}</svg>`;
 }
 
 function workItemIcon(kind, urgency){
@@ -4392,7 +4424,7 @@ function patchCardHeadGlance(p, collapsed){
   const flags = getPatientFlags(p);
   const html = [
     renderCardQuickBar(p),
-    (p.handoverPin||'').trim() ? `<div class="handover-pin">📌 ${escapeHTML(p.handoverPin.trim())}</div>` : '',
+    (p.handoverPin||'').trim() ? `<div class="handover-pin">${uiIcon('pin')} ${escapeHTML(p.handoverPin.trim())}</div>` : '',
     (p.handoverNote||'').trim() ? `<div class="handover-strip">↪ ${escapeHTML(p.handoverNote.trim())}</div>` : '',
     renderFlagsGlance(flags)
   ].filter(Boolean).join('');
@@ -4548,7 +4580,7 @@ function renderCard(p){
         <div class="chevron">›</div>
       </div>
       ${!isOpen ? renderCardQuickBar(p) : ''}
-      ${!isOpen && (p.handoverPin||'').trim() ? `<div class="handover-pin">📌 ${escapeHTML(p.handoverPin.trim())}</div>` : ''}
+      ${!isOpen && (p.handoverPin||'').trim() ? `<div class="handover-pin">${uiIcon('pin')} ${escapeHTML(p.handoverPin.trim())}</div>` : ''}
       ${!isOpen && (p.handoverNote||'').trim() ? `<div class="handover-strip">↪ ${escapeHTML(p.handoverNote.trim())}</div>` : ''}
       ${!isOpen ? renderFlagsGlance(flags) : ''}
     </div>
@@ -5114,7 +5146,29 @@ function getImgViewerGallery(){
   return { imgs, idx: imgs.findIndex(i => i.id === viewingImageContext.imgId) };
 }
 
+// Applies the current pinch/pan/wheel zoom state to the image as a CSS
+// transform. translate() is applied in screen pixels *after* scale() in the
+// transform list, which is what makes a drag while zoomed feel like a 1:1
+// finger-follow regardless of zoom level.
+function applyImgViewerTransform(){
+  const imgEl = document.getElementById('imgViewerImg');
+  if(!imgEl) return;
+  imgEl.style.transform = (ivScale > 1.001) ? `translate(${ivPanX}px, ${ivPanY}px) scale(${ivScale})` : '';
+  imgEl.classList.toggle('iv-zoomed', ivScale > 1.001);
+}
+
+// Clears zoom/pan back to the resting 1x state. Called whenever a different
+// X-ray is about to be shown (open, step, dot-jump) so zoom never carries
+// over from one image to the next, and called from the gesture handlers
+// when a pinch/drag settles back near 1x.
+function resetImgViewerZoom(){
+  ivScale = 1; ivPanX = 0; ivPanY = 0;
+  const imgEl = document.getElementById('imgViewerImg');
+  if(imgEl){ imgEl.style.transform = ''; imgEl.classList.remove('iv-zoomed'); }
+}
+
 function renderImgViewer(){
+  resetImgViewerZoom();
   const { imgs, idx } = getImgViewerGallery();
   if(idx < 0){ closeImgViewer(); return; }
   const img = imgs[idx];
@@ -5140,6 +5194,11 @@ function stepImgViewer(delta){
   if(next < 0 || next >= imgs.length) return;
   viewingImageContext.imgId = imgs[next].id;
   const imgEl = document.getElementById('imgViewerImg');
+  // Clear any zoom synchronously (not via the deferred renderImgViewer() call
+  // below) so the slide-out animation's CSS transform isn't fighting a
+  // leftover inline zoom transform, which take precedence over stylesheet
+  // rules and would otherwise make the slide jump instead of animate.
+  resetImgViewerZoom();
   if(window.matchMedia('(prefers-reduced-motion: no-preference)').matches){
     imgEl.classList.add(delta > 0 ? 'iv-out-left' : 'iv-out-right');
     setTimeout(()=>{
@@ -5165,28 +5224,163 @@ function openImgViewer(patientId, img){
 function closeImgViewer(){
   document.getElementById('imgViewer').classList.remove('active');
   viewingImageContext = null;
+  resetImgViewerZoom();
 }
 
+// Toggles zoom in/out, centered roughly on the given viewport point (a tap
+// or click location). Used by double-tap and double-click.
+function toggleImgViewerZoom(clientX, clientY){
+  const imgEl = document.getElementById('imgViewerImg');
+  if(!imgEl) return;
+  if(ivScale > 1.001){
+    resetImgViewerZoom();
+    return;
+  }
+  ivScale = 2.5;
+  const rect = imgEl.getBoundingClientRect();
+  const offsetX = clientX - (rect.left + rect.width / 2);
+  const offsetY = clientY - (rect.top + rect.height / 2);
+  // Shift so the tapped point ends up centered once scaled up.
+  ivPanX = -offsetX * (ivScale - 1) / ivScale;
+  ivPanY = -offsetY * (ivScale - 1) / ivScale;
+  applyImgViewerTransform();
+}
+
+/* Pinch-to-zoom, drag-to-pan-while-zoomed, wheel/trackpad zoom, and
+   double-tap/double-click to toggle zoom for the fullscreen X-ray viewer.
+
+   The bug this fixes: the previous version only ever read
+   e.changedTouches[0] and had no idea whether one or two fingers were
+   involved. During a pinch-to-zoom gesture, each individual finger moves
+   several tens of pixels apart — enough to clear the old 50px "swipe"
+   threshold — so lifting a finger after pinching was frequently misread as
+   a horizontal swipe and jumped to the next X-ray. There was also no actual
+   zoom implementation at all; whatever zooming did happen was the browser's
+   native page-zoom fighting with this same swipe listener, which is the
+   "glitching". Fixing it means: real pinch/pan handled entirely in JS
+   (touch-action:none hands off the native gesture so there's nothing left
+   to fight), and swipe-to-next only ever fires for a single-finger gesture
+   that involved no pinch and no pan, while at rest (not zoomed in). */
 function bindImgViewerGestures(){
   const viewer = document.getElementById('imgViewer');
-  if(!viewer) return;
+  const imgEl = document.getElementById('imgViewerImg');
+  if(!viewer || !imgEl) return;
+
   let startX = 0, startY = 0;
+  let pinching = false, pinchStartDist = 0, pinchStartScale = 1;
+  let panning = false, panStartX = 0, panStartY = 0, panOriginX = 0, panOriginY = 0;
+  let gestureMoved = false; // true once real pinch/pan movement happened this gesture
+  let lastTapTime = 0;
+
+  const touchDist = (t0, t1) => Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
+
   viewer.addEventListener('touchstart', (e)=>{
-    startX = e.changedTouches[0].screenX;
-    startY = e.changedTouches[0].screenY;
+    if(!viewer.classList.contains('active')) return;
+    gestureMoved = false;
+    if(e.touches.length === 2){
+      pinching = true;
+      panning = false;
+      pinchStartDist = touchDist(e.touches[0], e.touches[1]) || 1;
+      pinchStartScale = ivScale;
+      imgEl.classList.add('iv-gesturing');
+    }else if(e.touches.length === 1){
+      pinching = false;
+      startX = e.touches[0].screenX;
+      startY = e.touches[0].screenY;
+      if(ivScale > 1.001){
+        panning = true;
+        panStartX = e.touches[0].clientX;
+        panStartY = e.touches[0].clientY;
+        panOriginX = ivPanX;
+        panOriginY = ivPanY;
+        imgEl.classList.add('iv-gesturing');
+      }else{
+        panning = false;
+      }
+    }
   }, { passive: true });
+
+  viewer.addEventListener('touchmove', (e)=>{
+    if(!viewer.classList.contains('active')) return;
+    if(pinching && e.touches.length === 2){
+      gestureMoved = true;
+      const d = touchDist(e.touches[0], e.touches[1]) || 1;
+      ivScale = Math.max(IV_MIN_SCALE, Math.min(IV_MAX_SCALE, pinchStartScale * (d / pinchStartDist)));
+      applyImgViewerTransform();
+      e.preventDefault();
+    }else if(panning && e.touches.length === 1){
+      const dx = e.touches[0].clientX - panStartX;
+      const dy = e.touches[0].clientY - panStartY;
+      if(Math.abs(dx) > 4 || Math.abs(dy) > 4) gestureMoved = true;
+      ivPanX = panOriginX + dx;
+      ivPanY = panOriginY + dy;
+      applyImgViewerTransform();
+      e.preventDefault();
+    }
+  }, { passive: false });
+
   viewer.addEventListener('touchend', (e)=>{
     if(!viewer.classList.contains('active')) return;
+    if(e.touches.length > 0) return; // one finger of a pinch lifted — gesture still in progress
+    imgEl.classList.remove('iv-gesturing');
+    const wasPinchOrPan = pinching || panning || gestureMoved;
+    pinching = false;
+    panning = false;
+    if(wasPinchOrPan){
+      if(ivScale <= 1.02) resetImgViewerZoom();
+      return; // never treat a pinch/pan gesture as a swipe
+    }
     const dx = e.changedTouches[0].screenX - startX;
     const dy = e.changedTouches[0].screenY - startY;
+    if(Math.abs(dx) < 10 && Math.abs(dy) < 10){
+      // a tap, not a swipe — check for double-tap-to-zoom
+      const now = Date.now();
+      if(now - lastTapTime < 320){
+        toggleImgViewerZoom(e.changedTouches[0].clientX, e.changedTouches[0].clientY);
+        lastTapTime = 0;
+      }else{
+        lastTapTime = now;
+      }
+      return;
+    }
+    if(ivScale > 1.001) return; // zoomed in — a single-finger drag pans, it never swipes to the next image
     if(Math.abs(dx) < 50 || Math.abs(dx) < Math.abs(dy) * 1.2) return;
     stepImgViewer(dx < 0 ? 1 : -1);
   }, { passive: true });
+
+  // Desktop: wheel/trackpad to zoom, double-click to toggle zoom — the
+  // presentation-mode laptop/projector case has no touchscreen at all.
+  imgEl.addEventListener('wheel', (e)=>{
+    if(!viewer.classList.contains('active')) return;
+    e.preventDefault();
+    const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+    const next = Math.max(IV_MIN_SCALE, Math.min(IV_MAX_SCALE, ivScale * factor));
+    if(next <= 1.02){ resetImgViewerZoom(); return; }
+    ivScale = next;
+    applyImgViewerTransform();
+  }, { passive: false });
+
+  imgEl.addEventListener('dblclick', (e)=>{
+    toggleImgViewerZoom(e.clientX, e.clientY);
+  });
+
   document.addEventListener('keydown', (e)=>{
     if(!viewer.classList.contains('active')) return;
-    if(e.key === 'ArrowRight') stepImgViewer(1);
-    if(e.key === 'ArrowLeft') stepImgViewer(-1);
-    if(e.key === 'Escape') closeImgViewer();
+    if(e.key === 'ArrowRight' && ivScale <= 1.001) stepImgViewer(1);
+    if(e.key === 'ArrowLeft' && ivScale <= 1.001) stepImgViewer(-1);
+    if(e.key === 'Escape'){
+      if(ivScale > 1.001) resetImgViewerZoom();
+      else closeImgViewer();
+    }
+    if(e.key === '+' || e.key === '='){
+      ivScale = Math.min(IV_MAX_SCALE, ivScale * 1.2);
+      applyImgViewerTransform();
+    }
+    if(e.key === '-'){
+      const next = ivScale / 1.2;
+      if(next <= 1.02) resetImgViewerZoom();
+      else{ ivScale = next; applyImgViewerTransform(); }
+    }
   });
 }
 
@@ -5249,12 +5443,12 @@ function renderWorklist(){
     abxLastDayItems, abxOverdueItems, abxEndingSoonItems, hasUnitHandover
   } = w;
 
-  function section(title, items, emoji, urgency, opts){
+  function section(title, items, iconName, urgency, opts){
     opts = opts || {};
     if(!items.length) return '';
     const urgClass = urgency ? ` work-${urgency}` : '';
     const headerExtra = opts.headerAction || '';
-    return `<div class="work-section${urgClass}"><h3>${emoji} ${title} <span class="small-muted">(${items.length})</span>${headerExtra}</h3>
+    return `<div class="work-section${urgClass}"><h3>${uiIcon(iconName)} ${title} <span class="small-muted">(${items.length})</span>${headerExtra}</h3>
       ${items.map(it=>{
         const doneBtn = (it.kind === 'postop' && it.checkId)
           ? `<button type="button" class="btn primary work-done-btn pressable" data-work-done="${escapeHTML(it.p.id)}" data-check-id="${escapeHTML(it.checkId)}">Done</button>`
@@ -5297,21 +5491,21 @@ function renderWorklist(){
   const html = [
     renderStartHereSection(startHereItems),
     hasUnitHandover ? `<div class="work-section work-warn ward-meta-handover"><h3>Unit handover</h3><div class="notes-box">${escapeHTML(wardMeta.handoverNote)}</div><button type="button" class="btn section-action" id="clearWardHandoverBtn">Clear unit handover</button></div>` : '',
-    section('Handover flags', handoverItems.map(it => Object.assign({}, it, { kind: 'handover' })), '↪', 'warn'),
-    section('Antibiotics — stop today', abxLastDayItems, '💊', 'urgent'),
-    section('Antibiotics — stop overdue', abxOverdueItems, '💊', 'urgent'),
-    section('Antibiotics — ending tomorrow', abxEndingSoonItems, '💊', 'warn'),
-    section('Abnormal labs (structured)', labAbnormalItems, '🧪', 'urgent'),
-    section('Abnormal results — needs review', abnormalItems, '△', 'urgent'),
-    section('Pending investigations', pendingInvItems.map(it => Object.assign({}, it, { kind: 'inv' })), '⚠', 'warn'),
-    section('Pending fitness clearance', pendingFitItems, '⚠', 'warn'),
-    section('Post-op milestones overdue', postOpOverdueItems, '⏱', 'urgent'),
-    section('Post-op milestones due', postOpDueItems, '◷', 'warn'),
-    section('Post-op milestones upcoming', postOpUpcomingItems, '○', 'info'),
-    section('Discharge checklist incomplete', dischargeIncompleteItems, '☐', 'warn'),
-    section('Plan not entered for today', planMissingItems.map(it => Object.assign({}, it, { kind: 'plan' })), '📝', 'warn', { headerAction: planHeaderAction }),
-    section("Today's plan", planTodayItems, '🗒️', 'good'),
-    section('Ready for discharge', readyForDischarge, '✓', 'good'),
+    section('Handover flags', handoverItems.map(it => Object.assign({}, it, { kind: 'handover' })), 'handover', 'warn'),
+    section('Antibiotics — stop today', abxLastDayItems, 'pill', 'urgent'),
+    section('Antibiotics — stop overdue', abxOverdueItems, 'pill', 'urgent'),
+    section('Antibiotics — ending tomorrow', abxEndingSoonItems, 'pill', 'warn'),
+    section('Abnormal labs (structured)', labAbnormalItems, 'flask', 'urgent'),
+    section('Abnormal results — needs review', abnormalItems, 'alert', 'urgent'),
+    section('Pending investigations', pendingInvItems.map(it => Object.assign({}, it, { kind: 'inv' })), 'alert', 'warn'),
+    section('Pending fitness clearance', pendingFitItems, 'alert', 'warn'),
+    section('Post-op milestones overdue', postOpOverdueItems, 'stopwatch', 'urgent'),
+    section('Post-op milestones due', postOpDueItems, 'clock', 'warn'),
+    section('Post-op milestones upcoming', postOpUpcomingItems, 'circleOutline', 'info'),
+    section('Discharge checklist incomplete', dischargeIncompleteItems, 'square', 'warn'),
+    section('Plan not entered for today', planMissingItems.map(it => Object.assign({}, it, { kind: 'plan' })), 'pencil', 'warn', { headerAction: planHeaderAction }),
+    section("Today's plan", planTodayItems, 'clipboard', 'good'),
+    section('Ready for discharge', readyForDischarge, 'checkmark', 'good'),
   ].join('');
 
   el.innerHTML = html || `<div class="empty-state"><div class="big">${emptyStateSvg('check')}</div><div class="msg">Nothing pending. All caught up.</div></div>`;
@@ -7459,7 +7653,7 @@ function buildHandoverSheetHtml(){
       const plan = hasPlanToday(p) ? (p.dailyPlan||'') : (p.dailyPlan ? '(outdated)' : '(none)');
       const flags = getPatientFlags(p).map(f=>f.text).join('; ');
       html += `<tr><td>${escapeHTML(p.bed||'')}</td><td>${escapeHTML(p.name||'')}</td><td>${escapeHTML(status)}</td>
-        <td>${escapeHTML(plan)}${(p.handoverPin||'').trim() ? `<div class="pin">📌 ${escapeHTML(p.handoverPin)}</div>` : ''}</td>
+        <td>${escapeHTML(plan)}${(p.handoverPin||'').trim() ? `<div class="pin">${uiIcon('pin')} ${escapeHTML(p.handoverPin)}</div>` : ''}</td>
         <td>${escapeHTML(p.assignedPg||'')}</td><td>${escapeHTML(flags)}</td></tr>`;
     }
     html += '</table>';

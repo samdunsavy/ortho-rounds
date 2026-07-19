@@ -960,10 +960,23 @@
   .img-viewer-overlay img{
     max-width:92vw;max-height:76vh;border-radius:6px;
     transition:opacity 0.12s ease,transform 0.12s ease;
+    /* We implement pinch-zoom/pan ourselves in JS (see bindImgViewerGestures) —
+       touch-action:none hands the browser's native pinch-to-zoom off so it
+       never fights with our own gesture handling. That fight (native page
+       zoom + our swipe-to-next-image listener both reacting to the same
+       touch) was the root cause of zoom "glitching" and accidentally
+       advancing to the next X-ray while trying to zoom in. */
+    touch-action:none;user-select:none;cursor:zoom-in;
+    transform-origin:center center;
   }
+  .img-viewer-overlay img.iv-zoomed{cursor:zoom-out;}
+  .img-viewer-overlay img.iv-gesturing{transition:none;}
   .img-viewer-overlay img.iv-jump{transition:none;}
   .img-viewer-overlay img.iv-out-left{opacity:0;transform:translateX(-28px);}
   .img-viewer-overlay img.iv-out-right{opacity:0;transform:translateX(28px);}
+  .img-viewer-overlay .iv-hint{
+    color:rgba(255,255,255,0.55);font-size:11.5px;margin-top:4px;text-align:center;
+  }
   .img-viewer-overlay .iv-label{color:#fff;margin-top:10px;font-size:13px;font-family:var(--mono);}
   .img-viewer-overlay .iv-counter{margin-left:10px;opacity:0.65;}
   .img-viewer-overlay .iv-nav{
@@ -1121,7 +1134,18 @@
   }
   .sheet-action-btn:hover{background:var(--line-soft);}
   .sheet-action-btn:active{background:var(--line);transform:scale(0.99);}
-  .sheet-action-btn .sa-icon{font-size:18px;width:24px;text-align:center;flex:none;}
+  .sheet-action-btn .sa-icon{font-size:18px;width:24px;text-align:center;flex:none;display:inline-flex;align-items:center;justify-content:center;}
+  /* Shared inline icon set — replaces raw emoji everywhere for a consistent
+     look across OS/browsers (mic, pin, worklist section headers, sheet
+     menu). Inherits the surrounding text color, same stroke style as the
+     nav icons above. */
+  .icon-svg,.sa-icon svg{
+    width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2;
+    stroke-linecap:round;stroke-linejoin:round;vertical-align:-3px;flex:none;
+  }
+  .sa-icon svg{width:18px;height:18px;}
+  h3 .icon-svg{margin-right:2px;}
+  .handover-pin .icon-svg,.pin .icon-svg{stroke:currentColor;vertical-align:-2px;}
   .sheet-account-row{
     display:flex;align-items:center;justify-content:space-between;gap:10px;
     padding:8px 14px 14px;font-size:13px;color:var(--ink-soft);
@@ -1703,20 +1727,20 @@
         <button type="button" class="btn btn-sm" id="moreLogoutBtn">Log out</button>
       </div>
       <div class="sheet-actions">
-        <button type="button" class="sheet-action-btn" data-more-action="account" id="moreManageUsersBtn" style="display:none;"><span class="sa-icon">👤</span> Manage users</button>
-        <button type="button" class="sheet-action-btn" id="morePushToggleBtn" style="display:none;"><span class="sa-icon">🔔</span> <span id="morePushToggleLabel">Enable reminders</span></button>
+        <button type="button" class="sheet-action-btn" data-more-action="account" id="moreManageUsersBtn" style="display:none;"><span class="sa-icon"><svg viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></span> Manage users</button>
+        <button type="button" class="sheet-action-btn" id="morePushToggleBtn" style="display:none;"><span class="sa-icon"><svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg></span> <span id="morePushToggleLabel">Enable reminders</span></button>
         <button type="button" class="sheet-action-btn" data-more-action="present"><span class="sa-icon">▶</span> Presentation mode</button>
         <button type="button" class="sheet-action-btn" data-more-action="export"><span class="sa-icon">↓</span> Export backup</button>
         <button type="button" class="sheet-action-btn" data-more-action="import"><span class="sa-icon">↑</span> Import backup</button>
-        <button type="button" class="sheet-action-btn" data-more-action="templates"><span class="sa-icon">📋</span> Templates</button>
+        <button type="button" class="sheet-action-btn" data-more-action="templates"><span class="sa-icon"><svg viewBox="0 0 24 24"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg></span> Templates</button>
         <button type="button" class="sheet-action-btn" data-more-action="census"><span class="sa-icon">#</span> Census</button>
         <button type="button" class="sheet-action-btn" data-more-action="handover"><span class="sa-icon">↪</span> Handover sheet</button>
         <button type="button" class="sheet-action-btn" data-more-action="whatsapp"><span class="sa-icon">⎘</span> Copy handover</button>
         <button type="button" class="sheet-action-btn" data-more-action="defaultunit"><span class="sa-icon">U</span> Default unit</button>
         <button type="button" class="sheet-action-btn" data-more-action="pgroster"><span class="sa-icon">PG</span> PG roster</button>
-        <button type="button" class="sheet-action-btn" data-more-action="bulk"><span class="sa-icon">☑</span> Bulk plan select</button>
-        <button type="button" class="sheet-action-btn" data-more-action="bulkapply"><span class="sa-icon">✎</span> Apply bulk plan</button>
-        <button type="button" class="sheet-action-btn" data-more-action="consultant"><span class="sa-icon">👁</span> Consultant mode</button>
+        <button type="button" class="sheet-action-btn" data-more-action="bulk"><span class="sa-icon"><svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span> Bulk plan select</button>
+        <button type="button" class="sheet-action-btn" data-more-action="bulkapply"><span class="sa-icon"><svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg></span> Apply bulk plan</button>
+        <button type="button" class="sheet-action-btn" data-more-action="consultant"><span class="sa-icon"><svg viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></span> Consultant mode</button>
         <button type="button" class="sheet-action-btn" data-more-action="darkmode"><span class="sa-icon">◐</span> Toggle dark mode</button>
         <button type="button" class="sheet-action-btn" data-more-action="discharged"><span class="sa-icon">✓</span> Discharged patients</button>
         <button type="button" class="sheet-action-btn" data-more-action="refresh"><span class="sa-icon">↻</span> Refresh from server</button>
@@ -1790,10 +1814,11 @@
 <div class="img-viewer-overlay" id="imgViewer">
   <button class="iv-close" id="imgViewerClose">&times;</button>
   <button type="button" class="iv-nav iv-prev" id="imgViewerPrev" aria-label="Previous X-ray">&#8249;</button>
-  <img id="imgViewerImg" src="" alt="X-ray">
+  <img id="imgViewerImg" src="" alt="X-ray" draggable="false">
   <button type="button" class="iv-nav iv-next" id="imgViewerNext" aria-label="Next X-ray">&#8250;</button>
   <div class="iv-dots" id="imgViewerDots"></div>
   <div class="iv-label"><span id="imgViewerLabel"></span><span class="iv-counter" id="imgViewerCounter"></span></div>
+  <div class="iv-hint">Pinch or scroll to zoom · double-tap/double-click to reset</div>
   <button type="button" class="iv-delete" id="imgViewerDelete">Delete X-ray</button>
 </div>
 
@@ -1905,7 +1930,7 @@
       <div class="form-hint" id="scribeHint"></div>
       <textarea id="scribeTranscript" placeholder="Tap the mic and speak, or type the bedside note here…"></textarea>
       <div class="scribe-controls">
-        <button type="button" class="btn" id="scribeMicBtn">🎤 Start dictation</button>
+        <button type="button" class="btn" id="scribeMicBtn"><svg class="icon-svg" viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg> Start dictation</button>
         <button type="button" class="btn primary ai-btn" id="scribeParseBtn">✨ Extract updates</button>
       </div>
       <div id="scribeReview" class="scribe-review" style="display:none;"></div>
