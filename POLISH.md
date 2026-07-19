@@ -21,15 +21,40 @@ tonight, silently, since nothing would catch it.
 
 **Done:** a jsdom-based harness (`tests/helpers/frontend-env.js`) that loads
 the real `index.html` + `app.js` into a test environment without a browser
-binary, plus a first real test file (`tests/frontend-icons-and-xray-viewer.test.js`,
-7 tests) covering the icon registry and the X-ray zoom/pan state machine —
-the newest, least-protected code. Runs in CI as-is (jsdom is pure JS, no
-native binary, so `npm ci` picks it up fine on GitHub Actions' runner,
-unlike Playwright/Chromium which needs system libraries this sandbox
-couldn't install). **Still open:** the other ~8,400 lines remain untested —
-this is a start, not full coverage. Next candidates: the sync/merge glue on
-the client side, worklist item collection, and the admission/scribe parsing
-bridges.
+binary, plus two real test files:
+
+- `tests/frontend-icons-and-xray-viewer.test.js` (7 tests) — the icon
+  registry and the X-ray zoom/pan state machine, the newest, least-protected
+  code at the time.
+- `tests/frontend-milestones.test.js` (16 tests) — `public/milestones.js`
+  (628 lines), covering `calcPOD`, `getPatientPod`, `milestoneDayPrefix`,
+  and the overdue/due/upcoming bucketing logic (`isItemOverdue`,
+  `isItemInDueWindow`, `isItemUpcoming`, `getMilestoneBuckets`). This is
+  almost entirely pure clinical-day arithmetic — what a PG sees as "urgent"
+  on the worklist and every patient card comes straight out of this file, so
+  it was the highest-value next slice after the icon/X-ray file. Writing it
+  surfaced two bugs, both in the test code, not production: (1) jsdom-realm
+  arrays returned by `getMilestoneBuckets()` aren't reference-equal to
+  Node-realm array literals even with identical contents, so
+  `assert.deepEqual` needs a same-realm copy (`[...arr]`) first; (2) a test
+  helper building date strings via `.toISOString()` silently shifted every
+  date by one day, because `calcPOD()` parses `YYYY-MM-DDT00:00:00` (no zone
+  suffix) as local time and `.toISOString()` converts to UTC first — this
+  sandbox runs on `Asia/Calcutta` (UTC+5:30), where local midnight is still
+  the previous day in UTC. Worth flagging precisely because this is the kind
+  of bug that could just as easily hide in production date-handling; checked
+  `todayISO()` (the app's real "what day is it" function) as a result, and
+  confirmed it already builds from local `getFullYear/getMonth/getDate`
+  components, not `toISOString()` — so no equivalent production bug exists,
+  but it was worth verifying rather than assuming.
+
+Both files run in CI as-is (jsdom is pure JS, no native binary, so `npm ci`
+picks it up fine on GitHub Actions' runner, unlike Playwright/Chromium which
+needs system libraries this sandbox couldn't install). Full suite is now
+123 tests (107 → 123), all passing. **Still open:** the other ~7,800 lines
+of `app.js` remain untested — this is still a start, not full coverage.
+Next candidates: the sync/merge glue on the client side, worklist item
+collection, and the admission/scribe parsing bridges.
 
 Full pixel/visual testing isn't viable in every environment (headless
 Chromium needs system libraries this sandbox doesn't have and can't install
