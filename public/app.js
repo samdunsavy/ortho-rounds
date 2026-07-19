@@ -5379,6 +5379,13 @@ function applyImgViewerTransform(){
   }
   imgEl.style.transform = (ivScale > 1.001) ? `translate(${ivPanX}px, ${ivPanY}px) scale(${ivScale})` : '';
   imgEl.classList.toggle('iv-zoomed', ivScale > 1.001);
+  // The dots/counter/label sit later in the DOM than the image and always
+  // paint above it, but transform-scaling the image doesn't affect layout —
+  // so a zoomed-in image visually balloons out underneath them instead of
+  // pushing them aside, and they end up floating on top of X-ray content
+  // instead of at the edges like the nav arrows. Fade them out while
+  // zoomed; the nav/close buttons stay since they're edge-anchored chrome.
+  document.getElementById('imgViewer')?.classList.toggle('iv-zoomed-mode', ivScale > 1.001);
 }
 
 // Clears zoom/pan back to the resting 1x state. Called whenever a different
@@ -5389,6 +5396,7 @@ function resetImgViewerZoom(){
   ivScale = 1; ivPanX = 0; ivPanY = 0;
   const imgEl = document.getElementById('imgViewerImg');
   if(imgEl){ imgEl.style.transform = ''; imgEl.classList.remove('iv-zoomed'); }
+  document.getElementById('imgViewer')?.classList.remove('iv-zoomed-mode');
 }
 
 function renderImgViewer(){

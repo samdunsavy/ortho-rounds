@@ -1006,6 +1006,16 @@
     font-family:inherit;
   }
   .img-viewer-overlay .iv-delete:hover{background:rgba(208,112,95,0.35);}
+  .img-viewer-overlay .iv-hint,
+  .img-viewer-overlay .iv-label,
+  .img-viewer-overlay .iv-dots{
+    transition:opacity var(--dur-fast);
+  }
+  .img-viewer-overlay.iv-zoomed-mode .iv-hint,
+  .img-viewer-overlay.iv-zoomed-mode .iv-label,
+  .img-viewer-overlay.iv-zoomed-mode .iv-dots{
+    opacity:0;pointer-events:none;
+  }
 
   .toast{
     position:fixed;bottom:max(18px, env(safe-area-inset-bottom));left:50%;
