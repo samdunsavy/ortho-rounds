@@ -7,6 +7,7 @@ import {
   normalizeSurgeon,
   extractLabsFromText,
   sanitizeAntibioticCourses,
+  sanitizeLabs,
   normalizePatientClinicalFields
 } from '../clinical-normalize.js';
 
@@ -59,6 +60,26 @@ describe('sanitizeAntibioticCourses', () => {
     assert.equal(out.length, 1);
     assert.equal(out[0].days, 5);
     assert.equal(out[0].start, '2026-07-11');
+  });
+});
+
+describe('sanitizeLabs', () => {
+  test('keeps the expanded panel of 11 keys and drops unknown fields', () => {
+    const out = sanitizeLabs({
+      hb: '11.2', crp: '8', wcc: '9000', creatinine: '0.9',
+      platelets: '210000', esr: '18', urea: '32', sodium: '138',
+      potassium: '4.1', ptinr: '1.1', rbs: '110',
+      randomField: 'ignore me'
+    });
+    assert.equal(Object.keys(out).length, 11);
+    assert.equal(out.platelets, '210000');
+    assert.equal(out.ptinr, '1.1');
+    assert.equal(out.randomField, undefined);
+  });
+
+  test('drops null/undefined/"null" values same as the original 4 fields', () => {
+    const out = sanitizeLabs({ hb: null, sodium: 'null', potassium: undefined, rbs: '110' });
+    assert.deepEqual(out, { rbs: '110' });
   });
 });
 

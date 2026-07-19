@@ -158,7 +158,7 @@ export function sanitizeAntibioticCourses(courses, defaults = {}){
 export function sanitizeLabs(raw){
   if(!raw || typeof raw !== 'object') return {};
   const out = {};
-  for(const key of ['hb', 'crp', 'wcc', 'creatinine']){
+  for(const key of ['hb', 'crp', 'wcc', 'creatinine', 'platelets', 'esr', 'urea', 'sodium', 'potassium', 'ptinr', 'rbs']){
     const val = raw[key];
     if(val === undefined || val === null) continue;
     const str = String(val).trim();
