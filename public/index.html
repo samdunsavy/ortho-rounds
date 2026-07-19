@@ -1602,6 +1602,31 @@
     .card-copy-plan .copy-plan-label{display:none;}
     .card-copy-plan .copy-plan-icon{display:inline;}
   }
+
+  /* ---------- wide-viewport Rounds layout: multi-column ward grid ----------
+     Below this, phones and small tablets keep the original single-column
+     list untouched. Above it — laptop, iPad landscape, a ward-mounted
+     display — the Rounds view previously stayed a single ~850px column
+     centered with dead space on both sides, same as a phone. This lets it
+     use the extra width for a responsive card grid so a round can scan more
+     patients per screen without scrolling. Only one card can ever be open
+     at a time (openCardId is a single value, not a set), so the "uneven
+     row height when one item is much taller" trade-off of CSS grid vs a
+     real masonry layout affects at most one row, and the open card spans
+     the full grid width anyway (see .ward-section .card.open below), so it
+     never actually sits inside a narrow column while expanded. */
+  @media (min-width:900px){
+    #view-rounds{max-width:1400px;}
+    .ward-section{
+      display:grid;
+      grid-template-columns:repeat(auto-fill,minmax(360px,1fr));
+      gap:14px 16px;
+      align-items:start;
+    }
+    .ward-header{grid-column:1/-1;}
+    .ward-section .card{margin-bottom:0;}
+    .ward-section .card.open{grid-column:1/-1;}
+  }
 </style>
 </head>
 <body class="has-bottom-nav">

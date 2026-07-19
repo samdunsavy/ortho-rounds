@@ -47,16 +47,31 @@ functions (`applyImgViewerTransform`, `resetImgViewerZoom`,
 Not because they're the most important features, but because they're the
 most recently written and currently the least protected.
 
-## Priority 2 — Responsive desktop/tablet layout
+## Priority 2 — Responsive desktop/tablet layout — 🟡 STARTED (Rounds view done)
 
-Confirmed still true: `.view{max-width:880px;margin:0 auto;}` — the whole
-app is a single centered column at every viewport width above 680px. A
-laptop, an iPad in landscape, or a ward-mounted display all get a narrow
-column with dead space on both sides instead of a 2–3 column card grid.
-This was flagged before the icon-unification pass and deliberately deferred;
-it's still the right next visual investment, especially since presentation
-mode (used in front of consultants) and daily rounds both run on exactly
-these device sizes.
+Confirmed still true when this was written: `.view{max-width:880px;margin:0
+auto;}` — the whole app was a single centered column at every viewport
+width above 680px. A laptop, an iPad in landscape, or a ward-mounted
+display all got a narrow column with dead space on both sides instead of a
+2–3 column card grid.
+
+**Done:** the Rounds view (the main daily-use screen) now widens to 1400px
+and shows patient cards in a responsive multi-column grid
+(`repeat(auto-fill, minmax(360px, 1fr))`) above 900px, while staying
+completely untouched below that (phones/small tablets get the exact same
+single-column list as before). The currently-open/expanded card always
+spans the full grid width regardless of column count, so detail editing
+never feels cramped inside a narrow column. Only one card can ever be open
+at a time app-wide (`openCardId` is a single value), so the one trade-off
+of CSS grid vs a true masonry layout — uneven row height when one item is
+much taller — affects at most one row, and even then the open card isn't
+actually inside that row's columns.
+
+**Still open:** the Worklist and OT list views are unchanged — scoped out
+of this pass to keep it bounded and low-risk; worth a follow-up pass since
+they're both used on the same wide-viewport devices, but their structure
+(single-column item lists / table-like OT list) needs its own look rather
+than reusing the ward-grid approach.
 
 ## Priority 3 — Deliberate device-testing pass on touch/gesture surfaces
 
