@@ -17,8 +17,8 @@
    - On first run (no users yet), one admin account is created automatically.
      Set its credentials with ORTHO_ADMIN_USERNAME / ORTHO_ADMIN_PASSWORD, or
      leave ORTHO_ADMIN_PASSWORD unset to have one generated and printed once.
-   - The admin can add/disable other users and reset passwords from the
-     in-app Account panel — no server access needed after the first run.
+   - Admins can add/disable/enable other users and reset passwords from the
+     in-app Manage users panel. Any user can change their own password.
    - Change the port with PORT=4000 node server.js (default 3000).
    - Use MongoDB with MONGODB_URI="mongodb+srv://..." node server.js
    - Relocate the SQLite data directory with ORTHO_DATA_DIR=/path node server.js
@@ -31,6 +31,11 @@ import crypto from 'node:crypto';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createStore } from './storage.js';
+import {
+  buildOtListDocx,
+  sanitizeOtExportPatient,
+  DEFAULT_OT_DOCTORS
+} from './ot-list.js';
 import {
   isAiEnabled,
   getAiConfig,
@@ -258,6 +263,30 @@ async function handleApi(req, res, pathname){
     return sendJSON(res, 200, { ok: true });
   }
 
+  if(pathname === '/api/account/change-password' && req.method === 'POST'){
+    const body = await readBody(req) || {};
+    const currentPassword = typeof body.currentPassword === 'string' ? body.currentPassword : '';
+    const newPassword = typeof body.newPassword === 'string' ? body.newPassword : '';
+    if(!currentPassword || !newPassword){
+      return sendJSON(res, 400, { error: 'Current and new password required' });
+    }
+    if(newPassword.length < 6){
+      return sendJSON(res, 400, { error: 'New password must be at least 6 characters' });
+    }
+    if(!verifyPasswordHash(currentPassword, authedUser.passwordSalt, authedUser.passwordHash)){
+      return sendJSON(res, 403, { error: 'Current password is wrong' });
+    }
+    const passwordSalt = crypto.randomBytes(16).toString('hex');
+    const passwordHash = hashPassword(newPassword, passwordSalt);
+    const nextVersion = (authedUser.tokenVersion || 0) + 1;
+    await store.updateUser(actor.id, { passwordHash, passwordSalt, tokenVersion: nextVersion });
+    // Issue a fresh token so this device stays logged in; other devices are revoked.
+    const token = signToken({
+      sub: actor.id, username: actor.username, tokenVersion: nextVersion
+    }, config.tokenSecret);
+    return sendJSON(res, 200, { ok: true, token });
+  }
+
   if(pathname === '/api/push/subscribe' && req.method === 'POST'){
     const body = await readBody(req) || {};
     const sub = body.subscription;
@@ -316,7 +345,19 @@ async function handleApi(req, res, pathname){
     if(actor.role !== 'admin') return sendJSON(res, 403, { error: 'Admin only' });
     const target = await store.getUserById(disableMatch[1]);
     if(!target) return sendJSON(res, 404, { error: 'User not found' });
+    if(target.id === actor.id){
+      return sendJSON(res, 400, { error: 'You cannot disable your own account' });
+    }
     await store.updateUser(target.id, { active: false, tokenVersion: (target.tokenVersion || 0) + 1 });
+    return sendJSON(res, 200, { ok: true });
+  }
+
+  const enableMatch = pathname.match(/^\/api\/admin\/users\/([^/]+)\/enable$/);
+  if(enableMatch && req.method === 'POST'){
+    if(actor.role !== 'admin') return sendJSON(res, 403, { error: 'Admin only' });
+    const target = await store.getUserById(enableMatch[1]);
+    if(!target) return sendJSON(res, 404, { error: 'User not found' });
+    await store.updateUser(target.id, { active: true });
     return sendJSON(res, 200, { ok: true });
   }
 
@@ -442,6 +483,40 @@ async function handleApi(req, res, pathname){
       'Cache-Control': 'no-store'
     });
     return res.end(JSON.stringify(payload, null, 2));
+  }
+
+  if(pathname === '/api/ot-list/docx' && req.method === 'POST'){
+    const body = await readBody(req) || {};
+    const date = typeof body.date === 'string' ? body.date.trim() : '';
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(date)){
+      return sendJSON(res, 400, { error: 'OT date required (YYYY-MM-DD)' });
+    }
+    const unit = typeof body.unit === 'string' ? body.unit.trim() : '';
+    const defaults = Array.isArray(body.defaultOtDoctors) && body.defaultOtDoctors.length
+      ? body.defaultOtDoctors.map(s => String(s || '').trim()).filter(Boolean)
+      : DEFAULT_OT_DOCTORS;
+    const patients = (Array.isArray(body.patients) ? body.patients : [])
+      .map(sanitizeOtExportPatient)
+      .filter(Boolean)
+      .slice(0, 40);
+    if(!patients.length){
+      return sendJSON(res, 400, { error: 'No patients on the OT list' });
+    }
+    try{
+      const buf = await buildOtListDocx({ date, unit, patients, defaultOtDoctors: defaults });
+      const stamp = date.replace(/-/g, '');
+      const unitSlug = (unit || 'list').replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_|_$/g, '') || 'list';
+      res.writeHead(200, {
+        'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'Content-Disposition': `attachment; filename="OT_LIST_UNIT_${unitSlug}_${stamp}.docx"`,
+        'Content-Length': buf.length,
+        'Cache-Control': 'no-store'
+      });
+      res.end(buf);
+    }catch(err){
+      return sendJSON(res, 500, { error: err.message || 'Could not build OT list' });
+    }
+    return;
   }
 
   if(pathname.startsWith('/api/ai/') && req.method === 'POST'){
