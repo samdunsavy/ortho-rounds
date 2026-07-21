@@ -4,6 +4,7 @@ import {
   normalizePatientClinicalFields,
   extractLabsFromText,
   sanitizeLabs,
+  extractOtherLabs,
   sanitizeAntibioticCourses,
   mergeLabs
 } from './clinical-normalize.js';
@@ -368,7 +369,7 @@ diagnosis, procedure, surgeon, implant,
 status ("preop"|"postop"|"conservative"|"fordischarge"),
 admissionDate, surgeryDate (ISO YYYY-MM-DD; resolve relative phrases like "yesterday" using today's date given below),
 theatreTime (e.g. "09:30"), dailyPlan, handoverNote, notes,
-labs: object with optional keys hb, crp, wcc, creatinine (string numbers only, Indian report units),
+labs: object with optional keys hb, crp, wcc, creatinine, platelets, esr, urea, sodium, potassium, ptinr, rbs, calcium, phosphate, alp, albumin (string numbers only, Indian report units),
 antibioticCourses: array of {name, days (integer), start (ISO date or null)} — e.g. "Inj Augmentin 1.2g BD x 5 days",
 dvtProphylaxis (e.g. "LMWH"), dvtDays (integer course length if stated).
 Capitalization: use standard orthopedic style — spine levels as L3/C5, sides as Right/Left, names in title case, common abbreviations as ORIF/IM/LMWH.
@@ -416,9 +417,10 @@ Do not put content in notes that already fits another field.`;
 export async function parseLabsFromImage(imageDataUrl){
   const systemPrompt = `You transcribe values from a photo of a printed or handwritten hospital lab report (Indian ward setting) into structured data. This is a transcription task — read what is printed, do not interpret, diagnose, or comment on the values.
 Return ONLY a JSON object with these keys:
-"labs": object with optional string keys — hb, platelets, wcc, esr, crp, urea, creatinine, sodium, potassium, ptinr, rbs. Use the exact numeric value as printed (no units in the value). Omit any key not legible or not present on the report — never guess or invent a value.
+"labs": object with optional string keys — hb, platelets, wcc, esr, crp, urea, creatinine, sodium, potassium, ptinr, rbs, calcium, phosphate, alp, albumin. Use the exact numeric value as printed (no units in the value). Omit any key not legible or not present on the report — never guess or invent a value.
+"otherLabs": array of {name, value} for any other legible analyte printed on the report that does not fit a key above. name exactly as printed (max 30 chars), value as printed without units. Same rules: transcribe only, never guess, no patient-identifying text.
 "reportDate": the report's own collection/reporting date if printed on it, as ISO YYYY-MM-DD, else null. Do not substitute today's date.
-Do not include the patient's name, hospital name, or any other identifying text anywhere in your response — only the "labs" and "reportDate" keys.`;
+Do not include the patient's name, hospital name, or any other identifying text anywhere in your response — only the "labs", "otherLabs", and "reportDate" keys.`;
 
   const userContent = [
     { type: 'text', text: 'Transcribe the lab values from this report photo. Return the JSON.' },
@@ -426,9 +428,10 @@ Do not include the patient's name, hospital name, or any other identifying text 
   ];
   const raw = await callOpenAiJson(systemPrompt, userContent, { maxTokens: 500, temperature: 0.1 });
   const labs = sanitizeLabs(raw?.labs);
+  const otherLabs = extractOtherLabs(raw);
   let reportDate = null;
   if(typeof raw?.reportDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw.reportDate.trim())){
     reportDate = raw.reportDate.trim();
   }
-  return { labs, reportDate };
+  return { labs, otherLabs, reportDate };
 }

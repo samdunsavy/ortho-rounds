@@ -65,4 +65,43 @@ describe('parseLabsFromImage', () => {
     assert.deepEqual(result.labs, {});
     assert.equal(result.reportDate, null);
   });
+
+  test('captures unrecognized analytes as otherLabs instead of dropping them', async (t) => {
+    const restore = mockOpenAi(async () => ({
+      ok: true,
+      json: async () => ({
+        choices: [{ message: { content: JSON.stringify({
+          labs: { hb: '11.2', uricAcid: '8.2' },
+          otherLabs: [{ name: 'HbA1c', value: '6.1' }],
+          reportDate: null
+        }) } }]
+      })
+    }));
+    t.after(restore);
+
+    const result = await parseLabsFromImage('data:image/jpeg;base64,AAAA');
+    assert.equal(result.labs.hb, '11.2');
+    assert.equal('uricAcid' in result.labs, false);
+    assert.deepEqual(result.otherLabs, [
+      { name: 'uricAcid', value: '8.2' },
+      { name: 'HbA1c', value: '6.1' }
+    ]);
+  });
+
+  test('accepts bone-profile keys as first-class labs', async (t) => {
+    const restore = mockOpenAi(async () => ({
+      ok: true,
+      json: async () => ({
+        choices: [{ message: { content: JSON.stringify({
+          labs: { calcium: '9.1', phosphate: '3.2', alp: '95', albumin: '3.9' },
+          reportDate: null
+        }) } }]
+      })
+    }));
+    t.after(restore);
+
+    const result = await parseLabsFromImage('data:image/jpeg;base64,AAAA');
+    assert.deepEqual(result.labs, { calcium: '9.1', phosphate: '3.2', alp: '95', albumin: '3.9' });
+    assert.deepEqual(result.otherLabs, []);
+  });
 });
