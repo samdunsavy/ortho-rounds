@@ -117,6 +117,16 @@ describe('mergePatientRecords', () => {
     assert.equal(c1.status, 'pending'); // remote's c1 is newer than local's
     assert.ok(c2);
   });
+
+  test('otherLabs survives per-key merge when remote side lacks it', () => {
+    const local = { id: 'p1', updatedAt: 100, labs: { CBC: { hb: '11' }, otherLabs: ['Echo', 'CT scan'] } };
+    const remote = { id: 'p1', updatedAt: 90, labs: { Metabolic: { glucose: '95' } } };
+    const merged = mergePatientRecords(local, remote);
+    assert.ok(merged.labs.otherLabs, 'otherLabs should be present in merged result');
+    assert.deepEqual(merged.labs.otherLabs, ['Echo', 'CT scan']);
+    assert.ok(merged.labs.CBC, 'local CBC should still be in result');
+    assert.ok(merged.labs.Metabolic, 'remote Metabolic should be in result');
+  });
 });
 
 describe('stampAttribution', () => {

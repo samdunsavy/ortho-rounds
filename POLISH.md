@@ -245,3 +245,7 @@ before adding more surface area, not to add more surface area.
 6. ~~Housekeeping (Priority 6)~~ — done.
 
 **What's left across the whole plan:** broader `app.js` test coverage beyond the first file, the Worklist/OT list responsive layout, and real device testing of touch surfaces. Everything else on this list has shipped.
+
+- Voice-round scribe: surface spoken-but-unmatched milestone actions as one-tap
+  suggested checklist additions (deferred 2026-07-21 — labs capture-don't-drop
+  prioritized; the ward template library already covers milestone customization).
