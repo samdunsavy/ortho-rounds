@@ -155,10 +155,16 @@ export function sanitizeAntibioticCourses(courses, defaults = {}){
   return out;
 }
 
+export const KNOWN_LAB_KEYS = [
+  'hb', 'crp', 'wcc', 'creatinine', 'platelets', 'esr', 'urea',
+  'sodium', 'potassium', 'ptinr', 'rbs',
+  'calcium', 'phosphate', 'alp', 'albumin'
+];
+
 export function sanitizeLabs(raw){
   if(!raw || typeof raw !== 'object') return {};
   const out = {};
-  for(const key of ['hb', 'crp', 'wcc', 'creatinine', 'platelets', 'esr', 'urea', 'sodium', 'potassium', 'ptinr', 'rbs']){
+  for(const key of KNOWN_LAB_KEYS){
     const val = raw[key];
     if(val === undefined || val === null) continue;
     const str = String(val).trim();
@@ -167,6 +173,56 @@ export function sanitizeLabs(raw){
   return out;
 }
 
+const OTHER_LABS_MAX = 12;
+const OTHER_LAB_NAME_MAX = 40;
+const OTHER_LAB_VALUE_MAX = 20;
+
+/** Harvest analytes the AI read that aren't in the known panel.
+ *  `raw` is the whole AI response object: unknown keys inside raw.labs
+ *  plus entries of raw.otherLabs ([{name, value}]). Capture-don't-drop. */
+export function extractOtherLabs(raw){
+  const out = [];
+  const seen = new Set();
+  const push = (name, value) => {
+    const n = String(name ?? '').trim().slice(0, OTHER_LAB_NAME_MAX);
+    const v = String(value ?? '').trim().slice(0, OTHER_LAB_VALUE_MAX);
+    if(!n || !v || v.toLowerCase() === 'null') return;
+    const dedupeKey = n.toLowerCase();
+    if(seen.has(dedupeKey) || out.length >= OTHER_LABS_MAX) return;
+    seen.add(dedupeKey);
+    out.push({ name: n, value: v });
+  };
+  if(!raw || typeof raw !== 'object') return out;
+  if(raw.labs && typeof raw.labs === 'object'){
+    for(const [k, v] of Object.entries(raw.labs)){
+      if(!KNOWN_LAB_KEYS.includes(k)) push(k, v);
+    }
+  }
+  if(Array.isArray(raw.otherLabs)){
+    for(const entry of raw.otherLabs){
+      if(entry && typeof entry === 'object') push(entry.name, entry.value);
+    }
+  }
+  return out;
+}
+
 export function mergeLabs(primary, fallback){
-  return Object.assign({}, fallback || {}, primary || {});
+  const merged = Object.assign({}, fallback || {}, primary || {});
+  const pOther = Array.isArray(primary?.otherLabs) ? primary.otherLabs : [];
+  const fOther = Array.isArray(fallback?.otherLabs) ? fallback.otherLabs : [];
+  if(pOther.length || fOther.length){
+    const seen = new Set();
+    const union = [];
+    for(const e of [...pOther, ...fOther]){
+      if(!e || !e.name) continue;
+      const k = String(e.name).toLowerCase();
+      if(seen.has(k)) continue;
+      seen.add(k);
+      union.push(e);
+    }
+    merged.otherLabs = union;
+  }else{
+    delete merged.otherLabs;
+  }
+  return merged;
 }
