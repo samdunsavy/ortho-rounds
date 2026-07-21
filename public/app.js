@@ -2779,15 +2779,17 @@ function formatLabWithUnit(key, val){
   return unit ? `${val} ${unit}` : String(val);
 }
 
-function formatLabsLine(p){
+function formatLabsLine(p, opts){
   const labs = p.labs || {};
   const parts = [];
   if(labs.hb) parts.push(`Hb ${formatLabWithUnit('hb', labs.hb)}`);
   if(labs.crp) parts.push(`CRP ${formatLabWithUnit('crp', labs.crp)}`);
   if(labs.wcc) parts.push(`TLC ${formatLabWithUnit('wcc', labs.wcc)}`);
   if(labs.creatinine) parts.push(`Cr ${formatLabWithUnit('creatinine', labs.creatinine)}`);
-  for(const e of (labs.otherLabs || [])){
-    if(e && e.name && e.value) parts.push(`${e.name} ${e.value}`);
+  if(opts?.includeOtherLabs !== false){
+    for(const e of (labs.otherLabs || [])){
+      if(e && e.name && e.value) parts.push(`${e.name} ${e.value}`);
+    }
   }
   return parts.join(' · ');
 }
@@ -4609,7 +4611,7 @@ function getPatientFlags(p){
   const duePostOp = getDuePostOpChecks(p);
   const overduePostOp = getOverduePostOpChecks(p);
   getTherapyBadges(p).forEach(b=> flags.push({ type: b.type === 'info' ? 'good' : 'warn', text: b.label }));
-  const labsLine = formatLabsLine(p);
+  const labsLine = formatLabsLine(p, { includeOtherLabs: false });
   if(labsLine){
     const labs = p.labs || {};
     const abnormal = ['hb','crp','wcc','creatinine'].some(k => labValueClass(k, labs[k]));
@@ -6185,12 +6187,6 @@ function openPatientModal(p){
   document.getElementById('deletePatientBtn').style.display = isExisting ? 'inline-block' : 'none';
   document.getElementById('modalBody').innerHTML = renderModalForm(modalWorkingData);
   bindModalDynamicLists();
-  // Guarded by window._aiBound — idempotent in production (init() already
-  // bound this at boot), but the frontend test harness skips init() entirely
-  // (__ORTHO_SKIP_AUTOINIT__), so the document-level click delegation that
-  // handles #labPhotoBtn and .other-lab-remove would otherwise never be
-  // registered when a modal-driving test opens the modal directly.
-  bindAiEvents();
   document.getElementById('patientModal').classList.add('active');
   requestAnimationFrame(()=> snapshotModalBaseline());
 }

@@ -23,7 +23,13 @@ const MODAL_FLOW_INIT_SCRIPT = [
   // binding live — letting save-flow tests read back `window.patients`
   // after calling savePatientFromModal(), the same trick already used
   // above for CHECKLIST_CATEGORIES/CHECKLIST_STATUSES.
-  'Object.defineProperty(window, "patients", { get: function(){ return patients; }, configurable: true });'
+  'Object.defineProperty(window, "patients", { get: function(){ return patients; }, configurable: true });',
+  // init() (which normally calls bindAiEvents() once at boot to wire up
+  // document-level click delegation for things like .other-lab-remove) is
+  // skipped entirely in this harness (__ORTHO_SKIP_AUTOINIT__). Call it here
+  // instead, in the same window.eval() scope as app.js, so tests that drive
+  // the modal's click-delegated controls work the same as in production.
+  'bindAiEvents();'
 ].join('\n');
 
 describe('labValueClass — expanded 11-field panel', () => {
@@ -320,9 +326,11 @@ describe('otherLabs — capture-don\'t-drop chips', () => {
     // window.eval() scope, so it's an instance of *that* window's
     // Array/Object — structurally identical to a plain Node-realm literal
     // but not reference-equal at the prototype level, which deepEqual
-    // (aliased to deepStrictEqual under node:assert/strict) rejects. Same
-    // cross-realm gotcha documented in tests/frontend-milestones.test.js;
-    // round-tripping through JSON strips the realm-specific prototype.
+    // (aliased to deepStrictEqual under node:assert/strict) rejects.
+    // Cross-realm jsdom objects fail strict deepEqual; the JSON round-trip
+    // normalizes both sides to this realm's primitives — a different
+    // workaround from tests/frontend-milestones.test.js's approach there,
+    // which maps to primitive ids instead.
     assert.deepEqual(JSON.parse(JSON.stringify(saved.labs.otherLabs)), [{ name: 'HbA1c', value: '6.1' }]);
   });
 
@@ -356,5 +364,15 @@ describe('otherLabs — capture-don\'t-drop chips', () => {
     }});
     assert.match(line, /Hb 11 g\/dL/);
     assert.match(line, /Uric Acid 8\.2/);
+  });
+
+  test('warn flags exclude otherLabs even when a core lab is abnormal', () => {
+    const { window } = loadFrontendEnv();
+    const p = window.blankPatient();
+    p.labs = { hb: '6.1', updatedAt: '2026-07-20', otherLabs: [{ name: 'Uric Acid', value: '8.2' }] };
+    const flags = window.getPatientFlags(p);
+    const warn = flags.find(f => f.type === 'warn' && /Hb/.test(f.text));
+    assert.ok(warn, 'abnormal Hb must still produce a warn flag');
+    assert.ok(!/Uric Acid/.test(warn.text), 'otherLabs must not appear in warn flag text');
   });
 });
