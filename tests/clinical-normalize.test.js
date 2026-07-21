@@ -151,6 +151,16 @@ describe('extractOtherLabs', () => {
     assert.deepEqual(extractOtherLabs({ otherLabs: 'junk', labs: 7 }), []);
     assert.deepEqual(extractOtherLabs({ otherLabs: [null, 'x', 42] }), []);
   });
+
+  test('skips entries in the explicit otherLabs array whose name is a known panel key', () => {
+    const out = extractOtherLabs({ otherLabs: [
+      { name: 'hb', value: '11' },
+      { name: 'Hb', value: '11' },
+      { name: 'ALP', value: '95' },
+      { name: 'Uric Acid', value: '8.2' }
+    ]});
+    assert.deepEqual(out, [{ name: 'Uric Acid', value: '8.2' }]);
+  });
 });
 
 describe('mergeLabs — otherLabs union', () => {

@@ -200,7 +200,10 @@ export function extractOtherLabs(raw){
   }
   if(Array.isArray(raw.otherLabs)){
     for(const entry of raw.otherLabs){
-      if(entry && typeof entry === 'object') push(entry.name, entry.value);
+      if(entry && typeof entry === 'object'){
+        const knownKey = KNOWN_LAB_KEYS.includes(String(entry.name ?? '').trim().toLowerCase());
+        if(!knownKey) push(entry.name, entry.value);
+      }
     }
   }
   return out;

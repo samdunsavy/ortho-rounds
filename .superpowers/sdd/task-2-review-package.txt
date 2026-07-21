@@ -1,0 +1,171 @@
+## Commits
+c9fafb3 feat: AI lab extraction returns otherLabs; prompts cover 15-key panel
+
+## Stat
+ ai.js                             | 11 +++++++----
+ server.js                         |  4 ++--
+ tests/ai-parse-labs-image.test.js | 39 +++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 48 insertions(+), 6 deletions(-)
+
+## Diff
+diff --git a/ai.js b/ai.js
+index c1d908f..88f00e1 100644
+--- a/ai.js
++++ b/ai.js
+@@ -1,16 +1,17 @@
+ /* OpenAI proxy for Ortho Rounds AI assistants. */
+ 
+ import {
+   normalizePatientClinicalFields,
+   extractLabsFromText,
+   sanitizeLabs,
++  extractOtherLabs,
+   sanitizeAntibioticCourses,
+   mergeLabs
+ } from './clinical-normalize.js';
+ 
+ const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
+ const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+ const OPENAI_BASE_URL = (process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '');
+ const OPENAI_MAX_TOKENS = Number(process.env.OPENAI_MAX_TOKENS) || 350;
+ const OPENAI_TIMEOUT_MS = 25000;
+ const RATE_LIMIT_MAX = 60;
+@@ -361,21 +362,21 @@ export async function parseAdmission(text){
+   const systemPrompt = `You extract structured data from orthopedic admission notes written in Indian ward English (may mix abbreviations and dictated speech).
+ Common WhatsApp format: salutation, name, "53 years / Male", "Imp : diagnosis+", "Admitted under ortho unit - IV", "Free ward", closing thanks — ignore salutations and thanks.
+ Return ONLY a JSON object with these keys (use null when the note does not state a value — never guess):
+ name, age (string of digits), sex ("M"|"F"|"O"), bed, ward, uhid,
+ unit (ortho unit number or label only, e.g. "IV" from "ortho unit - IV"),
+ wardType (e.g. "Free ward", "Paid ward", "Private ward"),
+ diagnosis, procedure, surgeon, implant,
+ status ("preop"|"postop"|"conservative"|"fordischarge"),
+ admissionDate, surgeryDate (ISO YYYY-MM-DD; resolve relative phrases like "yesterday" using today's date given below),
+ theatreTime (e.g. "09:30"), dailyPlan, handoverNote, notes,
+-labs: object with optional keys hb, crp, wcc, creatinine (string numbers only, Indian report units),
++labs: object with optional keys hb, crp, wcc, creatinine, platelets, esr, urea, sodium, potassium, ptinr, rbs, calcium, phosphate, alp, albumin (string numbers only, Indian report units),
+ antibioticCourses: array of {name, days (integer), start (ISO date or null)} — e.g. "Inj Augmentin 1.2g BD x 5 days",
+ dvtProphylaxis (e.g. "LMWH"), dvtDays (integer course length if stated).
+ Capitalization: use standard orthopedic style — spine levels as L3/C5, sides as Right/Left, names in title case, common abbreviations as ORIF/IM/LMWH.
+ diagnosis: join multiple injuries; keep "+" between items or use newlines; strip leading "Imp :".
+ status rules: operated → "postop"; awaiting surgery → "preop"; non-operative management → "conservative".
+ Do not put content in notes that already fits another field.`;
+ 
+   const noteText = String(text || '').slice(0, 6000);
+   const userContent = `Today's date: ${new Date().toISOString().slice(0, 10)}\n\nAdmission note:\n${noteText}\n\nExtract the JSON.`;
+   const fields = await callOpenAiJson(systemPrompt, userContent, { maxTokens: 700, temperature: 0.1 });
+@@ -409,26 +410,28 @@ Do not put content in notes that already fits another field.`;
+ 
+   const antibioticCourses = sanitizeAntibioticCourses(fields?.antibioticCourses, { start: defaultStart });
+   if(antibioticCourses.length) out.antibioticCourses = antibioticCourses;
+ 
+   return normalizePatientClinicalFields(out);
+ }
+ 
+ export async function parseLabsFromImage(imageDataUrl){
+   const systemPrompt = `You transcribe values from a photo of a printed or handwritten hospital lab report (Indian ward setting) into structured data. This is a transcription task — read what is printed, do not interpret, diagnose, or comment on the values.
+ Return ONLY a JSON object with these keys:
+-"labs": object with optional string keys — hb, platelets, wcc, esr, crp, urea, creatinine, sodium, potassium, ptinr, rbs. Use the exact numeric value as printed (no units in the value). Omit any key not legible or not present on the report — never guess or invent a value.
++"labs": object with optional string keys — hb, platelets, wcc, esr, crp, urea, creatinine, sodium, potassium, ptinr, rbs, calcium, phosphate, alp, albumin. Use the exact numeric value as printed (no units in the value). Omit any key not legible or not present on the report — never guess or invent a value.
++"otherLabs": array of {name, value} for any other legible analyte printed on the report that does not fit a key above. name exactly as printed (max 30 chars), value as printed without units. Same rules: transcribe only, never guess, no patient-identifying text.
+ "reportDate": the report's own collection/reporting date if printed on it, as ISO YYYY-MM-DD, else null. Do not substitute today's date.
+-Do not include the patient's name, hospital name, or any other identifying text anywhere in your response — only the "labs" and "reportDate" keys.`;
++Do not include the patient's name, hospital name, or any other identifying text anywhere in your response — only the "labs", "otherLabs", and "reportDate" keys.`;
+ 
+   const userContent = [
+     { type: 'text', text: 'Transcribe the lab values from this report photo. Return the JSON.' },
+     { type: 'image_url', image_url: { url: imageDataUrl } }
+   ];
+   const raw = await callOpenAiJson(systemPrompt, userContent, { maxTokens: 500, temperature: 0.1 });
+   const labs = sanitizeLabs(raw?.labs);
++  const otherLabs = extractOtherLabs(raw);
+   let reportDate = null;
+   if(typeof raw?.reportDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw.reportDate.trim())){
+     reportDate = raw.reportDate.trim();
+   }
+-  return { labs, reportDate };
++  return { labs, otherLabs, reportDate };
+ }
+diff --git a/server.js b/server.js
+index 7195d1a..ae8d6c0 100644
+--- a/server.js
++++ b/server.js
+@@ -589,22 +589,22 @@ async function handleApi(req, res, pathname){
+         if(typeof body.transcript !== 'string' || !body.transcript.trim()){
+           return sendJSON(res, 400, { error: 'transcript required' });
+         }
+         const result = await scribeRoundNote(body.patient, body.transcript);
+         return sendJSON(res, 200, { result });
+       }
+       if(pathname === '/api/ai/parse-labs-image'){
+         if(typeof body.image !== 'string' || !body.image.startsWith('data:image/')){
+           return sendJSON(res, 400, { error: 'lab report image required' });
+         }
+-        const { labs, reportDate } = await parseLabsFromImage(body.image);
+-        return sendJSON(res, 200, { labs, reportDate });
++        const { labs, otherLabs, reportDate } = await parseLabsFromImage(body.image);
++        return sendJSON(res, 200, { labs, otherLabs, reportDate });
+       }
+       return sendJSON(res, 404, { error: 'Unknown AI endpoint' });
+     }catch(err){
+       const status = err.statusCode || 502;
+       return sendJSON(res, status, { error: err.message || 'AI request failed' });
+     }
+   }
+ 
+   if(pathname === '/api/import' && req.method === 'POST'){
+     const body = await readBody(req) || {};
+diff --git a/tests/ai-parse-labs-image.test.js b/tests/ai-parse-labs-image.test.js
+index 4b1662b..1b00882 100644
+--- a/tests/ai-parse-labs-image.test.js
++++ b/tests/ai-parse-labs-image.test.js
+@@ -58,11 +58,50 @@ describe('parseLabsFromImage', () => {
+       json: async () => ({
+         choices: [{ message: { content: JSON.stringify({ labs: {}, reportDate: null }) } }]
+       })
+     }));
+     t.after(restore);
+ 
+     const result = await parseLabsFromImage('data:image/jpeg;base64,AAAA');
+     assert.deepEqual(result.labs, {});
+     assert.equal(result.reportDate, null);
+   });
++
++  test('captures unrecognized analytes as otherLabs instead of dropping them', async (t) => {
++    const restore = mockOpenAi(async () => ({
++      ok: true,
++      json: async () => ({
++        choices: [{ message: { content: JSON.stringify({
++          labs: { hb: '11.2', uricAcid: '8.2' },
++          otherLabs: [{ name: 'HbA1c', value: '6.1' }],
++          reportDate: null
++        }) } }]
++      })
++    }));
++    t.after(restore);
++
++    const result = await parseLabsFromImage('data:image/jpeg;base64,AAAA');
++    assert.equal(result.labs.hb, '11.2');
++    assert.equal('uricAcid' in result.labs, false);
++    assert.deepEqual(result.otherLabs, [
++      { name: 'uricAcid', value: '8.2' },
++      { name: 'HbA1c', value: '6.1' }
++    ]);
++  });
++
++  test('accepts bone-profile keys as first-class labs', async (t) => {
++    const restore = mockOpenAi(async () => ({
++      ok: true,
++      json: async () => ({
++        choices: [{ message: { content: JSON.stringify({
++          labs: { calcium: '9.1', phosphate: '3.2', alp: '95', albumin: '3.9' },
++          reportDate: null
++        }) } }]
++      })
++    }));
++    t.after(restore);
++
++    const result = await parseLabsFromImage('data:image/jpeg;base64,AAAA');
++    assert.deepEqual(result.labs, { calcium: '9.1', phosphate: '3.2', alp: '95', albumin: '3.9' });
++    assert.deepEqual(result.otherLabs, []);
++  });
+ });

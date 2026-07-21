@@ -1,0 +1,269 @@
+## Commits
+768ed1f feat: bone profile (Ca/PO4/ALP/albumin) joins the core lab panel
+
+## Stat
+ public/app.js                               | 34 +++++++++++++++-----
+ tests/frontend-lab-photo-extraction.test.js | 49 ++++++++++++++++++++++++++++-
+ 2 files changed, 74 insertions(+), 9 deletions(-)
+
+## Diff
+diff --git a/public/app.js b/public/app.js
+index 40ef9a2..5ebfbbe 100644
+--- a/public/app.js
++++ b/public/app.js
+@@ -89,21 +89,25 @@ const LAB_SPEC = {
+   hb:         { unit: 'g/dL',        low: 12,    siLow: 100,   siIfAbove: 25 },
+   crp:        { unit: 'mg/L',        high: 10 },
+   wcc:        { unit: 'cells/cu.mm', high: 11000, siHigh: 11, siIfBelow: 100 },
+   creatinine: { unit: 'mg/dL',       high: 1.3,  siHigh: 120,  siIfAbove: 20 },
+   platelets:  { unit: 'cells/cu.mm', low: 150000 },
+   esr:        { unit: 'mm/hr',       high: 20 },
+   urea:       { unit: 'mg/dL',       high: 40 },
+   sodium:     { unit: 'mEq/L',       low: 135,   high: 145 },
+   potassium:  { unit: 'mEq/L',       low: 3.5,   high: 5.5 },
+   ptinr:      { unit: '',            high: 1.5 },
+-  rbs:        { unit: 'mg/dL',       low: 70,    high: 200 }
++  rbs:        { unit: 'mg/dL',       low: 70,    high: 200 },
++  calcium:    { unit: 'mg/dL',       low: 8.5,   high: 10.5 },
++  phosphate:  { unit: 'mg/dL',       low: 2.5,   high: 4.5 },
++  alp:        { unit: 'U/L',         high: 120 },
++  albumin:    { unit: 'g/dL',        low: 3.5 }
+ };
+ const PLAN_HISTORY_MAX = 14;
+ const FULL_RECONCILE_INTERVAL_MS = 5 * 60 * 1000; // periodic full reconcile
+ let idb = null;
+ let wardMeta = { handoverNote: '', defaultUnit: '', defaultOtDoctors: [...DEFAULT_OT_DOCTORS], pgRoster: [], presentedToday: { date: '', ids: [] }, updatedAt: 0 };
+ let syncing = false;
+ let presentationUnpresentedOnly = localStorage.getItem(LS_PRESENT_UNPRESENTED) === '1';
+ let presentationReadAloud = localStorage.getItem(LS_READ_ALOUD) === '1';
+ // Presentation mode's own type scale is already larger than the everyday
+ // ward list, but that was sized for a phone/tablet at arm's length — read
+@@ -1284,21 +1288,25 @@ function applySmartPasteLabs(labs){
+     ['hb', 'f_lab_hb'],
+     ['crp', 'f_lab_crp'],
+     ['wcc', 'f_lab_wcc'],
+     ['creatinine', 'f_lab_creatinine'],
+     ['platelets', 'f_lab_platelets'],
+     ['esr', 'f_lab_esr'],
+     ['urea', 'f_lab_urea'],
+     ['sodium', 'f_lab_sodium'],
+     ['potassium', 'f_lab_potassium'],
+     ['ptinr', 'f_lab_ptinr'],
+-    ['rbs', 'f_lab_rbs']
++    ['rbs', 'f_lab_rbs'],
++    ['calcium', 'f_lab_calcium'],
++    ['phosphate', 'f_lab_phosphate'],
++    ['alp', 'f_lab_alp'],
++    ['albumin', 'f_lab_albumin']
+   ];
+   for(const [key, id] of pairs){
+     if(!labs[key]) continue;
+     const el = document.getElementById(id);
+     if(!el) continue;
+     el.value = labs[key];
+     filled++;
+   }
+   return filled;
+ }
+@@ -2703,27 +2711,27 @@ function labValueClass(key, val){
+     const compare = n < spec.siIfBelow ? n * 1000 : n;
+     return compare > limit ? 'lab-high' : '';
+   }
+   if(key === 'creatinine'){
+     const limit = n > spec.siIfAbove ? spec.siHigh : spec.high;
+     return n > limit ? 'lab-high' : '';
+   }
+   if(key === 'crp'){
+     return n > spec.high ? 'lab-high' : '';
+   }
+-  if(key === 'platelets'){
++  if(key === 'platelets' || key === 'albumin'){
+     return n < spec.low ? 'lab-low' : '';
+   }
+-  if(key === 'esr' || key === 'urea' || key === 'ptinr'){
++  if(key === 'esr' || key === 'urea' || key === 'ptinr' || key === 'alp'){
+     return n > spec.high ? 'lab-high' : '';
+   }
+-  if(key === 'sodium' || key === 'potassium' || key === 'rbs'){
++  if(key === 'sodium' || key === 'potassium' || key === 'rbs' || key === 'calcium' || key === 'phosphate'){
+     if(spec.low != null && n < spec.low) return 'lab-low';
+     if(spec.high != null && n > spec.high) return 'lab-high';
+     return '';
+   }
+   return '';
+ }
+ 
+ function formatLabWithUnit(key, val){
+   if(val === '' || val == null) return '';
+   const unit = LAB_SPEC[key]?.unit || '';
+@@ -2761,21 +2769,22 @@ function upsertLabsHistoryEntry(p, patch, date){
+     p.labsHistory.sort((a, b) => String(a.date).localeCompare(String(b.date)));
+     p.labsHistory = p.labsHistory.slice(-LABS_HISTORY_MAX);
+   }
+ }
+ 
+ /* ---------------- labs trend sparklines ---------------- */
+ 
+ const LAB_TREND_LABELS = {
+   hb: 'Hb', crp: 'CRP', wcc: 'TLC', creatinine: 'Creatinine',
+   platelets: 'Platelets', esr: 'ESR', urea: 'Urea',
+-  sodium: 'Na', potassium: 'K', ptinr: 'PT/INR', rbs: 'RBS'
++  sodium: 'Na', potassium: 'K', ptinr: 'PT/INR', rbs: 'RBS',
++  calcium: 'Ca', phosphate: 'PO4', alp: 'ALP', albumin: 'Albumin'
+ };
+ const LAB_TREND_W = 130;
+ const LAB_TREND_H = 34;
+ const LAB_TREND_PAD = 4;
+ 
+ function labTrendThreshold(key){
+   const spec = LAB_SPEC[key];
+   if(!spec) return null;
+   if(key === 'hb') return spec.low;
+   return spec.high;
+@@ -6339,20 +6348,24 @@ function renderModalForm(d){
+         <div><span>CRP (mg/L)</span><input id="f_lab_crp" inputmode="decimal" placeholder="e.g. 5" value="${escapeHTML((d.labs||{}).crp||'')}" class="${labValueClass('crp', (d.labs||{}).crp)}"></div>
+         <div><span>TLC (cells/cu.mm)</span><input id="f_lab_wcc" inputmode="decimal" placeholder="e.g. 8500" value="${escapeHTML((d.labs||{}).wcc||'')}" class="${labValueClass('wcc', (d.labs||{}).wcc)}"></div>
+         <div><span>Creatinine (mg/dL)</span><input id="f_lab_creatinine" inputmode="decimal" placeholder="e.g. 0.9" value="${escapeHTML((d.labs||{}).creatinine||'')}" class="${labValueClass('creatinine', (d.labs||{}).creatinine)}"></div>
+         <div><span>Platelets (cells/cu.mm)</span><input id="f_lab_platelets" inputmode="decimal" placeholder="e.g. 250000" value="${escapeHTML((d.labs||{}).platelets||'')}" class="${labValueClass('platelets', (d.labs||{}).platelets)}"></div>
+         <div><span>ESR (mm/hr)</span><input id="f_lab_esr" inputmode="decimal" placeholder="e.g. 15" value="${escapeHTML((d.labs||{}).esr||'')}" class="${labValueClass('esr', (d.labs||{}).esr)}"></div>
+         <div><span>Urea (mg/dL)</span><input id="f_lab_urea" inputmode="decimal" placeholder="e.g. 28" value="${escapeHTML((d.labs||{}).urea||'')}" class="${labValueClass('urea', (d.labs||{}).urea)}"></div>
+         <div><span>Sodium (mEq/L)</span><input id="f_lab_sodium" inputmode="decimal" placeholder="e.g. 138" value="${escapeHTML((d.labs||{}).sodium||'')}" class="${labValueClass('sodium', (d.labs||{}).sodium)}"></div>
+         <div><span>Potassium (mEq/L)</span><input id="f_lab_potassium" inputmode="decimal" placeholder="e.g. 4.2" value="${escapeHTML((d.labs||{}).potassium||'')}" class="${labValueClass('potassium', (d.labs||{}).potassium)}"></div>
+         <div><span>PT/INR</span><input id="f_lab_ptinr" inputmode="decimal" placeholder="e.g. 1.1" value="${escapeHTML((d.labs||{}).ptinr||'')}" class="${labValueClass('ptinr', (d.labs||{}).ptinr)}"></div>
+         <div><span>RBS (mg/dL)</span><input id="f_lab_rbs" inputmode="decimal" placeholder="e.g. 110" value="${escapeHTML((d.labs||{}).rbs||'')}" class="${labValueClass('rbs', (d.labs||{}).rbs)}"></div>
++        <div><span>Calcium (mg/dL)</span><input id="f_lab_calcium" inputmode="decimal" placeholder="e.g. 9.2" value="${escapeHTML((d.labs||{}).calcium||'')}" class="${labValueClass('calcium', (d.labs||{}).calcium)}"></div>
++        <div><span>Phosphate (mg/dL)</span><input id="f_lab_phosphate" inputmode="decimal" placeholder="e.g. 3.4" value="${escapeHTML((d.labs||{}).phosphate||'')}" class="${labValueClass('phosphate', (d.labs||{}).phosphate)}"></div>
++        <div><span>ALP (U/L)</span><input id="f_lab_alp" inputmode="decimal" placeholder="e.g. 90" value="${escapeHTML((d.labs||{}).alp||'')}" class="${labValueClass('alp', (d.labs||{}).alp)}"></div>
++        <div><span>Albumin (g/dL)</span><input id="f_lab_albumin" inputmode="decimal" placeholder="e.g. 4.0" value="${escapeHTML((d.labs||{}).albumin||'')}" class="${labValueClass('albumin', (d.labs||{}).albumin)}"></div>
+       </div>
+       ${renderLabsTrendPanel(d)}
+     </div>
+ 
+     <div class="form-row">
+       <label>Procedure done</label>
+       <input id="f_procedure" value="${escapeHTML(d.procedure)}" placeholder="e.g. ORIF with plate and screws — radius">
+     </div>
+     <div class="form-row two">
+       <div><label>Surgeon</label><input id="f_surgeon" value="${escapeHTML(d.surgeon)}" placeholder="Operating surgeon"></div>
+@@ -7178,29 +7191,34 @@ async function savePatientFromModal(){
+       crp: document.getElementById('f_lab_crp')?.value.trim() || '',
+       wcc: document.getElementById('f_lab_wcc')?.value.trim() || '',
+       creatinine: document.getElementById('f_lab_creatinine')?.value.trim() || '',
+       platelets: document.getElementById('f_lab_platelets')?.value.trim() || '',
+       esr: document.getElementById('f_lab_esr')?.value.trim() || '',
+       urea: document.getElementById('f_lab_urea')?.value.trim() || '',
+       sodium: document.getElementById('f_lab_sodium')?.value.trim() || '',
+       potassium: document.getElementById('f_lab_potassium')?.value.trim() || '',
+       ptinr: document.getElementById('f_lab_ptinr')?.value.trim() || '',
+       rbs: document.getElementById('f_lab_rbs')?.value.trim() || '',
++      calcium: document.getElementById('f_lab_calcium')?.value.trim() || '',
++      phosphate: document.getElementById('f_lab_phosphate')?.value.trim() || '',
++      alp: document.getElementById('f_lab_alp')?.value.trim() || '',
++      albumin: document.getElementById('f_lab_albumin')?.value.trim() || '',
+       updatedAt: getModalLabReportDate() || todayISO()
+     };
+-    const hasAnyLabValue = ['hb', 'crp', 'wcc', 'creatinine', 'platelets', 'esr', 'urea', 'sodium', 'potassium', 'ptinr', 'rbs']
++    const hasAnyLabValue = ['hb', 'crp', 'wcc', 'creatinine', 'platelets', 'esr', 'urea', 'sodium', 'potassium', 'ptinr', 'rbs', 'calcium', 'phosphate', 'alp', 'albumin']
+       .some(key => d.labs[key]);
+     if(hasAnyLabValue){
+       upsertLabsHistoryEntry(d, {
+         hb: d.labs.hb, crp: d.labs.crp, wcc: d.labs.wcc, creatinine: d.labs.creatinine,
+         platelets: d.labs.platelets, esr: d.labs.esr, urea: d.labs.urea,
+-        sodium: d.labs.sodium, potassium: d.labs.potassium, ptinr: d.labs.ptinr, rbs: d.labs.rbs
++        sodium: d.labs.sodium, potassium: d.labs.potassium, ptinr: d.labs.ptinr, rbs: d.labs.rbs,
++        calcium: d.labs.calcium, phosphate: d.labs.phosphate, alp: d.labs.alp, albumin: d.labs.albumin
+       }, d.labs.updatedAt);
+     }
+     d.procedure = document.getElementById('f_procedure').value.trim();
+     d.surgeon = document.getElementById('f_surgeon').value.trim();
+     d.implant = document.getElementById('f_implant').value.trim();
+     d.payer = document.getElementById('f_payer')?.value.trim() || '';
+     d.anaesthesia = document.getElementById('f_anaesthesia')?.value.trim() || '';
+     d.otDoctors = parseOtDoctorsText(document.getElementById('f_otDoctors')?.value || '');
+     d.cArmRequired = !!document.getElementById('f_cArmRequired')?.checked;
+     d.arthroMonitorRequired = !!document.getElementById('f_arthroMonitorRequired')?.checked;
+diff --git a/tests/frontend-lab-photo-extraction.test.js b/tests/frontend-lab-photo-extraction.test.js
+index 1ed0442..4491047 100644
+--- a/tests/frontend-lab-photo-extraction.test.js
++++ b/tests/frontend-lab-photo-extraction.test.js
+@@ -8,21 +8,29 @@ import { loadFrontendEnv } from './helpers/frontend-env.js';
+ // window.eval() call aren't visible to functions defined in a separate
+ // eval() call (only window properties — i.e. function declarations and
+ // `var` — persist across calls), so app.js's reference to the bare
+ // identifier throws ReferenceError in this harness even though it works
+ // fine in a real browser (single script load, one shared scope). Any test
+ // that drives the modal open/close flow needs this redefined in app.js's
+ // own eval via initScript, the same workaround already established in
+ // tests/frontend-worklist.test.js for the equivalent `patients` binding.
+ const MODAL_FLOW_INIT_SCRIPT = [
+   'var CHECKLIST_CATEGORIES = ["nv","mobilization","imaging","antibiotics","drain","wound","other"];',
+-  'var CHECKLIST_STATUSES = ["pending","done","skipped","na"];'
++  'var CHECKLIST_STATUSES = ["pending","done","skipped","na"];',
++  // `patients` is a top-level `let` in app.js, so (per frontend-env.js's
++  // documented limitation) it never becomes a `window` property on its
++  // own. This getter is defined inside the same window.eval() call as
++  // app.js itself, so its closure captures the real top-level `patients`
++  // binding live — letting save-flow tests read back `window.patients`
++  // after calling savePatientFromModal(), the same trick already used
++  // above for CHECKLIST_CATEGORIES/CHECKLIST_STATUSES.
++  'Object.defineProperty(window, "patients", { get: function(){ return patients; }, configurable: true });'
+ ].join('\n');
+ 
+ describe('labValueClass — expanded 11-field panel', () => {
+   test('flags low platelets', () => {
+     const { window } = loadFrontendEnv();
+     assert.equal(window.labValueClass('platelets', '120000'), 'lab-low');
+     assert.equal(window.labValueClass('platelets', '250000'), '');
+   });
+ 
+   test('flags high ESR, urea, and PT/INR', () => {
+@@ -232,10 +240,49 @@ describe('LAB_TREND_LABELS — expanded panel', () => {
+     const history = [
+       { date: '2026-07-17', hb: '10', crp: '5', wcc: '9000', creatinine: '0.8', platelets: '200000', esr: '15', urea: '30', sodium: '138', potassium: '4.0', ptinr: '1.0', rbs: '100' },
+       { date: '2026-07-18', hb: '11', crp: '6', wcc: '9500', creatinine: '0.9', platelets: '210000', esr: '16', urea: '32', sodium: '139', potassium: '4.1', ptinr: '1.1', rbs: '105' }
+     ];
+     const html = window.renderLabsTrendPanel({ labsHistory: history });
+     for(const label of ['Hb', 'CRP', 'TLC', 'Creatinine', 'Platelets', 'ESR', 'Urea', 'Na', 'K', 'PT/INR', 'RBS']){
+       assert.ok(html.includes(`>${label}<`), `missing trend sparkline label for ${label}`);
+     }
+   });
+ });
++
++describe('labValueClass — bone profile fields', () => {
++  test('flags both directions for calcium and phosphate', () => {
++    const { window } = loadFrontendEnv();
++    assert.equal(window.labValueClass('calcium', '7.9'), 'lab-low');
++    assert.equal(window.labValueClass('calcium', '11.2'), 'lab-high');
++    assert.equal(window.labValueClass('calcium', '9.4'), '');
++    assert.equal(window.labValueClass('phosphate', '2.1'), 'lab-low');
++    assert.equal(window.labValueClass('phosphate', '5.0'), 'lab-high');
++  });
++
++  test('flags high ALP and low albumin', () => {
++    const { window } = loadFrontendEnv();
++    assert.equal(window.labValueClass('alp', '300'), 'lab-high');
++    assert.equal(window.labValueClass('alp', '90'), '');
++    assert.equal(window.labValueClass('albumin', '2.9'), 'lab-low');
++    assert.equal(window.labValueClass('albumin', '4.1'), '');
++  });
++});
++
++describe('modal form — bone profile inputs', () => {
++  test('renders the four new inputs and saves them into labs + labsHistory', async () => {
++    const { window, document } = loadFrontendEnv({ initScript: MODAL_FLOW_INIT_SCRIPT });
++    window.openPatientModal(window.blankPatient());
++    for(const id of ['f_lab_calcium', 'f_lab_phosphate', 'f_lab_alp', 'f_lab_albumin']){
++      assert.ok(document.getElementById(id), `${id} must exist in the modal form`);
++    }
++    document.getElementById('f_name').value = 'Test Patient';
++    document.getElementById('f_lab_calcium').value = '9.1';
++    document.getElementById('f_lab_albumin').value = '3.9';
++    await window.savePatientFromModal();
++    const saved = window.patients.find(p => p.name === 'Test Patient');
++    assert.equal(saved.labs.calcium, '9.1');
++    assert.equal(saved.labs.albumin, '3.9');
++    const todayEntry = saved.labsHistory.find(h => h.date === saved.labs.updatedAt);
++    assert.equal(todayEntry.calcium, '9.1');
++    assert.equal(todayEntry.albumin, '3.9');
++  });
++});

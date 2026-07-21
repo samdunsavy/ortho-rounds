@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm outdated *)",
+      "Bash(git fetch *)",
+      "Bash(git merge *)",
+      "Bash(npm install *)",
+      "Bash(node --check server.js)",
+      "Bash(node --check ai.js)",
+      "Bash(node --check public/app.js)",
+      "Bash(node -e \"require\\('esprima'\\)\")",
+      "Bash(timeout 3 node --no-warnings server.js)",
+      "Bash(echo \"exit code: $?\")",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Skill(artifact-design)",
+      "Artifact"
+    ]
+  }
+}

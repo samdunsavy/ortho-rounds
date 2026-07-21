@@ -1,0 +1,63 @@
+## Commits
+0396aad chore: log deferred milestone voice-suggestions in POLISH backlog; add otherLabs regression test
+
+## Stat
+ POLISH.md           |  4 ++++
+ tests/merge.test.js | 10 ++++++++++
+ 2 files changed, 14 insertions(+)
+
+## Diff
+diff --git a/POLISH.md b/POLISH.md
+index 64171e1..12b19e7 100644
+--- a/POLISH.md
++++ b/POLISH.md
+@@ -238,10 +238,14 @@ before adding more surface area, not to add more surface area.
+ ## Suggested order — all six priorities now have work done against them
+ 
+ 1. ~~Frontend test harness (Priority 1)~~ — harness + first tests shipped; broader coverage of the rest of `app.js` remains open.
+ 2. ~~Responsive desktop/tablet layout (Priority 2)~~ — Rounds view done; Worklist/OT list intentionally deferred to their own pass.
+ 3. ~~Device-testing pass (Priority 3)~~ — code-audit half done (found and fixed a real bug); device-in-hand half still needs an actual phone/tablet.
+ 4. ~~Presentation-mode readability (Priority 4)~~ — done.
+ 5. ~~Contrast/print audit (Priority 5)~~ — done; also fixed a real print-layout bug the audit surfaced.
+ 6. ~~Housekeeping (Priority 6)~~ — done.
+ 
+ **What's left across the whole plan:** broader `app.js` test coverage beyond the first file, the Worklist/OT list responsive layout, and real device testing of touch surfaces. Everything else on this list has shipped.
++
++- Voice-round scribe: surface spoken-but-unmatched milestone actions as one-tap
++  suggested checklist additions (deferred 2026-07-21 — labs capture-don't-drop
++  prioritized; the ward template library already covers milestone customization).
+diff --git a/tests/merge.test.js b/tests/merge.test.js
+index 75d028a..5b20a24 100644
+--- a/tests/merge.test.js
++++ b/tests/merge.test.js
+@@ -110,20 +110,30 @@ describe('mergePatientRecords', () => {
+     const remote = {
+       id: 'p1', updatedAt: 200,
+       postOpChecks: [{ id: 'c1', status: 'pending', updatedAt: 150 }, { id: 'c2', status: 'done', updatedAt: 150 }]
+     };
+     const merged = mergePatientRecords(local, remote);
+     const c1 = merged.postOpChecks.find(c => c.id === 'c1');
+     const c2 = merged.postOpChecks.find(c => c.id === 'c2');
+     assert.equal(c1.status, 'pending'); // remote's c1 is newer than local's
+     assert.ok(c2);
+   });
++
++  test('otherLabs survives per-key merge when remote side lacks it', () => {
++    const local = { id: 'p1', updatedAt: 100, labs: { CBC: { hb: '11' }, otherLabs: ['Echo', 'CT scan'] } };
++    const remote = { id: 'p1', updatedAt: 90, labs: { Metabolic: { glucose: '95' } } };
++    const merged = mergePatientRecords(local, remote);
++    assert.ok(merged.labs.otherLabs, 'otherLabs should be present in merged result');
++    assert.deepEqual(merged.labs.otherLabs, ['Echo', 'CT scan']);
++    assert.ok(merged.labs.CBC, 'local CBC should still be in result');
++    assert.ok(merged.labs.Metabolic, 'remote Metabolic should be in result');
++  });
+ });
+ 
+ describe('stampAttribution', () => {
+   const actor = { username: 'ppg1' };
+ 
+   test('stamps doneBy on a newly-completed checklist item (no prior record)', () => {
+     const patient = { postOpChecks: [{ id: 'c1', status: 'done' }, { id: 'c2', status: 'pending' }] };
+     stampAttribution(patient, null, actor);
+     assert.equal(patient.postOpChecks[0].doneBy, 'ppg1');
+     assert.equal(patient.postOpChecks[1].doneBy, undefined);

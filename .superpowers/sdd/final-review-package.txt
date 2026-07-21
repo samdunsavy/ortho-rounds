@@ -1,0 +1,1045 @@
+## Commits
+0396aad chore: log deferred milestone voice-suggestions in POLISH backlog; add otherLabs regression test
+b2fa480 fix: keep otherLabs out of warn badges; harness-side event binding
+9f700b4 feat: capture-don't-drop otherLabs chips in patient modal
+768ed1f feat: bone profile (Ca/PO4/ALP/albumin) joins the core lab panel
+c9fafb3 feat: AI lab extraction returns otherLabs; prompts cover 15-key panel
+7301463 feat: 15-key lab panel + extractOtherLabs capture in clinical-normalize
+
+## Stat
+ .superpowers/sdd/task-4-report.md           | 100 ++++++++++++++++++++
+ POLISH.md                                   |   4 +
+ ai.js                                       |  11 ++-
+ clinical-normalize.js                       |  60 +++++++++++-
+ public/app.js                               |  94 ++++++++++++++++---
+ public/index.html                           |   2 +
+ server.js                                   |   4 +-
+ tests/ai-parse-labs-image.test.js           |  39 ++++++++
+ tests/clinical-normalize.test.js            |  78 +++++++++++++++-
+ tests/frontend-lab-photo-extraction.test.js | 139 +++++++++++++++++++++++++++-
+ tests/merge.test.js                         |  10 ++
+ 11 files changed, 519 insertions(+), 22 deletions(-)
+
+## Diff
+diff --git a/POLISH.md b/POLISH.md
+index 64171e1..12b19e7 100644
+--- a/POLISH.md
++++ b/POLISH.md
+@@ -238,10 +238,14 @@ before adding more surface area, not to add more surface area.
+ ## Suggested order — all six priorities now have work done against them
+ 
+ 1. ~~Frontend test harness (Priority 1)~~ — harness + first tests shipped; broader coverage of the rest of `app.js` remains open.
+ 2. ~~Responsive desktop/tablet layout (Priority 2)~~ — Rounds view done; Worklist/OT list intentionally deferred to their own pass.
+ 3. ~~Device-testing pass (Priority 3)~~ — code-audit half done (found and fixed a real bug); device-in-hand half still needs an actual phone/tablet.
+ 4. ~~Presentation-mode readability (Priority 4)~~ — done.
+ 5. ~~Contrast/print audit (Priority 5)~~ — done; also fixed a real print-layout bug the audit surfaced.
+ 6. ~~Housekeeping (Priority 6)~~ — done.
+ 
+ **What's left across the whole plan:** broader `app.js` test coverage beyond the first file, the Worklist/OT list responsive layout, and real device testing of touch surfaces. Everything else on this list has shipped.
++
++- Voice-round scribe: surface spoken-but-unmatched milestone actions as one-tap
++  suggested checklist additions (deferred 2026-07-21 — labs capture-don't-drop
++  prioritized; the ward template library already covers milestone customization).
+diff --git a/ai.js b/ai.js
+index c1d908f..88f00e1 100644
+--- a/ai.js
++++ b/ai.js
+@@ -1,16 +1,17 @@
+ /* OpenAI proxy for Ortho Rounds AI assistants. */
+ 
+ import {
+   normalizePatientClinicalFields,
+   extractLabsFromText,
+   sanitizeLabs,
++  extractOtherLabs,
+   sanitizeAntibioticCourses,
+   mergeLabs
+ } from './clinical-normalize.js';
+ 
+ const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
+ const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+ const OPENAI_BASE_URL = (process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '');
+ const OPENAI_MAX_TOKENS = Number(process.env.OPENAI_MAX_TOKENS) || 350;
+ const OPENAI_TIMEOUT_MS = 25000;
+ const RATE_LIMIT_MAX = 60;
+@@ -361,21 +362,21 @@ export async function parseAdmission(text){
+   const systemPrompt = `You extract structured data from orthopedic admission notes written in Indian ward English (may mix abbreviations and dictated speech).
+ Common WhatsApp format: salutation, name, "53 years / Male", "Imp : diagnosis+", "Admitted under ortho unit - IV", "Free ward", closing thanks — ignore salutations and thanks.
+ Return ONLY a JSON object with these keys (use null when the note does not state a value — never guess):
+ name, age (string of digits), sex ("M"|"F"|"O"), bed, ward, uhid,
+ unit (ortho unit number or label only, e.g. "IV" from "ortho unit - IV"),
+ wardType (e.g. "Free ward", "Paid ward", "Private ward"),
+ diagnosis, procedure, surgeon, implant,
+ status ("preop"|"postop"|"conservative"|"fordischarge"),
+ admissionDate, surgeryDate (ISO YYYY-MM-DD; resolve relative phrases like "yesterday" using today's date given below),
+ theatreTime (e.g. "09:30"), dailyPlan, handoverNote, notes,
+-labs: object with optional keys hb, crp, wcc, creatinine (string numbers only, Indian report units),
++labs: object with optional keys hb, crp, wcc, creatinine, platelets, esr, urea, sodium, potassium, ptinr, rbs, calcium, phosphate, alp, albumin (string numbers only, Indian report units),
+ antibioticCourses: array of {name, days (integer), start (ISO date or null)} — e.g. "Inj Augmentin 1.2g BD x 5 days",
+ dvtProphylaxis (e.g. "LMWH"), dvtDays (integer course length if stated).
+ Capitalization: use standard orthopedic style — spine levels as L3/C5, sides as Right/Left, names in title case, common abbreviations as ORIF/IM/LMWH.
+ diagnosis: join multiple injuries; keep "+" between items or use newlines; strip leading "Imp :".
+ status rules: operated → "postop"; awaiting surgery → "preop"; non-operative management → "conservative".
+ Do not put content in notes that already fits another field.`;
+ 
+   const noteText = String(text || '').slice(0, 6000);
+   const userContent = `Today's date: ${new Date().toISOString().slice(0, 10)}\n\nAdmission note:\n${noteText}\n\nExtract the JSON.`;
+   const fields = await callOpenAiJson(systemPrompt, userContent, { maxTokens: 700, temperature: 0.1 });
+@@ -409,26 +410,28 @@ Do not put content in notes that already fits another field.`;
+ 
+   const antibioticCourses = sanitizeAntibioticCourses(fields?.antibioticCourses, { start: defaultStart });
+   if(antibioticCourses.length) out.antibioticCourses = antibioticCourses;
+ 
+   return normalizePatientClinicalFields(out);
+ }
+ 
+ export async function parseLabsFromImage(imageDataUrl){
+   const systemPrompt = `You transcribe values from a photo of a printed or handwritten hospital lab report (Indian ward setting) into structured data. This is a transcription task — read what is printed, do not interpret, diagnose, or comment on the values.
+ Return ONLY a JSON object with these keys:
+-"labs": object with optional string keys — hb, platelets, wcc, esr, crp, urea, creatinine, sodium, potassium, ptinr, rbs. Use the exact numeric value as printed (no units in the value). Omit any key not legible or not present on the report — never guess or invent a value.
++"labs": object with optional string keys — hb, platelets, wcc, esr, crp, urea, creatinine, sodium, potassium, ptinr, rbs, calcium, phosphate, alp, albumin. Use the exact numeric value as printed (no units in the value). Omit any key not legible or not present on the report — never guess or invent a value.
++"otherLabs": array of {name, value} for any other legible analyte printed on the report that does not fit a key above. name exactly as printed (max 30 chars), value as printed without units. Same rules: transcribe only, never guess, no patient-identifying text.
+ "reportDate": the report's own collection/reporting date if printed on it, as ISO YYYY-MM-DD, else null. Do not substitute today's date.
+-Do not include the patient's name, hospital name, or any other identifying text anywhere in your response — only the "labs" and "reportDate" keys.`;
++Do not include the patient's name, hospital name, or any other identifying text anywhere in your response — only the "labs", "otherLabs", and "reportDate" keys.`;
+ 
+   const userContent = [
+     { type: 'text', text: 'Transcribe the lab values from this report photo. Return the JSON.' },
+     { type: 'image_url', image_url: { url: imageDataUrl } }
+   ];
+   const raw = await callOpenAiJson(systemPrompt, userContent, { maxTokens: 500, temperature: 0.1 });
+   const labs = sanitizeLabs(raw?.labs);
++  const otherLabs = extractOtherLabs(raw);
+   let reportDate = null;
+   if(typeof raw?.reportDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw.reportDate.trim())){
+     reportDate = raw.reportDate.trim();
+   }
+-  return { labs, reportDate };
++  return { labs, otherLabs, reportDate };
+ }
+diff --git a/clinical-normalize.js b/clinical-normalize.js
+index 8f9a2a8..4f7a26e 100644
+--- a/clinical-normalize.js
++++ b/clinical-normalize.js
+@@ -148,25 +148,81 @@ export function sanitizeAntibioticCourses(courses, defaults = {}){
+     if(!raw || typeof raw !== 'object') continue;
+     const name = normalizeAbbreviations(String(raw.name || '').trim());
+     const days = parseTherapyDays(raw.days);
+     const start = String(raw.start || defaults.start || '').trim();
+     if(!name && !days) continue;
+     out.push({ name, days, start });
+   }
+   return out;
+ }
+ 
++export const KNOWN_LAB_KEYS = [
++  'hb', 'crp', 'wcc', 'creatinine', 'platelets', 'esr', 'urea',
++  'sodium', 'potassium', 'ptinr', 'rbs',
++  'calcium', 'phosphate', 'alp', 'albumin'
++];
++
+ export function sanitizeLabs(raw){
+   if(!raw || typeof raw !== 'object') return {};
+   const out = {};
+-  for(const key of ['hb', 'crp', 'wcc', 'creatinine', 'platelets', 'esr', 'urea', 'sodium', 'potassium', 'ptinr', 'rbs']){
++  for(const key of KNOWN_LAB_KEYS){
+     const val = raw[key];
+     if(val === undefined || val === null) continue;
+     const str = String(val).trim();
+     if(str && str.toLowerCase() !== 'null') out[key] = str;
+   }
+   return out;
+ }
+ 
++const OTHER_LABS_MAX = 12;
++const OTHER_LAB_NAME_MAX = 40;
++const OTHER_LAB_VALUE_MAX = 20;
++
++/** Harvest analytes the AI read that aren't in the known panel.
++ *  `raw` is the whole AI response object: unknown keys inside raw.labs
++ *  plus entries of raw.otherLabs ([{name, value}]). Capture-don't-drop. */
++export function extractOtherLabs(raw){
++  const out = [];
++  const seen = new Set();
++  const push = (name, value) => {
++    const n = String(name ?? '').trim().slice(0, OTHER_LAB_NAME_MAX);
++    const v = String(value ?? '').trim().slice(0, OTHER_LAB_VALUE_MAX);
++    if(!n || !v || v.toLowerCase() === 'null') return;
++    const dedupeKey = n.toLowerCase();
++    if(seen.has(dedupeKey) || out.length >= OTHER_LABS_MAX) return;
++    seen.add(dedupeKey);
++    out.push({ name: n, value: v });
++  };
++  if(!raw || typeof raw !== 'object') return out;
++  if(raw.labs && typeof raw.labs === 'object'){
++    for(const [k, v] of Object.entries(raw.labs)){
++      if(!KNOWN_LAB_KEYS.includes(k)) push(k, v);
++    }
++  }
++  if(Array.isArray(raw.otherLabs)){
++    for(const entry of raw.otherLabs){
++      if(entry && typeof entry === 'object') push(entry.name, entry.value);
++    }
++  }
++  return out;
++}
++
+ export function mergeLabs(primary, fallback){
+-  return Object.assign({}, fallback || {}, primary || {});
++  const merged = Object.assign({}, fallback || {}, primary || {});
++  const pOther = Array.isArray(primary?.otherLabs) ? primary.otherLabs : [];
++  const fOther = Array.isArray(fallback?.otherLabs) ? fallback.otherLabs : [];
++  if(pOther.length || fOther.length){
++    const seen = new Set();
++    const union = [];
++    for(const e of [...pOther, ...fOther]){
++      if(!e || !e.name) continue;
++      const k = String(e.name).toLowerCase();
++      if(seen.has(k)) continue;
++      seen.add(k);
++      union.push(e);
++    }
++    merged.otherLabs = union;
++  }else{
++    delete merged.otherLabs;
++  }
++  return merged;
+ }
+diff --git a/public/app.js b/public/app.js
+index 40ef9a2..e85a0c9 100644
+--- a/public/app.js
++++ b/public/app.js
+@@ -11,20 +11,21 @@
+ let patients = [];          // in-memory cache of NON-deleted patients, for rendering
+ let currentFilter = "all";
+ const STATUS_LABELS = { preop:'Pre-op', conservative:'Conservative', postop:'Post-op', fordischarge:'For discharge' };
+ const STATUS_CYCLE = ['preop', 'conservative', 'postop', 'fordischarge'];
+ let openCardId = null;
+ let editingPatientId = null; // null = adding new
+ let modalWorkingData = null; // in-memory draft while add/edit modal is open
+ let modalSuppressAutoTemplate = false; // user removed milestones — don't refill on save
+ let modalSmartPasteUsed = false; // AI admission fill — don't auto-apply milestone templates
+ let modalLabReportDate = null; // set by lab-photo extraction when the report's own date differs from today
++let modalPendingOtherLabs = []; // AI-read analytes outside the known panel, pending doctor review
+ let pendingImageSlot = null;  // {type: 'preop'|'postop'|'followup'}
+ let modalPendingImages = [];  // { id, dataURL, type } — staged X-rays before modal save
+ let viewingImageContext = null; // { patientId, imgId }
+ // X-ray viewer zoom/pan state (pinch-zoom, wheel-zoom, double-tap). Reset
+ // whenever a different image is shown (see resetImgViewerZoom) so zoom never
+ // carries over between X-rays.
+ let ivScale = 1, ivPanX = 0, ivPanY = 0;
+ const IV_MIN_SCALE = 1, IV_MAX_SCALE = 4;
+ // The image's actual on-screen rect at rest (scale 1, no pan) — captured in
+ // resetImgViewerZoom(), the one moment the transform is guaranteed clear.
+@@ -89,21 +90,25 @@ const LAB_SPEC = {
+   hb:         { unit: 'g/dL',        low: 12,    siLow: 100,   siIfAbove: 25 },
+   crp:        { unit: 'mg/L',        high: 10 },
+   wcc:        { unit: 'cells/cu.mm', high: 11000, siHigh: 11, siIfBelow: 100 },
+   creatinine: { unit: 'mg/dL',       high: 1.3,  siHigh: 120,  siIfAbove: 20 },
+   platelets:  { unit: 'cells/cu.mm', low: 150000 },
+   esr:        { unit: 'mm/hr',       high: 20 },
+   urea:       { unit: 'mg/dL',       high: 40 },
+   sodium:     { unit: 'mEq/L',       low: 135,   high: 145 },
+   potassium:  { unit: 'mEq/L',       low: 3.5,   high: 5.5 },
+   ptinr:      { unit: '',            high: 1.5 },
+-  rbs:        { unit: 'mg/dL',       low: 70,    high: 200 }
++  rbs:        { unit: 'mg/dL',       low: 70,    high: 200 },
++  calcium:    { unit: 'mg/dL',       low: 8.5,   high: 10.5 },
++  phosphate:  { unit: 'mg/dL',       low: 2.5,   high: 4.5 },
++  alp:        { unit: 'U/L',         high: 120 },
++  albumin:    { unit: 'g/dL',        low: 3.5 }
+ };
+ const PLAN_HISTORY_MAX = 14;
+ const FULL_RECONCILE_INTERVAL_MS = 5 * 60 * 1000; // periodic full reconcile
+ let idb = null;
+ let wardMeta = { handoverNote: '', defaultUnit: '', defaultOtDoctors: [...DEFAULT_OT_DOCTORS], pgRoster: [], presentedToday: { date: '', ids: [] }, updatedAt: 0 };
+ let syncing = false;
+ let presentationUnpresentedOnly = localStorage.getItem(LS_PRESENT_UNPRESENTED) === '1';
+ let presentationReadAloud = localStorage.getItem(LS_READ_ALOUD) === '1';
+ // Presentation mode's own type scale is already larger than the everyday
+ // ward list, but that was sized for a phone/tablet at arm's length — read
+@@ -954,20 +959,30 @@ function bindAiEvents(){
+     }
+ 
+     const labPhotoBtn = e.target.closest('#labPhotoBtn');
+     if(labPhotoBtn){
+       e.stopPropagation();
+       e.preventDefault();
+       document.getElementById('labPhotoFileInput')?.click();
+       return;
+     }
+ 
++    const otherLabRemove = e.target.closest('.other-lab-remove');
++    if(otherLabRemove){
++      const idx = Number(otherLabRemove.dataset.otherLabIdx);
++      if(!Number.isNaN(idx)){
++        modalPendingOtherLabs.splice(idx, 1);
++        renderOtherLabsChips();
++      }
++      return;
++    }
++
+     const scribeBtn = e.target.closest('[data-scribe]');
+     if(scribeBtn){
+       e.stopPropagation();
+       e.preventDefault();
+       if(!canUseAi()){
+         showToast('AI not available — check server key or connection');
+         return;
+       }
+       openScribeModal(scribeBtn.dataset.patientId);
+       return;
+@@ -1284,32 +1299,62 @@ function applySmartPasteLabs(labs){
+     ['hb', 'f_lab_hb'],
+     ['crp', 'f_lab_crp'],
+     ['wcc', 'f_lab_wcc'],
+     ['creatinine', 'f_lab_creatinine'],
+     ['platelets', 'f_lab_platelets'],
+     ['esr', 'f_lab_esr'],
+     ['urea', 'f_lab_urea'],
+     ['sodium', 'f_lab_sodium'],
+     ['potassium', 'f_lab_potassium'],
+     ['ptinr', 'f_lab_ptinr'],
+-    ['rbs', 'f_lab_rbs']
++    ['rbs', 'f_lab_rbs'],
++    ['calcium', 'f_lab_calcium'],
++    ['phosphate', 'f_lab_phosphate'],
++    ['alp', 'f_lab_alp'],
++    ['albumin', 'f_lab_albumin']
+   ];
+   for(const [key, id] of pairs){
+     if(!labs[key]) continue;
+     const el = document.getElementById(id);
+     if(!el) continue;
+     el.value = labs[key];
+     filled++;
+   }
+   return filled;
+ }
+ 
++function renderOtherLabsChipsHTML(){
++  if(!modalPendingOtherLabs.length) return '';
++  const chips = modalPendingOtherLabs.map((e, i) =>
++    `<span class="other-lab-chip">${escapeHTML(e.name)} ${escapeHTML(e.value)}` +
++    `<button type="button" class="other-lab-remove" data-other-lab-idx="${i}" aria-label="Remove ${escapeHTML(e.name)}">×</button></span>`
++  ).join('');
++  return `<div class="form-hint">Also on report (not trended):</div>${chips}`;
++}
++
++function renderOtherLabsChips(){
++  const el = document.getElementById('otherLabsChips');
++  if(el) el.innerHTML = renderOtherLabsChipsHTML();
++}
++
++/** Merge AI-read extras into pending state; case-insensitive by name, incoming value wins. */
++function mergePendingOtherLabs(incoming){
++  if(!Array.isArray(incoming)) return;
++  for(const e of incoming){
++    if(!e || !e.name || !e.value) continue;
++    const idx = modalPendingOtherLabs.findIndex(x => x.name.toLowerCase() === String(e.name).toLowerCase());
++    if(idx >= 0) modalPendingOtherLabs[idx] = { name: modalPendingOtherLabs[idx].name, value: String(e.value) };
++    else if(modalPendingOtherLabs.length < 12) modalPendingOtherLabs.push({ name: String(e.name), value: String(e.value) });
++  }
++  renderOtherLabsChips();
++}
++
+ function applySmartPasteAntibiotics(courses){
+   if(!Array.isArray(courses) || !courses.length) return 0;
+   const d = getWorkingData();
+   const startDefault = document.getElementById('f_admissionDate')?.value || d.admissionDate || todayISO();
+   d.antibioticCourses = courses.map(c => blankAntibioticCourse(d, {
+     name: c.name || '',
+     days: parseTherapyDays(c.days),
+     start: c.start || startDefault
+   }));
+   setWorkingData(d);
+@@ -1589,33 +1634,37 @@ async function handleLabPhotoSelected(file){
+   }
+   if(!canUseAi()){
+     showToast('AI not available — check server key or connection');
+     return 0;
+   }
+   const btn = document.getElementById('labPhotoBtn');
+   setAiButtonBusy(btn, true);
+   try{
+     const raw = await fileToDataURL(file);
+     const compressed = await compressImage(raw);
+-    const { labs, reportDate } = await callAi('parse-labs-image', { image: compressed });
++    const { labs, otherLabs, reportDate } = await callAi('parse-labs-image', { image: compressed });
+     const filled = applySmartPasteLabs(labs);
++    mergePendingOtherLabs(otherLabs);
+     if(reportDate && reportDate !== todayISO()){
+       const useReportDate = await showConfirm(
+         'Use report date?',
+         `This report is dated ${reportDate} — use that date for this lab entry instead of today?`,
+         { confirmLabel: 'Use report date' }
+       );
+       setModalLabReportDate(useReportDate ? reportDate : null);
+     }else{
+       setModalLabReportDate(null);
+     }
+-    showToast(filled ? `Filled ${filled} field${filled > 1 ? 's' : ''} — review before saving` : 'Nothing recognisable in that photo');
++    const extraCount = Array.isArray(otherLabs) ? otherLabs.length : 0;
++    showToast(filled || extraCount
++      ? `Filled ${filled} field${filled === 1 ? '' : 's'}${extraCount ? ` + ${extraCount} other lab${extraCount === 1 ? '' : 's'}` : ''} — review before saving`
++      : 'Nothing recognisable in that photo');
+     return filled;
+   }catch(err){
+     showToast(err.message || 'Could not read that lab report photo');
+     return 0;
+   }finally{
+     setAiButtonBusy(btn, false);
+   }
+ }
+ 
+ /* ---------------- sync engine ---------------- */
+@@ -2703,47 +2752,52 @@ function labValueClass(key, val){
+     const compare = n < spec.siIfBelow ? n * 1000 : n;
+     return compare > limit ? 'lab-high' : '';
+   }
+   if(key === 'creatinine'){
+     const limit = n > spec.siIfAbove ? spec.siHigh : spec.high;
+     return n > limit ? 'lab-high' : '';
+   }
+   if(key === 'crp'){
+     return n > spec.high ? 'lab-high' : '';
+   }
+-  if(key === 'platelets'){
++  if(key === 'platelets' || key === 'albumin'){
+     return n < spec.low ? 'lab-low' : '';
+   }
+-  if(key === 'esr' || key === 'urea' || key === 'ptinr'){
++  if(key === 'esr' || key === 'urea' || key === 'ptinr' || key === 'alp'){
+     return n > spec.high ? 'lab-high' : '';
+   }
+-  if(key === 'sodium' || key === 'potassium' || key === 'rbs'){
++  if(key === 'sodium' || key === 'potassium' || key === 'rbs' || key === 'calcium' || key === 'phosphate'){
+     if(spec.low != null && n < spec.low) return 'lab-low';
+     if(spec.high != null && n > spec.high) return 'lab-high';
+     return '';
+   }
+   return '';
+ }
+ 
+ function formatLabWithUnit(key, val){
+   if(val === '' || val == null) return '';
+   const unit = LAB_SPEC[key]?.unit || '';
+   return unit ? `${val} ${unit}` : String(val);
+ }
+ 
+-function formatLabsLine(p){
++function formatLabsLine(p, opts){
+   const labs = p.labs || {};
+   const parts = [];
+   if(labs.hb) parts.push(`Hb ${formatLabWithUnit('hb', labs.hb)}`);
+   if(labs.crp) parts.push(`CRP ${formatLabWithUnit('crp', labs.crp)}`);
+   if(labs.wcc) parts.push(`TLC ${formatLabWithUnit('wcc', labs.wcc)}`);
+   if(labs.creatinine) parts.push(`Cr ${formatLabWithUnit('creatinine', labs.creatinine)}`);
++  if(opts?.includeOtherLabs !== false){
++    for(const e of (labs.otherLabs || [])){
++      if(e && e.name && e.value) parts.push(`${e.name} ${e.value}`);
++    }
++  }
+   return parts.join(' · ');
+ }
+ 
+ const LABS_HISTORY_MAX = 60;
+ 
+ /**
+  * Appends/updates today's labsHistory entry without touching p.labs itself
+  * (every existing read of p.labs stays a simple "current value" lookup).
+  * `patch` may be a partial set of keys (inline single-value edit) or the
+  * full LAB_SPEC key set (patient-detail modal save).
+@@ -2761,21 +2815,22 @@ function upsertLabsHistoryEntry(p, patch, date){
+     p.labsHistory.sort((a, b) => String(a.date).localeCompare(String(b.date)));
+     p.labsHistory = p.labsHistory.slice(-LABS_HISTORY_MAX);
+   }
+ }
+ 
+ /* ---------------- labs trend sparklines ---------------- */
+ 
+ const LAB_TREND_LABELS = {
+   hb: 'Hb', crp: 'CRP', wcc: 'TLC', creatinine: 'Creatinine',
+   platelets: 'Platelets', esr: 'ESR', urea: 'Urea',
+-  sodium: 'Na', potassium: 'K', ptinr: 'PT/INR', rbs: 'RBS'
++  sodium: 'Na', potassium: 'K', ptinr: 'PT/INR', rbs: 'RBS',
++  calcium: 'Ca', phosphate: 'PO4', alp: 'ALP', albumin: 'Albumin'
+ };
+ const LAB_TREND_W = 130;
+ const LAB_TREND_H = 34;
+ const LAB_TREND_PAD = 4;
+ 
+ function labTrendThreshold(key){
+   const spec = LAB_SPEC[key];
+   if(!spec) return null;
+   if(key === 'hb') return spec.low;
+   return spec.high;
+@@ -4549,21 +4604,21 @@ function renderStartHereSection(items){
+ /* ---------------- flags / derived info ---------------- */
+ 
+ function getPatientFlags(p){
+   const flags = [];
+   const pendingInv = (p.investigations||[]).filter(i=>i.status==='pending');
+   const abnormalInv = (p.investigations||[]).filter(i=>i.status==='abnormal');
+   const pendingFit = (p.fitness||[]).filter(f=>f.status==='pending');
+   const duePostOp = getDuePostOpChecks(p);
+   const overduePostOp = getOverduePostOpChecks(p);
+   getTherapyBadges(p).forEach(b=> flags.push({ type: b.type === 'info' ? 'good' : 'warn', text: b.label }));
+-  const labsLine = formatLabsLine(p);
++  const labsLine = formatLabsLine(p, { includeOtherLabs: false });
+   if(labsLine){
+     const labs = p.labs || {};
+     const abnormal = ['hb','crp','wcc','creatinine'].some(k => labValueClass(k, labs[k]));
+     if(abnormal) flags.push({ type: 'warn', text: labsLine });
+   }
+   if((p.handoverPin||'').trim()) flags.push({ type: 'warn', text: 'Pin: ' + p.handoverPin.trim() });
+   if(pendingInv.length) flags.push({type:'bad', text:`${pendingInv.length} investigation${pendingInv.length>1?'s':''} pending`});
+   if(abnormalInv.length) flags.push({type:'warn', text:`${abnormalInv.length} abnormal result${abnormalInv.length>1?'s':''}`});
+   if(pendingFit.length) flags.push({type:'bad', text:`${pendingFit.map(f=>f.dept).join(', ')} pending`});
+   if(overduePostOp.length) flags.push({type:'bad', text:`${overduePostOp.length} milestone${overduePostOp.length>1?'s':''} overdue`});
+@@ -6109,20 +6164,23 @@ function renderDischarged(){
+ function openPatientModal(p){
+   // Treat as edit only when this id is already on the ward list.
+   // Clones use blankPatient() (new id) and must stay "Add" so Smart fill shows.
+   const isExisting = !!(p && p.id && patients.some(x => x.id === p.id));
+   editingPatientId = isExisting ? p.id : null;
+   modalWorkingData = p ? JSON.parse(JSON.stringify(p)) : blankPatient();
+   modalPendingImages = [];
+   modalSuppressAutoTemplate = false;
+   modalSmartPasteUsed = false;
+   modalLabReportDate = null;
++  modalPendingOtherLabs = Array.isArray(modalWorkingData?.labs?.otherLabs)
++    ? modalWorkingData.labs.otherLabs.map(e => ({ name: e.name, value: e.value }))
++    : [];
+   normalizeAntibioticCourses(modalWorkingData);
+   if(!isExisting){
+     const ini = getPgInitials();
+     if(ini && !modalWorkingData.assignedPg) modalWorkingData.assignedPg = ini;
+     const defaultUnit = getDefaultUnit();
+     if(defaultUnit && !modalWorkingData.unit) modalWorkingData.unit = defaultUnit;
+     // Ensure AI status is fresh so Smart fill is ready on desktop/FAB open.
+     void refreshAiStatus();
+   }
+   document.getElementById('modalTitle').textContent = isExisting ? 'Edit patient' : 'Add patient';
+@@ -6179,20 +6237,21 @@ async function closePatientModal(opts = {}){
+   }
+   stopVoicePlanDictation();
+   document.getElementById('patientModal').classList.remove('active');
+   editingPatientId = null;
+   modalWorkingData = null;
+   modalBaselineJson = null;
+   modalPendingImages = [];
+   modalSuppressAutoTemplate = false;
+   modalSmartPasteUsed = false;
+   modalLabReportDate = null;
++  modalPendingOtherLabs = [];
+ }
+ 
+ /** Read checklist rows from the modal DOM into working data (source of truth on save). */
+ function flushChecklistsFromModal(d){
+   const postEl = document.getElementById('postOpList');
+   if(postEl){
+     const byId = new Map((d.postOpChecks || []).map(c => [c.id, c]));
+     const next = [];
+     postEl.querySelectorAll('.checklist-edit-row[data-check-id]').forEach(row => {
+       const id = row.dataset.checkId;
+@@ -6339,21 +6398,26 @@ function renderModalForm(d){
+         <div><span>CRP (mg/L)</span><input id="f_lab_crp" inputmode="decimal" placeholder="e.g. 5" value="${escapeHTML((d.labs||{}).crp||'')}" class="${labValueClass('crp', (d.labs||{}).crp)}"></div>
+         <div><span>TLC (cells/cu.mm)</span><input id="f_lab_wcc" inputmode="decimal" placeholder="e.g. 8500" value="${escapeHTML((d.labs||{}).wcc||'')}" class="${labValueClass('wcc', (d.labs||{}).wcc)}"></div>
+         <div><span>Creatinine (mg/dL)</span><input id="f_lab_creatinine" inputmode="decimal" placeholder="e.g. 0.9" value="${escapeHTML((d.labs||{}).creatinine||'')}" class="${labValueClass('creatinine', (d.labs||{}).creatinine)}"></div>
+         <div><span>Platelets (cells/cu.mm)</span><input id="f_lab_platelets" inputmode="decimal" placeholder="e.g. 250000" value="${escapeHTML((d.labs||{}).platelets||'')}" class="${labValueClass('platelets', (d.labs||{}).platelets)}"></div>
+         <div><span>ESR (mm/hr)</span><input id="f_lab_esr" inputmode="decimal" placeholder="e.g. 15" value="${escapeHTML((d.labs||{}).esr||'')}" class="${labValueClass('esr', (d.labs||{}).esr)}"></div>
+         <div><span>Urea (mg/dL)</span><input id="f_lab_urea" inputmode="decimal" placeholder="e.g. 28" value="${escapeHTML((d.labs||{}).urea||'')}" class="${labValueClass('urea', (d.labs||{}).urea)}"></div>
+         <div><span>Sodium (mEq/L)</span><input id="f_lab_sodium" inputmode="decimal" placeholder="e.g. 138" value="${escapeHTML((d.labs||{}).sodium||'')}" class="${labValueClass('sodium', (d.labs||{}).sodium)}"></div>
+         <div><span>Potassium (mEq/L)</span><input id="f_lab_potassium" inputmode="decimal" placeholder="e.g. 4.2" value="${escapeHTML((d.labs||{}).potassium||'')}" class="${labValueClass('potassium', (d.labs||{}).potassium)}"></div>
+         <div><span>PT/INR</span><input id="f_lab_ptinr" inputmode="decimal" placeholder="e.g. 1.1" value="${escapeHTML((d.labs||{}).ptinr||'')}" class="${labValueClass('ptinr', (d.labs||{}).ptinr)}"></div>
+         <div><span>RBS (mg/dL)</span><input id="f_lab_rbs" inputmode="decimal" placeholder="e.g. 110" value="${escapeHTML((d.labs||{}).rbs||'')}" class="${labValueClass('rbs', (d.labs||{}).rbs)}"></div>
++        <div><span>Calcium (mg/dL)</span><input id="f_lab_calcium" inputmode="decimal" placeholder="e.g. 9.2" value="${escapeHTML((d.labs||{}).calcium||'')}" class="${labValueClass('calcium', (d.labs||{}).calcium)}"></div>
++        <div><span>Phosphate (mg/dL)</span><input id="f_lab_phosphate" inputmode="decimal" placeholder="e.g. 3.4" value="${escapeHTML((d.labs||{}).phosphate||'')}" class="${labValueClass('phosphate', (d.labs||{}).phosphate)}"></div>
++        <div><span>ALP (U/L)</span><input id="f_lab_alp" inputmode="decimal" placeholder="e.g. 90" value="${escapeHTML((d.labs||{}).alp||'')}" class="${labValueClass('alp', (d.labs||{}).alp)}"></div>
++        <div><span>Albumin (g/dL)</span><input id="f_lab_albumin" inputmode="decimal" placeholder="e.g. 4.0" value="${escapeHTML((d.labs||{}).albumin||'')}" class="${labValueClass('albumin', (d.labs||{}).albumin)}"></div>
+       </div>
++      <div id="otherLabsChips">${renderOtherLabsChipsHTML()}</div>
+       ${renderLabsTrendPanel(d)}
+     </div>
+ 
+     <div class="form-row">
+       <label>Procedure done</label>
+       <input id="f_procedure" value="${escapeHTML(d.procedure)}" placeholder="e.g. ORIF with plate and screws — radius">
+     </div>
+     <div class="form-row two">
+       <div><label>Surgeon</label><input id="f_surgeon" value="${escapeHTML(d.surgeon)}" placeholder="Operating surgeon"></div>
+       <div><label>Implant details</label><input id="f_implant" value="${escapeHTML(d.implant)}" placeholder="e.g. 3.5mm LCP, 6 holes"></div>
+@@ -7178,29 +7242,35 @@ async function savePatientFromModal(){
+       crp: document.getElementById('f_lab_crp')?.value.trim() || '',
+       wcc: document.getElementById('f_lab_wcc')?.value.trim() || '',
+       creatinine: document.getElementById('f_lab_creatinine')?.value.trim() || '',
+       platelets: document.getElementById('f_lab_platelets')?.value.trim() || '',
+       esr: document.getElementById('f_lab_esr')?.value.trim() || '',
+       urea: document.getElementById('f_lab_urea')?.value.trim() || '',
+       sodium: document.getElementById('f_lab_sodium')?.value.trim() || '',
+       potassium: document.getElementById('f_lab_potassium')?.value.trim() || '',
+       ptinr: document.getElementById('f_lab_ptinr')?.value.trim() || '',
+       rbs: document.getElementById('f_lab_rbs')?.value.trim() || '',
++      calcium: document.getElementById('f_lab_calcium')?.value.trim() || '',
++      phosphate: document.getElementById('f_lab_phosphate')?.value.trim() || '',
++      alp: document.getElementById('f_lab_alp')?.value.trim() || '',
++      albumin: document.getElementById('f_lab_albumin')?.value.trim() || '',
+       updatedAt: getModalLabReportDate() || todayISO()
+     };
+-    const hasAnyLabValue = ['hb', 'crp', 'wcc', 'creatinine', 'platelets', 'esr', 'urea', 'sodium', 'potassium', 'ptinr', 'rbs']
++    if(modalPendingOtherLabs.length) d.labs.otherLabs = modalPendingOtherLabs.slice();
++    const hasAnyLabValue = ['hb', 'crp', 'wcc', 'creatinine', 'platelets', 'esr', 'urea', 'sodium', 'potassium', 'ptinr', 'rbs', 'calcium', 'phosphate', 'alp', 'albumin']
+       .some(key => d.labs[key]);
+     if(hasAnyLabValue){
+       upsertLabsHistoryEntry(d, {
+         hb: d.labs.hb, crp: d.labs.crp, wcc: d.labs.wcc, creatinine: d.labs.creatinine,
+         platelets: d.labs.platelets, esr: d.labs.esr, urea: d.labs.urea,
+-        sodium: d.labs.sodium, potassium: d.labs.potassium, ptinr: d.labs.ptinr, rbs: d.labs.rbs
++        sodium: d.labs.sodium, potassium: d.labs.potassium, ptinr: d.labs.ptinr, rbs: d.labs.rbs,
++        calcium: d.labs.calcium, phosphate: d.labs.phosphate, alp: d.labs.alp, albumin: d.labs.albumin
+       }, d.labs.updatedAt);
+     }
+     d.procedure = document.getElementById('f_procedure').value.trim();
+     d.surgeon = document.getElementById('f_surgeon').value.trim();
+     d.implant = document.getElementById('f_implant').value.trim();
+     d.payer = document.getElementById('f_payer')?.value.trim() || '';
+     d.anaesthesia = document.getElementById('f_anaesthesia')?.value.trim() || '';
+     d.otDoctors = parseOtDoctorsText(document.getElementById('f_otDoctors')?.value || '');
+     d.cArmRequired = !!document.getElementById('f_cArmRequired')?.checked;
+     d.arthroMonitorRequired = !!document.getElementById('f_arthroMonitorRequired')?.checked;
+diff --git a/public/index.html b/public/index.html
+index 8c223be..d148c57 100644
+--- a/public/index.html
++++ b/public/index.html
+@@ -386,20 +386,22 @@
+     font-size:12px;color:var(--warn);margin-top:6px;font-weight:600;
+     background:linear-gradient(90deg,var(--warn-bg),transparent);border-left:3px solid var(--warn);
+     padding:6px 10px;border-radius:0 var(--radius-sm) var(--radius-sm) 0;
+   }
+   .bulk-selected{outline:2px solid var(--accent);outline-offset:1px;}
+   .bulk-check{margin-top:4px;flex:none;}
+   .labs-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;}
+   .labs-grid input{width:100%;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink);}
+   .labs-grid input.lab-low{border-color:var(--bad);background:var(--bad-bg);}
+   .labs-grid input.lab-high{border-color:var(--warn);background:var(--warn-bg);}
++  .other-lab-chip{display:inline-flex;align-items:center;gap:4px;margin:4px 6px 0 0;padding:2px 8px;border:1px solid var(--line);border-radius:12px;background:var(--card);color:var(--ink);font-size:12px;}
++  .other-lab-chip .other-lab-remove{border:none;background:none;color:var(--muted);cursor:pointer;font-size:14px;line-height:1;padding:0 2px;}
+   .labs-trend-panel{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:8px;}
+   .lab-trend-item{min-width:0;}
+   .lab-trend-label{
+     display:flex;align-items:baseline;justify-content:space-between;gap:4px;
+     font-size:10.5px;color:var(--ink-soft);margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+   }
+   .lab-trend-latest{font-size:11px;font-weight:700;}
+   .lab-trend-svg{display:block;width:100%;height:auto;}
+   .lab-trend-empty{font-size:10.5px;color:var(--ink-soft);font-style:italic;grid-column:1/-1;padding:4px 0;}
+   .more-menu-wrap{position:relative;}
+diff --git a/server.js b/server.js
+index 7195d1a..ae8d6c0 100644
+--- a/server.js
++++ b/server.js
+@@ -589,22 +589,22 @@ async function handleApi(req, res, pathname){
+         if(typeof body.transcript !== 'string' || !body.transcript.trim()){
+           return sendJSON(res, 400, { error: 'transcript required' });
+         }
+         const result = await scribeRoundNote(body.patient, body.transcript);
+         return sendJSON(res, 200, { result });
+       }
+       if(pathname === '/api/ai/parse-labs-image'){
+         if(typeof body.image !== 'string' || !body.image.startsWith('data:image/')){
+           return sendJSON(res, 400, { error: 'lab report image required' });
+         }
+-        const { labs, reportDate } = await parseLabsFromImage(body.image);
+-        return sendJSON(res, 200, { labs, reportDate });
++        const { labs, otherLabs, reportDate } = await parseLabsFromImage(body.image);
++        return sendJSON(res, 200, { labs, otherLabs, reportDate });
+       }
+       return sendJSON(res, 404, { error: 'Unknown AI endpoint' });
+     }catch(err){
+       const status = err.statusCode || 502;
+       return sendJSON(res, status, { error: err.message || 'AI request failed' });
+     }
+   }
+ 
+   if(pathname === '/api/import' && req.method === 'POST'){
+     const body = await readBody(req) || {};
+diff --git a/tests/ai-parse-labs-image.test.js b/tests/ai-parse-labs-image.test.js
+index 4b1662b..1b00882 100644
+--- a/tests/ai-parse-labs-image.test.js
++++ b/tests/ai-parse-labs-image.test.js
+@@ -58,11 +58,50 @@ describe('parseLabsFromImage', () => {
+       json: async () => ({
+         choices: [{ message: { content: JSON.stringify({ labs: {}, reportDate: null }) } }]
+       })
+     }));
+     t.after(restore);
+ 
+     const result = await parseLabsFromImage('data:image/jpeg;base64,AAAA');
+     assert.deepEqual(result.labs, {});
+     assert.equal(result.reportDate, null);
+   });
++
++  test('captures unrecognized analytes as otherLabs instead of dropping them', async (t) => {
++    const restore = mockOpenAi(async () => ({
++      ok: true,
++      json: async () => ({
++        choices: [{ message: { content: JSON.stringify({
++          labs: { hb: '11.2', uricAcid: '8.2' },
++          otherLabs: [{ name: 'HbA1c', value: '6.1' }],
++          reportDate: null
++        }) } }]
++      })
++    }));
++    t.after(restore);
++
++    const result = await parseLabsFromImage('data:image/jpeg;base64,AAAA');
++    assert.equal(result.labs.hb, '11.2');
++    assert.equal('uricAcid' in result.labs, false);
++    assert.deepEqual(result.otherLabs, [
++      { name: 'uricAcid', value: '8.2' },
++      { name: 'HbA1c', value: '6.1' }
++    ]);
++  });
++
++  test('accepts bone-profile keys as first-class labs', async (t) => {
++    const restore = mockOpenAi(async () => ({
++      ok: true,
++      json: async () => ({
++        choices: [{ message: { content: JSON.stringify({
++          labs: { calcium: '9.1', phosphate: '3.2', alp: '95', albumin: '3.9' },
++          reportDate: null
++        }) } }]
++      })
++    }));
++    t.after(restore);
++
++    const result = await parseLabsFromImage('data:image/jpeg;base64,AAAA');
++    assert.deepEqual(result.labs, { calcium: '9.1', phosphate: '3.2', alp: '95', albumin: '3.9' });
++    assert.deepEqual(result.otherLabs, []);
++  });
+ });
+diff --git a/tests/clinical-normalize.test.js b/tests/clinical-normalize.test.js
+index 31a5bed..7a81bae 100644
+--- a/tests/clinical-normalize.test.js
++++ b/tests/clinical-normalize.test.js
+@@ -1,21 +1,24 @@
+ import { test, describe } from 'node:test';
+ import assert from 'node:assert/strict';
+ import {
+   normalizePersonName,
+   normalizeDiagnosis,
+   normalizeProcedure,
+   normalizeSurgeon,
+   extractLabsFromText,
+   sanitizeAntibioticCourses,
+   sanitizeLabs,
+-  normalizePatientClinicalFields
++  normalizePatientClinicalFields,
++  extractOtherLabs,
++  KNOWN_LAB_KEYS,
++  mergeLabs
+ } from '../clinical-normalize.js';
+ 
+ describe('normalizePersonName', () => {
+   test('title-cases and uppercases initials', () => {
+     assert.equal(normalizePersonName('shivappa ss'), 'Shivappa SS');
+   });
+ });
+ 
+ describe('normalizeDiagnosis', () => {
+   test('fixes spine levels and sides', () => {
+@@ -89,10 +92,83 @@ describe('normalizePatientClinicalFields', () => {
+       name: 'shivappa ss',
+       diagnosis: 'l3 fracture left femur',
+       procedure: 'orif femur'
+     });
+     assert.equal(out.name, 'Shivappa SS');
+     assert.match(out.diagnosis, /L3/);
+     assert.match(out.diagnosis, /Left/);
+     assert.match(out.procedure, /ORIF/);
+   });
+ });
++
++describe('sanitizeLabs — bone profile keys', () => {
++  test('accepts calcium, phosphate, alp, albumin', () => {
++    const out = sanitizeLabs({ calcium: '9.1', phosphate: '3.2', alp: '95', albumin: '3.9' });
++    assert.deepEqual(out, { calcium: '9.1', phosphate: '3.2', alp: '95', albumin: '3.9' });
++  });
++
++  test('KNOWN_LAB_KEYS has exactly the 15 panel keys', () => {
++    assert.deepEqual([...KNOWN_LAB_KEYS].sort(), [
++      'albumin','alp','calcium','creatinine','crp','esr','hb','phosphate',
++      'platelets','potassium','ptinr','rbs','sodium','urea','wcc'
++    ]);
++  });
++});
++
++describe('extractOtherLabs', () => {
++  test('harvests unknown keys from labs object and explicit otherLabs array', () => {
++    const out = extractOtherLabs({
++      labs: { hb: '11', uricAcid: '8.2' },
++      otherLabs: [{ name: 'HbA1c', value: '6.1' }]
++    });
++    assert.deepEqual(out, [
++      { name: 'uricAcid', value: '8.2' },
++      { name: 'HbA1c', value: '6.1' }
++    ]);
++  });
++
++  test('caps lengths and entry count, dedupes case-insensitively, drops empties', () => {
++    const many = Array.from({ length: 20 }, (_, i) => ({ name: `Lab${i}`, value: String(i) }));
++    const out = extractOtherLabs({ otherLabs: many });
++    assert.equal(out.length, 12);
++
++    const capped = extractOtherLabs({ otherLabs: [{ name: 'X'.repeat(60), value: 'Y'.repeat(30) }] });
++    assert.equal(capped[0].name.length, 40);
++    assert.equal(capped[0].value.length, 20);
++
++    const deduped = extractOtherLabs({ otherLabs: [
++      { name: 'Uric Acid', value: '8' },
++      { name: 'uric acid', value: '9' },
++      { name: '', value: '5' },
++      { name: 'Bilirubin', value: '' },
++      { name: 'Bilirubin', value: 'null' }
++    ]});
++    assert.deepEqual(deduped, [{ name: 'Uric Acid', value: '8' }]);
++  });
++
++  test('returns [] for malformed input', () => {
++    assert.deepEqual(extractOtherLabs(null), []);
++    assert.deepEqual(extractOtherLabs('junk'), []);
++    assert.deepEqual(extractOtherLabs({ otherLabs: 'junk', labs: 7 }), []);
++    assert.deepEqual(extractOtherLabs({ otherLabs: [null, 'x', 42] }), []);
++  });
++});
++
++describe('mergeLabs — otherLabs union', () => {
++  test('unions otherLabs by name, primary wins', () => {
++    const out = mergeLabs(
++      { hb: '11', otherLabs: [{ name: 'Uric Acid', value: '8.2' }] },
++      { crp: '5', otherLabs: [{ name: 'uric acid', value: '7.0' }, { name: 'HbA1c', value: '6.1' }] }
++    );
++    assert.equal(out.hb, '11');
++    assert.equal(out.crp, '5');
++    assert.deepEqual(out.otherLabs, [
++      { name: 'Uric Acid', value: '8.2' },
++      { name: 'HbA1c', value: '6.1' }
++    ]);
++  });
++
++  test('no otherLabs key when neither side has entries', () => {
++    const out = mergeLabs({ hb: '11' }, { crp: '5' });
++    assert.equal('otherLabs' in out, false);
++  });
++});
+diff --git a/tests/frontend-lab-photo-extraction.test.js b/tests/frontend-lab-photo-extraction.test.js
+index 1ed0442..8ca4302 100644
+--- a/tests/frontend-lab-photo-extraction.test.js
++++ b/tests/frontend-lab-photo-extraction.test.js
+@@ -8,21 +8,35 @@ import { loadFrontendEnv } from './helpers/frontend-env.js';
+ // window.eval() call aren't visible to functions defined in a separate
+ // eval() call (only window properties — i.e. function declarations and
+ // `var` — persist across calls), so app.js's reference to the bare
+ // identifier throws ReferenceError in this harness even though it works
+ // fine in a real browser (single script load, one shared scope). Any test
+ // that drives the modal open/close flow needs this redefined in app.js's
+ // own eval via initScript, the same workaround already established in
+ // tests/frontend-worklist.test.js for the equivalent `patients` binding.
+ const MODAL_FLOW_INIT_SCRIPT = [
+   'var CHECKLIST_CATEGORIES = ["nv","mobilization","imaging","antibiotics","drain","wound","other"];',
+-  'var CHECKLIST_STATUSES = ["pending","done","skipped","na"];'
++  'var CHECKLIST_STATUSES = ["pending","done","skipped","na"];',
++  // `patients` is a top-level `let` in app.js, so (per frontend-env.js's
++  // documented limitation) it never becomes a `window` property on its
++  // own. This getter is defined inside the same window.eval() call as
++  // app.js itself, so its closure captures the real top-level `patients`
++  // binding live — letting save-flow tests read back `window.patients`
++  // after calling savePatientFromModal(), the same trick already used
++  // above for CHECKLIST_CATEGORIES/CHECKLIST_STATUSES.
++  'Object.defineProperty(window, "patients", { get: function(){ return patients; }, configurable: true });',
++  // init() (which normally calls bindAiEvents() once at boot to wire up
++  // document-level click delegation for things like .other-lab-remove) is
++  // skipped entirely in this harness (__ORTHO_SKIP_AUTOINIT__). Call it here
++  // instead, in the same window.eval() scope as app.js, so tests that drive
++  // the modal's click-delegated controls work the same as in production.
++  'bindAiEvents();'
+ ].join('\n');
+ 
+ describe('labValueClass — expanded 11-field panel', () => {
+   test('flags low platelets', () => {
+     const { window } = loadFrontendEnv();
+     assert.equal(window.labValueClass('platelets', '120000'), 'lab-low');
+     assert.equal(window.labValueClass('platelets', '250000'), '');
+   });
+ 
+   test('flags high ESR, urea, and PT/INR', () => {
+@@ -232,10 +246,133 @@ describe('LAB_TREND_LABELS — expanded panel', () => {
+     const history = [
+       { date: '2026-07-17', hb: '10', crp: '5', wcc: '9000', creatinine: '0.8', platelets: '200000', esr: '15', urea: '30', sodium: '138', potassium: '4.0', ptinr: '1.0', rbs: '100' },
+       { date: '2026-07-18', hb: '11', crp: '6', wcc: '9500', creatinine: '0.9', platelets: '210000', esr: '16', urea: '32', sodium: '139', potassium: '4.1', ptinr: '1.1', rbs: '105' }
+     ];
+     const html = window.renderLabsTrendPanel({ labsHistory: history });
+     for(const label of ['Hb', 'CRP', 'TLC', 'Creatinine', 'Platelets', 'ESR', 'Urea', 'Na', 'K', 'PT/INR', 'RBS']){
+       assert.ok(html.includes(`>${label}<`), `missing trend sparkline label for ${label}`);
+     }
+   });
+ });
++
++describe('labValueClass — bone profile fields', () => {
++  test('flags both directions for calcium and phosphate', () => {
++    const { window } = loadFrontendEnv();
++    assert.equal(window.labValueClass('calcium', '7.9'), 'lab-low');
++    assert.equal(window.labValueClass('calcium', '11.2'), 'lab-high');
++    assert.equal(window.labValueClass('calcium', '9.4'), '');
++    assert.equal(window.labValueClass('phosphate', '2.1'), 'lab-low');
++    assert.equal(window.labValueClass('phosphate', '5.0'), 'lab-high');
++  });
++
++  test('flags high ALP and low albumin', () => {
++    const { window } = loadFrontendEnv();
++    assert.equal(window.labValueClass('alp', '300'), 'lab-high');
++    assert.equal(window.labValueClass('alp', '90'), '');
++    assert.equal(window.labValueClass('albumin', '2.9'), 'lab-low');
++    assert.equal(window.labValueClass('albumin', '4.1'), '');
++  });
++});
++
++describe('modal form — bone profile inputs', () => {
++  test('renders the four new inputs and saves them into labs + labsHistory', async () => {
++    const { window, document } = loadFrontendEnv({ initScript: MODAL_FLOW_INIT_SCRIPT });
++    window.openPatientModal(window.blankPatient());
++    for(const id of ['f_lab_calcium', 'f_lab_phosphate', 'f_lab_alp', 'f_lab_albumin']){
++      assert.ok(document.getElementById(id), `${id} must exist in the modal form`);
++    }
++    document.getElementById('f_name').value = 'Test Patient';
++    document.getElementById('f_lab_calcium').value = '9.1';
++    document.getElementById('f_lab_albumin').value = '3.9';
++    await window.savePatientFromModal();
++    const saved = window.patients.find(p => p.name === 'Test Patient');
++    assert.equal(saved.labs.calcium, '9.1');
++    assert.equal(saved.labs.albumin, '3.9');
++    const todayEntry = saved.labsHistory.find(h => h.date === saved.labs.updatedAt);
++    assert.equal(todayEntry.calcium, '9.1');
++    assert.equal(todayEntry.albumin, '3.9');
++  });
++});
++
++describe('otherLabs — capture-don\'t-drop chips', () => {
++  test('modal seeds pending otherLabs from the patient and renders removable chips', () => {
++    const { window, document } = loadFrontendEnv({ initScript: MODAL_FLOW_INIT_SCRIPT });
++    const p = window.blankPatient();
++    p.labs = { hb: '11', updatedAt: '2026-07-20', otherLabs: [
++      { name: 'Uric Acid', value: '8.2' },
++      { name: 'HbA1c', value: '6.1' }
++    ]};
++    window.openPatientModal(p);
++    const chips = document.querySelectorAll('#otherLabsChips .other-lab-chip');
++    assert.equal(chips.length, 2);
++    assert.match(chips[0].textContent, /Uric Acid/);
++    assert.match(chips[0].textContent, /8\.2/);
++    assert.ok(chips[0].querySelector('.other-lab-remove'), 'chip must have a remove control');
++  });
++
++  test('removing a chip drops it from pending state and the next save', async () => {
++    const { window, document } = loadFrontendEnv({ initScript: MODAL_FLOW_INIT_SCRIPT });
++    const p = window.blankPatient();
++    p.name = 'Chip Patient';
++    p.labs = { hb: '11', updatedAt: '2026-07-20', otherLabs: [
++      { name: 'Uric Acid', value: '8.2' },
++      { name: 'HbA1c', value: '6.1' }
++    ]};
++    window.openPatientModal(p);
++    document.querySelector('#otherLabsChips .other-lab-chip .other-lab-remove').click();
++    assert.equal(document.querySelectorAll('#otherLabsChips .other-lab-chip').length, 1);
++    await window.savePatientFromModal();
++    const saved = window.patients.find(x => x.name === 'Chip Patient');
++    // saved.labs.otherLabs is built by object literals inside app.js's own
++    // window.eval() scope, so it's an instance of *that* window's
++    // Array/Object — structurally identical to a plain Node-realm literal
++    // but not reference-equal at the prototype level, which deepEqual
++    // (aliased to deepStrictEqual under node:assert/strict) rejects.
++    // Cross-realm jsdom objects fail strict deepEqual; the JSON round-trip
++    // normalizes both sides to this realm's primitives — a different
++    // workaround from tests/frontend-milestones.test.js's approach there,
++    // which maps to primitive ids instead.
++    assert.deepEqual(JSON.parse(JSON.stringify(saved.labs.otherLabs)), [{ name: 'HbA1c', value: '6.1' }]);
++  });
++
++  test('empty otherLabs renders no chips container content and saves no key', async () => {
++    const { window, document } = loadFrontendEnv({ initScript: MODAL_FLOW_INIT_SCRIPT });
++    const p = window.blankPatient();
++    p.name = 'Plain Patient';
++    window.openPatientModal(p);
++    assert.equal(document.querySelectorAll('#otherLabsChips .other-lab-chip').length, 0);
++    await window.savePatientFromModal();
++    const saved = window.patients.find(x => x.name === 'Plain Patient');
++    assert.equal('otherLabs' in (saved.labs || {}), false);
++  });
++
++  test('photo extraction merges new extras into pending chips (dedupe by name, new value wins)', () => {
++    const { window, document } = loadFrontendEnv({ initScript: MODAL_FLOW_INIT_SCRIPT });
++    const p = window.blankPatient();
++    p.labs = { hb: '11', updatedAt: '2026-07-20', otherLabs: [{ name: 'Uric Acid', value: '7.0' }] };
++    window.openPatientModal(p);
++    window.mergePendingOtherLabs([{ name: 'uric acid', value: '8.2' }, { name: 'HbA1c', value: '6.1' }]);
++    const chips = [...document.querySelectorAll('#otherLabsChips .other-lab-chip')].map(c => c.textContent);
++    assert.equal(chips.length, 2);
++    assert.match(chips[0], /8\.2/);
++    assert.match(chips[1], /HbA1c/);
++  });
++
++  test('formatLabsLine appends otherLabs plainly after headline labs', () => {
++    const { window } = loadFrontendEnv();
++    const line = window.formatLabsLine({ labs: {
++      hb: '11', otherLabs: [{ name: 'Uric Acid', value: '8.2' }]
++    }});
++    assert.match(line, /Hb 11 g\/dL/);
++    assert.match(line, /Uric Acid 8\.2/);
++  });
++
++  test('warn flags exclude otherLabs even when a core lab is abnormal', () => {
++    const { window } = loadFrontendEnv();
++    const p = window.blankPatient();
++    p.labs = { hb: '6.1', updatedAt: '2026-07-20', otherLabs: [{ name: 'Uric Acid', value: '8.2' }] };
++    const flags = window.getPatientFlags(p);
++    const warn = flags.find(f => f.type === 'warn' && /Hb/.test(f.text));
++    assert.ok(warn, 'abnormal Hb must still produce a warn flag');
++    assert.ok(!/Uric Acid/.test(warn.text), 'otherLabs must not appear in warn flag text');
++  });
++});
+diff --git a/tests/merge.test.js b/tests/merge.test.js
+index 75d028a..5b20a24 100644
+--- a/tests/merge.test.js
++++ b/tests/merge.test.js
+@@ -110,20 +110,30 @@ describe('mergePatientRecords', () => {
+     const remote = {
+       id: 'p1', updatedAt: 200,
+       postOpChecks: [{ id: 'c1', status: 'pending', updatedAt: 150 }, { id: 'c2', status: 'done', updatedAt: 150 }]
+     };
+     const merged = mergePatientRecords(local, remote);
+     const c1 = merged.postOpChecks.find(c => c.id === 'c1');
+     const c2 = merged.postOpChecks.find(c => c.id === 'c2');
+     assert.equal(c1.status, 'pending'); // remote's c1 is newer than local's
+     assert.ok(c2);
+   });
++
++  test('otherLabs survives per-key merge when remote side lacks it', () => {
++    const local = { id: 'p1', updatedAt: 100, labs: { CBC: { hb: '11' }, otherLabs: ['Echo', 'CT scan'] } };
++    const remote = { id: 'p1', updatedAt: 90, labs: { Metabolic: { glucose: '95' } } };
++    const merged = mergePatientRecords(local, remote);
++    assert.ok(merged.labs.otherLabs, 'otherLabs should be present in merged result');
++    assert.deepEqual(merged.labs.otherLabs, ['Echo', 'CT scan']);
++    assert.ok(merged.labs.CBC, 'local CBC should still be in result');
++    assert.ok(merged.labs.Metabolic, 'remote Metabolic should be in result');
++  });
+ });
+ 
+ describe('stampAttribution', () => {
+   const actor = { username: 'ppg1' };
+ 
+   test('stamps doneBy on a newly-completed checklist item (no prior record)', () => {
+     const patient = { postOpChecks: [{ id: 'c1', status: 'done' }, { id: 'c2', status: 'pending' }] };
+     stampAttribution(patient, null, actor);
+     assert.equal(patient.postOpChecks[0].doneBy, 'ppg1');
+     assert.equal(patient.postOpChecks[1].doneBy, undefined);

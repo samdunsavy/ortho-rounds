@@ -1,0 +1,211 @@
+## Commits
+7301463 feat: 15-key lab panel + extractOtherLabs capture in clinical-normalize
+
+## Stat
+ clinical-normalize.js            | 60 +++++++++++++++++++++++++++++--
+ tests/clinical-normalize.test.js | 78 +++++++++++++++++++++++++++++++++++++++-
+ 2 files changed, 135 insertions(+), 3 deletions(-)
+
+## Diff
+diff --git a/clinical-normalize.js b/clinical-normalize.js
+index 8f9a2a8..4f7a26e 100644
+--- a/clinical-normalize.js
++++ b/clinical-normalize.js
+@@ -148,25 +148,81 @@ export function sanitizeAntibioticCourses(courses, defaults = {}){
+     if(!raw || typeof raw !== 'object') continue;
+     const name = normalizeAbbreviations(String(raw.name || '').trim());
+     const days = parseTherapyDays(raw.days);
+     const start = String(raw.start || defaults.start || '').trim();
+     if(!name && !days) continue;
+     out.push({ name, days, start });
+   }
+   return out;
+ }
+ 
++export const KNOWN_LAB_KEYS = [
++  'hb', 'crp', 'wcc', 'creatinine', 'platelets', 'esr', 'urea',
++  'sodium', 'potassium', 'ptinr', 'rbs',
++  'calcium', 'phosphate', 'alp', 'albumin'
++];
++
+ export function sanitizeLabs(raw){
+   if(!raw || typeof raw !== 'object') return {};
+   const out = {};
+-  for(const key of ['hb', 'crp', 'wcc', 'creatinine', 'platelets', 'esr', 'urea', 'sodium', 'potassium', 'ptinr', 'rbs']){
++  for(const key of KNOWN_LAB_KEYS){
+     const val = raw[key];
+     if(val === undefined || val === null) continue;
+     const str = String(val).trim();
+     if(str && str.toLowerCase() !== 'null') out[key] = str;
+   }
+   return out;
+ }
+ 
++const OTHER_LABS_MAX = 12;
++const OTHER_LAB_NAME_MAX = 40;
++const OTHER_LAB_VALUE_MAX = 20;
++
++/** Harvest analytes the AI read that aren't in the known panel.
++ *  `raw` is the whole AI response object: unknown keys inside raw.labs
++ *  plus entries of raw.otherLabs ([{name, value}]). Capture-don't-drop. */
++export function extractOtherLabs(raw){
++  const out = [];
++  const seen = new Set();
++  const push = (name, value) => {
++    const n = String(name ?? '').trim().slice(0, OTHER_LAB_NAME_MAX);
++    const v = String(value ?? '').trim().slice(0, OTHER_LAB_VALUE_MAX);
++    if(!n || !v || v.toLowerCase() === 'null') return;
++    const dedupeKey = n.toLowerCase();
++    if(seen.has(dedupeKey) || out.length >= OTHER_LABS_MAX) return;
++    seen.add(dedupeKey);
++    out.push({ name: n, value: v });
++  };
++  if(!raw || typeof raw !== 'object') return out;
++  if(raw.labs && typeof raw.labs === 'object'){
++    for(const [k, v] of Object.entries(raw.labs)){
++      if(!KNOWN_LAB_KEYS.includes(k)) push(k, v);
++    }
++  }
++  if(Array.isArray(raw.otherLabs)){
++    for(const entry of raw.otherLabs){
++      if(entry && typeof entry === 'object') push(entry.name, entry.value);
++    }
++  }
++  return out;
++}
++
+ export function mergeLabs(primary, fallback){
+-  return Object.assign({}, fallback || {}, primary || {});
++  const merged = Object.assign({}, fallback || {}, primary || {});
++  const pOther = Array.isArray(primary?.otherLabs) ? primary.otherLabs : [];
++  const fOther = Array.isArray(fallback?.otherLabs) ? fallback.otherLabs : [];
++  if(pOther.length || fOther.length){
++    const seen = new Set();
++    const union = [];
++    for(const e of [...pOther, ...fOther]){
++      if(!e || !e.name) continue;
++      const k = String(e.name).toLowerCase();
++      if(seen.has(k)) continue;
++      seen.add(k);
++      union.push(e);
++    }
++    merged.otherLabs = union;
++  }else{
++    delete merged.otherLabs;
++  }
++  return merged;
+ }
+diff --git a/tests/clinical-normalize.test.js b/tests/clinical-normalize.test.js
+index 31a5bed..7a81bae 100644
+--- a/tests/clinical-normalize.test.js
++++ b/tests/clinical-normalize.test.js
+@@ -1,21 +1,24 @@
+ import { test, describe } from 'node:test';
+ import assert from 'node:assert/strict';
+ import {
+   normalizePersonName,
+   normalizeDiagnosis,
+   normalizeProcedure,
+   normalizeSurgeon,
+   extractLabsFromText,
+   sanitizeAntibioticCourses,
+   sanitizeLabs,
+-  normalizePatientClinicalFields
++  normalizePatientClinicalFields,
++  extractOtherLabs,
++  KNOWN_LAB_KEYS,
++  mergeLabs
+ } from '../clinical-normalize.js';
+ 
+ describe('normalizePersonName', () => {
+   test('title-cases and uppercases initials', () => {
+     assert.equal(normalizePersonName('shivappa ss'), 'Shivappa SS');
+   });
+ });
+ 
+ describe('normalizeDiagnosis', () => {
+   test('fixes spine levels and sides', () => {
+@@ -89,10 +92,83 @@ describe('normalizePatientClinicalFields', () => {
+       name: 'shivappa ss',
+       diagnosis: 'l3 fracture left femur',
+       procedure: 'orif femur'
+     });
+     assert.equal(out.name, 'Shivappa SS');
+     assert.match(out.diagnosis, /L3/);
+     assert.match(out.diagnosis, /Left/);
+     assert.match(out.procedure, /ORIF/);
+   });
+ });
++
++describe('sanitizeLabs — bone profile keys', () => {
++  test('accepts calcium, phosphate, alp, albumin', () => {
++    const out = sanitizeLabs({ calcium: '9.1', phosphate: '3.2', alp: '95', albumin: '3.9' });
++    assert.deepEqual(out, { calcium: '9.1', phosphate: '3.2', alp: '95', albumin: '3.9' });
++  });
++
++  test('KNOWN_LAB_KEYS has exactly the 15 panel keys', () => {
++    assert.deepEqual([...KNOWN_LAB_KEYS].sort(), [
++      'albumin','alp','calcium','creatinine','crp','esr','hb','phosphate',
++      'platelets','potassium','ptinr','rbs','sodium','urea','wcc'
++    ]);
++  });
++});
++
++describe('extractOtherLabs', () => {
++  test('harvests unknown keys from labs object and explicit otherLabs array', () => {
++    const out = extractOtherLabs({
++      labs: { hb: '11', uricAcid: '8.2' },
++      otherLabs: [{ name: 'HbA1c', value: '6.1' }]
++    });
++    assert.deepEqual(out, [
++      { name: 'uricAcid', value: '8.2' },
++      { name: 'HbA1c', value: '6.1' }
++    ]);
++  });
++
++  test('caps lengths and entry count, dedupes case-insensitively, drops empties', () => {
++    const many = Array.from({ length: 20 }, (_, i) => ({ name: `Lab${i}`, value: String(i) }));
++    const out = extractOtherLabs({ otherLabs: many });
++    assert.equal(out.length, 12);
++
++    const capped = extractOtherLabs({ otherLabs: [{ name: 'X'.repeat(60), value: 'Y'.repeat(30) }] });
++    assert.equal(capped[0].name.length, 40);
++    assert.equal(capped[0].value.length, 20);
++
++    const deduped = extractOtherLabs({ otherLabs: [
++      { name: 'Uric Acid', value: '8' },
++      { name: 'uric acid', value: '9' },
++      { name: '', value: '5' },
++      { name: 'Bilirubin', value: '' },
++      { name: 'Bilirubin', value: 'null' }
++    ]});
++    assert.deepEqual(deduped, [{ name: 'Uric Acid', value: '8' }]);
++  });
++
++  test('returns [] for malformed input', () => {
++    assert.deepEqual(extractOtherLabs(null), []);
++    assert.deepEqual(extractOtherLabs('junk'), []);
++    assert.deepEqual(extractOtherLabs({ otherLabs: 'junk', labs: 7 }), []);
++    assert.deepEqual(extractOtherLabs({ otherLabs: [null, 'x', 42] }), []);
++  });
++});
++
++describe('mergeLabs — otherLabs union', () => {
++  test('unions otherLabs by name, primary wins', () => {
++    const out = mergeLabs(
++      { hb: '11', otherLabs: [{ name: 'Uric Acid', value: '8.2' }] },
++      { crp: '5', otherLabs: [{ name: 'uric acid', value: '7.0' }, { name: 'HbA1c', value: '6.1' }] }
++    );
++    assert.equal(out.hb, '11');
++    assert.equal(out.crp, '5');
++    assert.deepEqual(out.otherLabs, [
++      { name: 'Uric Acid', value: '8.2' },
++      { name: 'HbA1c', value: '6.1' }
++    ]);
++  });
++
++  test('no otherLabs key when neither side has entries', () => {
++    const out = mergeLabs({ hb: '11' }, { crp: '5' });
++    assert.equal('otherLabs' in out, false);
++  });
++});
