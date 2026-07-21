@@ -96,7 +96,11 @@ const LAB_SPEC = {
   sodium:     { unit: 'mEq/L',       low: 135,   high: 145 },
   potassium:  { unit: 'mEq/L',       low: 3.5,   high: 5.5 },
   ptinr:      { unit: '',            high: 1.5 },
-  rbs:        { unit: 'mg/dL',       low: 70,    high: 200 }
+  rbs:        { unit: 'mg/dL',       low: 70,    high: 200 },
+  calcium:    { unit: 'mg/dL',       low: 8.5,   high: 10.5 },
+  phosphate:  { unit: 'mg/dL',       low: 2.5,   high: 4.5 },
+  alp:        { unit: 'U/L',         high: 120 },
+  albumin:    { unit: 'g/dL',        low: 3.5 }
 };
 const PLAN_HISTORY_MAX = 14;
 const FULL_RECONCILE_INTERVAL_MS = 5 * 60 * 1000; // periodic full reconcile
@@ -1291,7 +1295,11 @@ function applySmartPasteLabs(labs){
     ['sodium', 'f_lab_sodium'],
     ['potassium', 'f_lab_potassium'],
     ['ptinr', 'f_lab_ptinr'],
-    ['rbs', 'f_lab_rbs']
+    ['rbs', 'f_lab_rbs'],
+    ['calcium', 'f_lab_calcium'],
+    ['phosphate', 'f_lab_phosphate'],
+    ['alp', 'f_lab_alp'],
+    ['albumin', 'f_lab_albumin']
   ];
   for(const [key, id] of pairs){
     if(!labs[key]) continue;
@@ -2710,13 +2718,13 @@ function labValueClass(key, val){
   if(key === 'crp'){
     return n > spec.high ? 'lab-high' : '';
   }
-  if(key === 'platelets'){
+  if(key === 'platelets' || key === 'albumin'){
     return n < spec.low ? 'lab-low' : '';
   }
-  if(key === 'esr' || key === 'urea' || key === 'ptinr'){
+  if(key === 'esr' || key === 'urea' || key === 'ptinr' || key === 'alp'){
     return n > spec.high ? 'lab-high' : '';
   }
-  if(key === 'sodium' || key === 'potassium' || key === 'rbs'){
+  if(key === 'sodium' || key === 'potassium' || key === 'rbs' || key === 'calcium' || key === 'phosphate'){
     if(spec.low != null && n < spec.low) return 'lab-low';
     if(spec.high != null && n > spec.high) return 'lab-high';
     return '';
@@ -2768,7 +2776,8 @@ function upsertLabsHistoryEntry(p, patch, date){
 const LAB_TREND_LABELS = {
   hb: 'Hb', crp: 'CRP', wcc: 'TLC', creatinine: 'Creatinine',
   platelets: 'Platelets', esr: 'ESR', urea: 'Urea',
-  sodium: 'Na', potassium: 'K', ptinr: 'PT/INR', rbs: 'RBS'
+  sodium: 'Na', potassium: 'K', ptinr: 'PT/INR', rbs: 'RBS',
+  calcium: 'Ca', phosphate: 'PO4', alp: 'ALP', albumin: 'Albumin'
 };
 const LAB_TREND_W = 130;
 const LAB_TREND_H = 34;
@@ -6346,6 +6355,10 @@ function renderModalForm(d){
         <div><span>Potassium (mEq/L)</span><input id="f_lab_potassium" inputmode="decimal" placeholder="e.g. 4.2" value="${escapeHTML((d.labs||{}).potassium||'')}" class="${labValueClass('potassium', (d.labs||{}).potassium)}"></div>
         <div><span>PT/INR</span><input id="f_lab_ptinr" inputmode="decimal" placeholder="e.g. 1.1" value="${escapeHTML((d.labs||{}).ptinr||'')}" class="${labValueClass('ptinr', (d.labs||{}).ptinr)}"></div>
         <div><span>RBS (mg/dL)</span><input id="f_lab_rbs" inputmode="decimal" placeholder="e.g. 110" value="${escapeHTML((d.labs||{}).rbs||'')}" class="${labValueClass('rbs', (d.labs||{}).rbs)}"></div>
+        <div><span>Calcium (mg/dL)</span><input id="f_lab_calcium" inputmode="decimal" placeholder="e.g. 9.2" value="${escapeHTML((d.labs||{}).calcium||'')}" class="${labValueClass('calcium', (d.labs||{}).calcium)}"></div>
+        <div><span>Phosphate (mg/dL)</span><input id="f_lab_phosphate" inputmode="decimal" placeholder="e.g. 3.4" value="${escapeHTML((d.labs||{}).phosphate||'')}" class="${labValueClass('phosphate', (d.labs||{}).phosphate)}"></div>
+        <div><span>ALP (U/L)</span><input id="f_lab_alp" inputmode="decimal" placeholder="e.g. 90" value="${escapeHTML((d.labs||{}).alp||'')}" class="${labValueClass('alp', (d.labs||{}).alp)}"></div>
+        <div><span>Albumin (g/dL)</span><input id="f_lab_albumin" inputmode="decimal" placeholder="e.g. 4.0" value="${escapeHTML((d.labs||{}).albumin||'')}" class="${labValueClass('albumin', (d.labs||{}).albumin)}"></div>
       </div>
       ${renderLabsTrendPanel(d)}
     </div>
@@ -7185,15 +7198,20 @@ async function savePatientFromModal(){
       potassium: document.getElementById('f_lab_potassium')?.value.trim() || '',
       ptinr: document.getElementById('f_lab_ptinr')?.value.trim() || '',
       rbs: document.getElementById('f_lab_rbs')?.value.trim() || '',
+      calcium: document.getElementById('f_lab_calcium')?.value.trim() || '',
+      phosphate: document.getElementById('f_lab_phosphate')?.value.trim() || '',
+      alp: document.getElementById('f_lab_alp')?.value.trim() || '',
+      albumin: document.getElementById('f_lab_albumin')?.value.trim() || '',
       updatedAt: getModalLabReportDate() || todayISO()
     };
-    const hasAnyLabValue = ['hb', 'crp', 'wcc', 'creatinine', 'platelets', 'esr', 'urea', 'sodium', 'potassium', 'ptinr', 'rbs']
+    const hasAnyLabValue = ['hb', 'crp', 'wcc', 'creatinine', 'platelets', 'esr', 'urea', 'sodium', 'potassium', 'ptinr', 'rbs', 'calcium', 'phosphate', 'alp', 'albumin']
       .some(key => d.labs[key]);
     if(hasAnyLabValue){
       upsertLabsHistoryEntry(d, {
         hb: d.labs.hb, crp: d.labs.crp, wcc: d.labs.wcc, creatinine: d.labs.creatinine,
         platelets: d.labs.platelets, esr: d.labs.esr, urea: d.labs.urea,
-        sodium: d.labs.sodium, potassium: d.labs.potassium, ptinr: d.labs.ptinr, rbs: d.labs.rbs
+        sodium: d.labs.sodium, potassium: d.labs.potassium, ptinr: d.labs.ptinr, rbs: d.labs.rbs,
+        calcium: d.labs.calcium, phosphate: d.labs.phosphate, alp: d.labs.alp, albumin: d.labs.albumin
       }, d.labs.updatedAt);
     }
     d.procedure = document.getElementById('f_procedure').value.trim();

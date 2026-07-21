@@ -15,7 +15,15 @@ import { loadFrontendEnv } from './helpers/frontend-env.js';
 // tests/frontend-worklist.test.js for the equivalent `patients` binding.
 const MODAL_FLOW_INIT_SCRIPT = [
   'var CHECKLIST_CATEGORIES = ["nv","mobilization","imaging","antibiotics","drain","wound","other"];',
-  'var CHECKLIST_STATUSES = ["pending","done","skipped","na"];'
+  'var CHECKLIST_STATUSES = ["pending","done","skipped","na"];',
+  // `patients` is a top-level `let` in app.js, so (per frontend-env.js's
+  // documented limitation) it never becomes a `window` property on its
+  // own. This getter is defined inside the same window.eval() call as
+  // app.js itself, so its closure captures the real top-level `patients`
+  // binding live — letting save-flow tests read back `window.patients`
+  // after calling savePatientFromModal(), the same trick already used
+  // above for CHECKLIST_CATEGORIES/CHECKLIST_STATUSES.
+  'Object.defineProperty(window, "patients", { get: function(){ return patients; }, configurable: true });'
 ].join('\n');
 
 describe('labValueClass — expanded 11-field panel', () => {
@@ -237,5 +245,44 @@ describe('LAB_TREND_LABELS — expanded panel', () => {
     for(const label of ['Hb', 'CRP', 'TLC', 'Creatinine', 'Platelets', 'ESR', 'Urea', 'Na', 'K', 'PT/INR', 'RBS']){
       assert.ok(html.includes(`>${label}<`), `missing trend sparkline label for ${label}`);
     }
+  });
+});
+
+describe('labValueClass — bone profile fields', () => {
+  test('flags both directions for calcium and phosphate', () => {
+    const { window } = loadFrontendEnv();
+    assert.equal(window.labValueClass('calcium', '7.9'), 'lab-low');
+    assert.equal(window.labValueClass('calcium', '11.2'), 'lab-high');
+    assert.equal(window.labValueClass('calcium', '9.4'), '');
+    assert.equal(window.labValueClass('phosphate', '2.1'), 'lab-low');
+    assert.equal(window.labValueClass('phosphate', '5.0'), 'lab-high');
+  });
+
+  test('flags high ALP and low albumin', () => {
+    const { window } = loadFrontendEnv();
+    assert.equal(window.labValueClass('alp', '300'), 'lab-high');
+    assert.equal(window.labValueClass('alp', '90'), '');
+    assert.equal(window.labValueClass('albumin', '2.9'), 'lab-low');
+    assert.equal(window.labValueClass('albumin', '4.1'), '');
+  });
+});
+
+describe('modal form — bone profile inputs', () => {
+  test('renders the four new inputs and saves them into labs + labsHistory', async () => {
+    const { window, document } = loadFrontendEnv({ initScript: MODAL_FLOW_INIT_SCRIPT });
+    window.openPatientModal(window.blankPatient());
+    for(const id of ['f_lab_calcium', 'f_lab_phosphate', 'f_lab_alp', 'f_lab_albumin']){
+      assert.ok(document.getElementById(id), `${id} must exist in the modal form`);
+    }
+    document.getElementById('f_name').value = 'Test Patient';
+    document.getElementById('f_lab_calcium').value = '9.1';
+    document.getElementById('f_lab_albumin').value = '3.9';
+    await window.savePatientFromModal();
+    const saved = window.patients.find(p => p.name === 'Test Patient');
+    assert.equal(saved.labs.calcium, '9.1');
+    assert.equal(saved.labs.albumin, '3.9');
+    const todayEntry = saved.labsHistory.find(h => h.date === saved.labs.updatedAt);
+    assert.equal(todayEntry.calcium, '9.1');
+    assert.equal(todayEntry.albumin, '3.9');
   });
 });
