@@ -18,6 +18,7 @@ let modalWorkingData = null; // in-memory draft while add/edit modal is open
 let modalSuppressAutoTemplate = false; // user removed milestones — don't refill on save
 let modalSmartPasteUsed = false; // AI admission fill — don't auto-apply milestone templates
 let modalLabReportDate = null; // set by lab-photo extraction when the report's own date differs from today
+let modalPendingOtherLabs = []; // AI-read analytes outside the known panel, pending doctor review
 let pendingImageSlot = null;  // {type: 'preop'|'postop'|'followup'}
 let modalPendingImages = [];  // { id, dataURL, type } — staged X-rays before modal save
 let viewingImageContext = null; // { patientId, imgId }
@@ -965,6 +966,16 @@ function bindAiEvents(){
       return;
     }
 
+    const otherLabRemove = e.target.closest('.other-lab-remove');
+    if(otherLabRemove){
+      const idx = Number(otherLabRemove.dataset.otherLabIdx);
+      if(!Number.isNaN(idx)){
+        modalPendingOtherLabs.splice(idx, 1);
+        renderOtherLabsChips();
+      }
+      return;
+    }
+
     const scribeBtn = e.target.closest('[data-scribe]');
     if(scribeBtn){
       e.stopPropagation();
@@ -1311,6 +1322,32 @@ function applySmartPasteLabs(labs){
   return filled;
 }
 
+function renderOtherLabsChipsHTML(){
+  if(!modalPendingOtherLabs.length) return '';
+  const chips = modalPendingOtherLabs.map((e, i) =>
+    `<span class="other-lab-chip">${escapeHTML(e.name)} ${escapeHTML(e.value)}` +
+    `<button type="button" class="other-lab-remove" data-other-lab-idx="${i}" aria-label="Remove ${escapeHTML(e.name)}">×</button></span>`
+  ).join('');
+  return `<div class="form-hint">Also on report (not trended):</div>${chips}`;
+}
+
+function renderOtherLabsChips(){
+  const el = document.getElementById('otherLabsChips');
+  if(el) el.innerHTML = renderOtherLabsChipsHTML();
+}
+
+/** Merge AI-read extras into pending state; case-insensitive by name, incoming value wins. */
+function mergePendingOtherLabs(incoming){
+  if(!Array.isArray(incoming)) return;
+  for(const e of incoming){
+    if(!e || !e.name || !e.value) continue;
+    const idx = modalPendingOtherLabs.findIndex(x => x.name.toLowerCase() === String(e.name).toLowerCase());
+    if(idx >= 0) modalPendingOtherLabs[idx] = { name: modalPendingOtherLabs[idx].name, value: String(e.value) };
+    else if(modalPendingOtherLabs.length < 12) modalPendingOtherLabs.push({ name: String(e.name), value: String(e.value) });
+  }
+  renderOtherLabsChips();
+}
+
 function applySmartPasteAntibiotics(courses){
   if(!Array.isArray(courses) || !courses.length) return 0;
   const d = getWorkingData();
@@ -1604,8 +1641,9 @@ async function handleLabPhotoSelected(file){
   try{
     const raw = await fileToDataURL(file);
     const compressed = await compressImage(raw);
-    const { labs, reportDate } = await callAi('parse-labs-image', { image: compressed });
+    const { labs, otherLabs, reportDate } = await callAi('parse-labs-image', { image: compressed });
     const filled = applySmartPasteLabs(labs);
+    mergePendingOtherLabs(otherLabs);
     if(reportDate && reportDate !== todayISO()){
       const useReportDate = await showConfirm(
         'Use report date?',
@@ -1616,7 +1654,10 @@ async function handleLabPhotoSelected(file){
     }else{
       setModalLabReportDate(null);
     }
-    showToast(filled ? `Filled ${filled} field${filled > 1 ? 's' : ''} — review before saving` : 'Nothing recognisable in that photo');
+    const extraCount = Array.isArray(otherLabs) ? otherLabs.length : 0;
+    showToast(filled || extraCount
+      ? `Filled ${filled} field${filled === 1 ? '' : 's'}${extraCount ? ` + ${extraCount} other lab${extraCount === 1 ? '' : 's'}` : ''} — review before saving`
+      : 'Nothing recognisable in that photo');
     return filled;
   }catch(err){
     showToast(err.message || 'Could not read that lab report photo');
@@ -2745,6 +2786,9 @@ function formatLabsLine(p){
   if(labs.crp) parts.push(`CRP ${formatLabWithUnit('crp', labs.crp)}`);
   if(labs.wcc) parts.push(`TLC ${formatLabWithUnit('wcc', labs.wcc)}`);
   if(labs.creatinine) parts.push(`Cr ${formatLabWithUnit('creatinine', labs.creatinine)}`);
+  for(const e of (labs.otherLabs || [])){
+    if(e && e.name && e.value) parts.push(`${e.name} ${e.value}`);
+  }
   return parts.join(' · ');
 }
 
@@ -6125,6 +6169,9 @@ function openPatientModal(p){
   modalSuppressAutoTemplate = false;
   modalSmartPasteUsed = false;
   modalLabReportDate = null;
+  modalPendingOtherLabs = Array.isArray(modalWorkingData?.labs?.otherLabs)
+    ? modalWorkingData.labs.otherLabs.map(e => ({ name: e.name, value: e.value }))
+    : [];
   normalizeAntibioticCourses(modalWorkingData);
   if(!isExisting){
     const ini = getPgInitials();
@@ -6138,6 +6185,12 @@ function openPatientModal(p){
   document.getElementById('deletePatientBtn').style.display = isExisting ? 'inline-block' : 'none';
   document.getElementById('modalBody').innerHTML = renderModalForm(modalWorkingData);
   bindModalDynamicLists();
+  // Guarded by window._aiBound — idempotent in production (init() already
+  // bound this at boot), but the frontend test harness skips init() entirely
+  // (__ORTHO_SKIP_AUTOINIT__), so the document-level click delegation that
+  // handles #labPhotoBtn and .other-lab-remove would otherwise never be
+  // registered when a modal-driving test opens the modal directly.
+  bindAiEvents();
   document.getElementById('patientModal').classList.add('active');
   requestAnimationFrame(()=> snapshotModalBaseline());
 }
@@ -6195,6 +6248,7 @@ async function closePatientModal(opts = {}){
   modalSuppressAutoTemplate = false;
   modalSmartPasteUsed = false;
   modalLabReportDate = null;
+  modalPendingOtherLabs = [];
 }
 
 /** Read checklist rows from the modal DOM into working data (source of truth on save). */
@@ -6360,6 +6414,7 @@ function renderModalForm(d){
         <div><span>ALP (U/L)</span><input id="f_lab_alp" inputmode="decimal" placeholder="e.g. 90" value="${escapeHTML((d.labs||{}).alp||'')}" class="${labValueClass('alp', (d.labs||{}).alp)}"></div>
         <div><span>Albumin (g/dL)</span><input id="f_lab_albumin" inputmode="decimal" placeholder="e.g. 4.0" value="${escapeHTML((d.labs||{}).albumin||'')}" class="${labValueClass('albumin', (d.labs||{}).albumin)}"></div>
       </div>
+      <div id="otherLabsChips">${renderOtherLabsChipsHTML()}</div>
       ${renderLabsTrendPanel(d)}
     </div>
 
@@ -7204,6 +7259,7 @@ async function savePatientFromModal(){
       albumin: document.getElementById('f_lab_albumin')?.value.trim() || '',
       updatedAt: getModalLabReportDate() || todayISO()
     };
+    if(modalPendingOtherLabs.length) d.labs.otherLabs = modalPendingOtherLabs.slice();
     const hasAnyLabValue = ['hb', 'crp', 'wcc', 'creatinine', 'platelets', 'esr', 'urea', 'sodium', 'potassium', 'ptinr', 'rbs', 'calcium', 'phosphate', 'alp', 'albumin']
       .some(key => d.labs[key]);
     if(hasAnyLabValue){

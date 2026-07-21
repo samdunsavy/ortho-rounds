@@ -286,3 +286,75 @@ describe('modal form — bone profile inputs', () => {
     assert.equal(todayEntry.albumin, '3.9');
   });
 });
+
+describe('otherLabs — capture-don\'t-drop chips', () => {
+  test('modal seeds pending otherLabs from the patient and renders removable chips', () => {
+    const { window, document } = loadFrontendEnv({ initScript: MODAL_FLOW_INIT_SCRIPT });
+    const p = window.blankPatient();
+    p.labs = { hb: '11', updatedAt: '2026-07-20', otherLabs: [
+      { name: 'Uric Acid', value: '8.2' },
+      { name: 'HbA1c', value: '6.1' }
+    ]};
+    window.openPatientModal(p);
+    const chips = document.querySelectorAll('#otherLabsChips .other-lab-chip');
+    assert.equal(chips.length, 2);
+    assert.match(chips[0].textContent, /Uric Acid/);
+    assert.match(chips[0].textContent, /8\.2/);
+    assert.ok(chips[0].querySelector('.other-lab-remove'), 'chip must have a remove control');
+  });
+
+  test('removing a chip drops it from pending state and the next save', async () => {
+    const { window, document } = loadFrontendEnv({ initScript: MODAL_FLOW_INIT_SCRIPT });
+    const p = window.blankPatient();
+    p.name = 'Chip Patient';
+    p.labs = { hb: '11', updatedAt: '2026-07-20', otherLabs: [
+      { name: 'Uric Acid', value: '8.2' },
+      { name: 'HbA1c', value: '6.1' }
+    ]};
+    window.openPatientModal(p);
+    document.querySelector('#otherLabsChips .other-lab-chip .other-lab-remove').click();
+    assert.equal(document.querySelectorAll('#otherLabsChips .other-lab-chip').length, 1);
+    await window.savePatientFromModal();
+    const saved = window.patients.find(x => x.name === 'Chip Patient');
+    // saved.labs.otherLabs is built by object literals inside app.js's own
+    // window.eval() scope, so it's an instance of *that* window's
+    // Array/Object — structurally identical to a plain Node-realm literal
+    // but not reference-equal at the prototype level, which deepEqual
+    // (aliased to deepStrictEqual under node:assert/strict) rejects. Same
+    // cross-realm gotcha documented in tests/frontend-milestones.test.js;
+    // round-tripping through JSON strips the realm-specific prototype.
+    assert.deepEqual(JSON.parse(JSON.stringify(saved.labs.otherLabs)), [{ name: 'HbA1c', value: '6.1' }]);
+  });
+
+  test('empty otherLabs renders no chips container content and saves no key', async () => {
+    const { window, document } = loadFrontendEnv({ initScript: MODAL_FLOW_INIT_SCRIPT });
+    const p = window.blankPatient();
+    p.name = 'Plain Patient';
+    window.openPatientModal(p);
+    assert.equal(document.querySelectorAll('#otherLabsChips .other-lab-chip').length, 0);
+    await window.savePatientFromModal();
+    const saved = window.patients.find(x => x.name === 'Plain Patient');
+    assert.equal('otherLabs' in (saved.labs || {}), false);
+  });
+
+  test('photo extraction merges new extras into pending chips (dedupe by name, new value wins)', () => {
+    const { window, document } = loadFrontendEnv({ initScript: MODAL_FLOW_INIT_SCRIPT });
+    const p = window.blankPatient();
+    p.labs = { hb: '11', updatedAt: '2026-07-20', otherLabs: [{ name: 'Uric Acid', value: '7.0' }] };
+    window.openPatientModal(p);
+    window.mergePendingOtherLabs([{ name: 'uric acid', value: '8.2' }, { name: 'HbA1c', value: '6.1' }]);
+    const chips = [...document.querySelectorAll('#otherLabsChips .other-lab-chip')].map(c => c.textContent);
+    assert.equal(chips.length, 2);
+    assert.match(chips[0], /8\.2/);
+    assert.match(chips[1], /HbA1c/);
+  });
+
+  test('formatLabsLine appends otherLabs plainly after headline labs', () => {
+    const { window } = loadFrontendEnv();
+    const line = window.formatLabsLine({ labs: {
+      hb: '11', otherLabs: [{ name: 'Uric Acid', value: '8.2' }]
+    }});
+    assert.match(line, /Hb 11 g\/dL/);
+    assert.match(line, /Uric Acid 8\.2/);
+  });
+});
