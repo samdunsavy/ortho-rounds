@@ -1962,6 +1962,8 @@ async function attemptLogin(){
     localStorage.setItem(LS_TOKEN, data.token);
     localStorage.setItem(LS_USERNAME, data.username);
     localStorage.setItem(LS_ROLE, data.role || 'member');
+    localStorage.setItem(LS_ORG_ID, data.orgId || '');
+    void refreshServerFlags();
     updateAccountUI();
     hideLogin();
     await refreshAiStatus();
@@ -1977,6 +1979,7 @@ function logout(){
   localStorage.removeItem(LS_TOKEN);
   localStorage.removeItem(LS_USERNAME);
   localStorage.removeItem(LS_ROLE);
+  localStorage.removeItem(LS_ORG_ID);
   updateAccountUI();
   showLogin();
 }
@@ -3457,6 +3460,7 @@ async function init(){
   bindAuthEvents();
   bindAiEvents();
   updateStorageNotice();
+  void refreshServerFlags();
   updateAccountUI();
   renderWardHandoverBanner();
   updateStickyHeaderOffset();
@@ -3580,6 +3584,56 @@ function bindAuthEvents(){
     const resetBtn = e.target.closest('[data-reset-user]');
     if(resetBtn){ void resetUserPassword(resetBtn.dataset.resetUser); return; }
   });
+
+  document.getElementById('adminViewClose')?.addEventListener('click', closeAdminView);
+  document.getElementById('moreAdminBtn')?.addEventListener('click', openAdminView);
+  document.getElementById('desktopAdminBtn')?.addEventListener('click', openAdminView);
+  document.getElementById('adminView')?.addEventListener('click', async (e) => {
+    const tab = e.target.closest('[data-admin-tab]');
+    if(tab){ switchAdminTab(tab.dataset.adminTab); return; }
+    const addHosp = e.target.closest('#adminAddHospitalBtn');
+    if(addHosp){
+      const name = document.getElementById('adminNewHospitalName')?.value.trim();
+      if(!name) return;
+      const body = isInstanceAdminUser() && adminViewOrgId ? { name, orgId: adminViewOrgId } : { name };
+      try{ await api('/api/admin/hospitals', { method: 'POST', body: JSON.stringify(body) }); await loadAdminView(); }
+      catch(err){ showToast(err.message); }
+      return;
+    }
+    const addWard = e.target.closest('[data-add-ward]');
+    if(addWard){
+      const hid = addWard.dataset.addWard;
+      const input = document.querySelector(`[data-new-ward-name="${hid}"]`);
+      const name = input?.value.trim();
+      if(!name) return;
+      try{ await api('/api/admin/wards', { method: 'POST', body: JSON.stringify({ hospitalId: hid, name }) }); await loadAdminView(); }
+      catch(err){ showToast(err.message); }
+      return;
+    }
+    const addOrg = e.target.closest('#adminAddOrgBtn');
+    if(addOrg){
+      const name = document.getElementById('adminNewOrgName')?.value.trim();
+      if(!name) return;
+      try{ await api('/api/admin/orgs', { method: 'POST', body: JSON.stringify({ name }) }); await loadAdminView(); }
+      catch(err){ showToast(err.message); }
+      return;
+    }
+    const mkAdmin = e.target.closest('[data-create-org-admin]');
+    if(mkAdmin){
+      const oid = mkAdmin.dataset.createOrgAdmin;
+      const input = document.querySelector(`[data-new-org-admin="${oid}"]`);
+      const username = input?.value.trim();
+      if(!username) return;
+      try{
+        const r = await api(`/api/admin/orgs/${oid}/admin`, { method: 'POST', body: JSON.stringify({ username }) });
+        await showConfirm('Org admin created', `Temporary password for ${r.username}: ${r.temporaryPassword}\nIt is not shown again.`, { confirmLabel: 'Done' });
+        await loadAdminView();
+      }catch(err){ showToast(err.message); }
+      return;
+    }
+    const viewOrg = e.target.closest('[data-view-org]');
+    if(viewOrg){ adminViewOrgId = viewOrg.dataset.viewOrg; switchAdminTab('org'); loadAdminView().catch(err => showToast(err.message)); return; }
+  });
 }
 
 function isAdmin(){
@@ -3597,6 +3651,8 @@ function updateAccountUI(){
   if(roleEl) roleEl.textContent = roleTag;
   const manageBtn = document.getElementById('moreManageUsersBtn');
   if(manageBtn) manageBtn.style.display = admin ? '' : 'none';
+  const adminBtn = document.getElementById('moreAdminBtn');
+  if(adminBtn) adminBtn.style.display = adminUiVisible() ? '' : 'none';
 
   const dLabel = document.getElementById('desktopAccountUsername');
   if(dLabel) dLabel.textContent = username;
@@ -3604,6 +3660,8 @@ function updateAccountUI(){
   if(dRoleEl) dRoleEl.textContent = roleTag;
   const dManageBtn = document.getElementById('desktopManageUsersBtn');
   if(dManageBtn) dManageBtn.style.display = admin ? '' : 'none';
+  const dAdminBtn = document.getElementById('desktopAdminBtn');
+  if(dAdminBtn) dAdminBtn.style.display = adminUiVisible() ? '' : 'none';
 }
 
 /* ---------------- push reminders ---------------- */
@@ -7486,6 +7544,163 @@ function renderPresentationExtras(p){
   }
   return html;
 }
+
+/* ---------------- admin console (MULTI_TENANT) ---------------- */
+
+var serverFlags = {}; // populated from /api/health at startup and login
+const LS_ORG_ID = 'ortho_org_id';
+
+function adminUiVisible(){
+  return isAdmin() && !!(serverFlags && serverFlags.MULTI_TENANT);
+}
+
+function isInstanceAdminUser(){
+  return isAdmin() && !localStorage.getItem(LS_ORG_ID);
+}
+
+async function refreshServerFlags(){
+  try{
+    const res = await fetch('/api/health');
+    const data = await res.json();
+    serverFlags = data.flags || {};
+  }catch{ /* offline — leave as-is */ }
+  updateAccountUI();
+}
+
+function renderAdminStatTiles(tree){
+  const postop = tree.hospitals.flatMap(h => h.wards).reduce((n, w) => n + (w.stats.byStatus.postop || 0), 0);
+  const tiles = [
+    { n: tree.totals.departments, l: 'Departments' },
+    { n: tree.totals.usersActive, l: 'Active users' },
+    { n: tree.totals.livePatients, l: 'Live patients' },
+    { n: postop, l: 'Post-op' }
+  ];
+  return tiles.map(t => `<div class="admin-stat-tile"><div class="n">${t.n}</div><div class="l">${t.l}</div></div>`).join('');
+}
+
+function renderAdminStatusBar(byStatus, total){
+  if(!total) return '<div class="admin-status-bar"></div>';
+  const seg = (n, color) => n ? `<span style="width:${(n / total) * 100}%;background:${color}"></span>` : '';
+  return `<div class="admin-status-bar">${
+    seg(byStatus.postop, 'var(--status-postop)')}${
+    seg(byStatus.preop, 'var(--status-preop)')}${
+    seg(byStatus.conservative, 'var(--status-conservative)')}${
+    seg(byStatus.fordischarge, 'var(--status-fordischarge)')}</div>`;
+}
+
+function renderAdminOrgSectionHTML(tree){
+  const groups = tree.hospitals.map(h => `
+    <div class="admin-hospital-group" data-hospital-id="${escapeHTML(h.id)}">
+      <h3>${escapeHTML(h.name)}</h3>
+      <div class="admin-dept-grid">
+        ${h.wards.map(w => `
+          <div class="admin-dept-card" data-ward-id="${escapeHTML(w.id)}">
+            <strong>${escapeHTML(w.name)}</strong> <span class="spec-badge">${escapeHTML(w.specialty || '')}</span>
+            <div class="small-muted">${w.stats.livePatients} live patient${w.stats.livePatients === 1 ? '' : 's'} · ${w.stats.users} user${w.stats.users === 1 ? '' : 's'}</div>
+            ${renderAdminStatusBar(w.stats.byStatus, w.stats.livePatients)}
+            <div class="small-muted">${w.stats.lastActivity ? 'Active ' + formatRelativeTime(w.stats.lastActivity) : 'No activity yet'}</div>
+          </div>`).join('')}
+      </div>
+      <div class="admin-inline-form">
+        <input placeholder="New department name" data-new-ward-name="${escapeHTML(h.id)}">
+        <button class="btn" data-add-ward="${escapeHTML(h.id)}">Add department</button>
+      </div>
+    </div>`).join('');
+  return `<h3>Organization</h3>${groups || '<div class="small-muted">No hospitals yet — add the first one.</div>'}
+    <div class="admin-inline-form">
+      <input placeholder="New hospital name" id="adminNewHospitalName">
+      <button class="btn" id="adminAddHospitalBtn">Add hospital</button>
+    </div>`;
+}
+
+function renderAdminUsersSectionHTML(tree, users){
+  const wardOptions = tree.hospitals.flatMap(h => h.wards.map(w => ({ id: w.id, label: `${w.name} (${h.name})` })));
+  const opts = (sel) => `<option value="">— none —</option>` + wardOptions.map(w =>
+    `<option value="${escapeHTML(w.id)}" ${w.id === sel ? 'selected' : ''}>${escapeHTML(w.label)}</option>`).join('');
+  const rows = users.map(u => `
+    <tr>
+      <td>${escapeHTML(u.username)}</td>
+      <td>${u.role === 'admin' ? '<span class="spec-badge">admin</span>' : 'member'}</td>
+      <td><select data-assign-user="${escapeHTML(u.id)}">${opts(u.wardId)}</select></td>
+      <td>${u.active ? 'active' : 'disabled'}</td>
+    </tr>`).join('');
+  return `<h3>Users</h3><table class="admin-users-table">
+    <thead><tr><th>User</th><th>Role</th><th>Department</th><th>Status</th></tr></thead>
+    <tbody>${rows}</tbody></table>`;
+}
+
+function renderAdminView(tree, users){
+  document.getElementById('adminStatTiles').innerHTML = renderAdminStatTiles(tree);
+  document.getElementById('adminOrgSection').innerHTML = renderAdminOrgSectionHTML(tree);
+  document.getElementById('adminUsersSection').innerHTML = renderAdminUsersSectionHTML(tree, users);
+}
+
+function renderAdminOrgsTab(orgs){
+  const el = document.getElementById('adminOrgsTab');
+  el.innerHTML = `<h3>Organizations</h3>` + orgs.map(o => `
+    <div class="admin-org-card" data-org-id="${escapeHTML(o.id)}">
+      <strong>${escapeHTML(o.name)}</strong> <span class="spec-badge">${escapeHTML(o.plan)}</span>
+      <div class="small-muted">${o.stats.hospitals} hospitals · ${o.stats.departments} departments · ${o.stats.users} users · ${o.stats.livePatients} live patients</div>
+      <div class="admin-inline-form">
+        <input placeholder="New org admin username" data-new-org-admin="${escapeHTML(o.id)}">
+        <button class="btn" data-create-org-admin="${escapeHTML(o.id)}">Create org admin</button>
+        <button class="btn" data-view-org="${escapeHTML(o.id)}">View</button>
+      </div>
+    </div>`).join('') + `
+    <div class="admin-inline-form">
+      <input placeholder="New organization name" id="adminNewOrgName">
+      <button class="btn" id="adminAddOrgBtn">Create organization</button>
+    </div>`;
+}
+
+let adminViewOrgId = null; // instance admin: which org's tree is loaded
+
+async function loadAdminView(){
+  const qs = isInstanceAdminUser() && adminViewOrgId ? `?orgId=${encodeURIComponent(adminViewOrgId)}` : '';
+  if(isInstanceAdminUser() && !adminViewOrgId){
+    document.getElementById('adminTabs').style.display = '';
+    switchAdminTab('orgs');
+    renderAdminOrgsTab((await api('/api/admin/orgs')).orgs);
+    return;
+  }
+  const [tree, usersRes] = await Promise.all([api('/api/admin/org' + qs), api('/api/admin/users')]);
+  let users = usersRes.users;
+  if(isInstanceAdminUser() && adminViewOrgId) users = users.filter(u => u.orgId === adminViewOrgId);
+  renderAdminView(tree, users);
+}
+
+function switchAdminTab(tab){
+  document.getElementById('adminOrgPane').style.display = tab === 'org' ? '' : 'none';
+  document.getElementById('adminOrgsTab').style.display = tab === 'orgs' ? '' : 'none';
+  document.querySelectorAll('.admin-tab').forEach(b => b.classList.toggle('active', b.dataset.adminTab === tab));
+}
+
+function openAdminView(){
+  document.getElementById('adminView').hidden = false;
+  adminViewOrgId = null;
+  for(const id of ['adminStatTiles', 'adminOrgSection', 'adminUsersSection']){
+    const el = document.getElementById(id);
+    if(el) el.innerHTML = '<div class="small-muted">Loading…</div>';
+  }
+  loadAdminView().catch(err => showToast(err.message || 'Could not load admin data'));
+}
+
+function closeAdminView(){
+  document.getElementById('adminView').hidden = true;
+}
+
+// Delegated at module scope (not inside bindEvents/init) so the assign
+// control works as soon as renderAdminView paints a row — the admin view
+// is unreachable flag-off anyway (buttons hidden, view `hidden`), so this
+// doesn't need to be gated behind MULTI_TENANT/isAdmin checks either.
+document.getElementById('adminView')?.addEventListener('change', async (e) => {
+  const sel = e.target.closest('[data-assign-user]');
+  if(!sel) return;
+  try{
+    await api(`/api/admin/users/${sel.dataset.assignUser}/assign`, { method: 'POST', body: JSON.stringify({ wardId: sel.value || null }) });
+    showToast('Department updated');
+  }catch(err){ showToast(err.message); }
+});
 
 function openPresentationMode(){
   const list = getPresentationList();
