@@ -40,7 +40,7 @@ describe('flag OFF — /api/sync golden response', () => {
     assert.equal('wardId' in got, false);
   });
 
-  test('every user sees every patient (flat instance)', async () => {
+  test('admin pull still includes the pushed patient (flat instance)', async () => {
     const pull = await syncPost(srv.baseUrl, token, { since: 0, changes: [] });
     assert.ok(pull.json.patients.some(p => p.id === 'golden-p1'));
   });

@@ -9,7 +9,7 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 export const ADMIN_USERNAME = 'admin';
 export const ADMIN_PASSWORD = 'test-admin-pass';
 
-async function waitForHealth(baseUrl, child, timeoutMs = 15000){
+async function waitForHealth(baseUrl, child, timeoutMs = 15000, stderrCapture = []){
   const deadline = Date.now() + timeoutMs;
   let lastErr = null;
   while(Date.now() < deadline){
@@ -20,7 +20,9 @@ async function waitForHealth(baseUrl, child, timeoutMs = 15000){
     }catch(err){ lastErr = err; }
     await new Promise(r => setTimeout(r, 150));
   }
-  throw new Error(`server did not become healthy: ${lastErr?.message}`);
+  const stderrStr = stderrCapture.join('');
+  const msg = `server did not become healthy: ${lastErr?.message}${stderrStr ? '\nstderr: ' + stderrStr : ''}`;
+  throw new Error(msg);
 }
 
 /** Boot the real server on a temp SQLite dir. `seed(store)` runs before boot. */
@@ -32,28 +34,74 @@ export async function startServer({ multiTenant = false, seed = null } = {}){
     try{ await seed(store); }
     finally{ await store.close(); }
   }
-  const port = 3100 + Math.floor(Math.random() * 2500);
+
   const env = {
     ...process.env,
-    PORT: String(port),
     ORTHO_DATA_DIR: dataDir,
     ORTHO_ADMIN_USERNAME: ADMIN_USERNAME,
     ORTHO_ADMIN_PASSWORD: ADMIN_PASSWORD
   };
   delete env.ORTHO_FLAG_MULTI_TENANT;
   if(multiTenant) env.ORTHO_FLAG_MULTI_TENANT = '1';
-  const child = spawn(process.execPath, ['server.js'], { cwd: REPO_ROOT, env, stdio: 'ignore' });
-  const baseUrl = `http://127.0.0.1:${port}`;
-  await waitForHealth(baseUrl, child);
-  return {
-    baseUrl,
-    dataDir,
-    async stop(){
-      child.kill('SIGTERM');
-      await new Promise(r => { child.once('exit', r); setTimeout(r, 2000).unref?.(); });
-      fs.rmSync(dataDir, { recursive: true, force: true });
+
+  // Retry loop: up to 3 attempts with fresh random ports
+  let lastErr = null;
+  for(let attempt = 0; attempt < 3; attempt++){
+    const port = 3100 + Math.floor(Math.random() * 2500);
+    env.PORT = String(port);
+
+    const stderrChunks = [];
+    const child = spawn(process.execPath, ['server.js'], {
+      cwd: REPO_ROOT,
+      env,
+      stdio: ['ignore', 'ignore', 'pipe']
+    });
+
+    // Capture stderr (last ~4KB)
+    child.stderr.on('data', (chunk) => {
+      stderrChunks.push(chunk.toString());
+      if(stderrChunks.join('').length > 4096){
+        stderrChunks.shift(); // Keep only last ~4KB
+      }
+    });
+
+    const baseUrl = `http://127.0.0.1:${port}`;
+    try{
+      await waitForHealth(baseUrl, child, 15000, stderrChunks);
+      // Success: return the server instance
+      return {
+        baseUrl,
+        dataDir,
+        async stop(){
+          child.kill('SIGTERM');
+          // Wait up to 2s for graceful exit
+          await Promise.race([
+            new Promise(r => child.once('exit', r)),
+            new Promise(r => setTimeout(r, 2000))
+          ]);
+          // If still alive, escalate to SIGKILL
+          if(child.exitCode === null){
+            child.kill('SIGKILL');
+            await new Promise(r => child.once('exit', r));
+          }
+          fs.rmSync(dataDir, { recursive: true, force: true });
+        }
+      };
+    }catch(err){
+      // Attempt failed: kill the child process and continue to next attempt
+      lastErr = err;
+      child.kill('SIGKILL');
+      // Let child exit before retrying
+      await new Promise(r => {
+        child.once('exit', r);
+        setTimeout(r, 500).unref?.();
+      });
     }
-  };
+  }
+
+  // All attempts failed: cleanup and rethrow
+  fs.rmSync(dataDir, { recursive: true, force: true });
+  throw lastErr;
 }
 
 export async function login(baseUrl, username = ADMIN_USERNAME, password = ADMIN_PASSWORD){

@@ -10,3 +10,6 @@ Task 4: complete (commits 768ed1f..b2fa480, fix round for 2 Important findings, 
 Task 5: complete (commits b2fa480..0396aad, review clean)
   Note: merge.js merges labs per-key, so otherLabs survives cross-client merges (better than spec worst case); regression test added.
 Final review: Ready to merge (opus whole-branch review). One required fix applied: known-key filter in explicit otherLabs array (6f5affe, 212/212 green). Accepted-as-is minors triaged in final review report.
+Phase1 auth/sync scoping: BASE 561e92f
+P1 Task 1: complete (commits 561e92f..f27b347, review clean)
+  Minor (deferred): no test for instance-admin update path, org-admin vs unassigned patient, null-actor inputs.
