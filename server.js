@@ -498,7 +498,7 @@ async function handleApi(req, res, pathname){
     if(isEnabled('MULTI_TENANT') && !isInstanceAdmin(actor)){
       users = users.filter(u => u.orgId === actor.orgId);
     }
-    const extra = isEnabled('MULTI_TENANT') ? (u) => ({ wardId: u.wardId ?? null, orgId: u.orgId ?? null }) : () => ({});
+    const extra = isEnabled('MULTI_TENANT') ? (u) => ({ wardId: u.wardId ?? null, orgId: u.orgId ?? null, assignmentType: u.assignmentType ?? null, assignmentId: u.assignmentId ?? null }) : () => ({});
     return sendJSON(res, 200, {
       users: users.map(u => ({ id: u.id, username: u.username, role: u.role, active: !!u.active, createdAt: u.createdAt, ...extra(u) }))
     });

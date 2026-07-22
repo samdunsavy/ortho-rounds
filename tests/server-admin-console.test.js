@@ -119,6 +119,13 @@ describe('admin console — end-to-end provisioning flow (flag on)', () => {
     assert.equal(mv.status, 200);
     assert.deepEqual(mv.json.assignment, { type: 'unit', id: unitId });
 
+    // GET /api/admin/users must reflect the new assignment so the console's
+    // user-assignment <select> can pre-select the user's current node.
+    const listAfterAssign = await api(srv.baseUrl, boss, '/api/admin/users');
+    const pg9Row = listAfterAssign.json.users.find(u => u.username === 'pg9');
+    assert.equal(pg9Row.assignmentType, 'unit');
+    assert.equal(pg9Row.assignmentId, unitId);
+
     // cp1 was dropped on its original push (member had no assignment yet), so
     // it still doesn't exist server-side; the now-scoped member correctly
     // sees nothing until they push again.
