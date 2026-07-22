@@ -185,8 +185,13 @@ an install that already has patient data:
    ```
    This reconstructs a hierarchy from each patient's existing free-text
    `ward`/`unit` fields and stamps `orgId`/`hospitalId`/`departmentId`/
-   `wardId`/`unitId` onto every active patient. It's idempotent — safe to
-   re-run if you add more patients before flipping the flag.
+   `wardId`/`unitId` onto every active patient. It also assigns any
+   existing user who doesn't already have an assignment (every
+   non-admin member, since they start with none) to the default org
+   root, so no one is stranded with an empty patient list the moment
+   the flag flips on — the instance admin is left unassigned since
+   they're already unrestricted. It's idempotent — safe to re-run if
+   you add more patients or users before flipping the flag.
 3. **Review the reconstructed tree before anyone depends on it.** Once the
    flag is on (step 4) the admin console's ward/unit screens show the tree
    the backfill built; sanity-check that wards and units line up with what

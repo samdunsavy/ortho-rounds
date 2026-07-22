@@ -128,10 +128,26 @@ export async function backfill(store, { singleBucket = false } = {}){
     stamped++;
   }
 
+  // No patient ever vanishes: any existing user who isn't already assigned
+  // to a node (and isn't the unrestricted instance admin) must land
+  // somewhere, or resolveScope() will hand them an empty unit set the
+  // moment MULTI_TENANT flips on. Default: org root, so they keep seeing
+  // everyone until an admin narrows their assignment.
+  let assignedUsers = 0;
+  const users = await store.getAllUsers();
+  for(const user of users){
+    const isInstanceAdmin = user.role === 'admin' && !user.orgId;
+    if(isInstanceAdmin) continue;
+    if(user.assignmentId) continue;
+    await store.updateUser(user.id, { assignmentType: 'org', assignmentId: orgId });
+    assignedUsers++;
+  }
+
   return {
     orgId,
     created,
-    stamped
+    stamped,
+    assignedUsers
   };
 }
 

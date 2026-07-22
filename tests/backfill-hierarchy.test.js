@@ -5,10 +5,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { createStore } from '../storage.js';
 import { backfill } from '../scripts/backfill-hierarchy.js';
+import { resolveScope } from '../scope.js';
 
 describe('backfill-hierarchy', () => {
   let dataDir;
   let store;
+  let firstRunOrgId;
 
   before(async () => {
     dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ortho-test-'));
@@ -20,6 +22,17 @@ describe('backfill-hierarchy', () => {
     await store.upsertPatient('p3', 300, 0, JSON.stringify({ name: 'Carol', ward: '', unit: '' }));
     // A deleted patient should never get stamped.
     await store.upsertPatient('p4', 400, 1, JSON.stringify({ name: 'Deleted', ward: '7FOW', unit: 'IV' }));
+
+    // A pre-existing non-admin member with no assignment yet, plus the
+    // unrestricted instance admin — both present before the migration runs.
+    await store.createUser({
+      id: 'member1', username: 'member1', passwordHash: 'h', passwordSalt: 's',
+      role: 'member', orgId: null, active: true, tokenVersion: 0, createdAt: Date.now()
+    });
+    await store.createUser({
+      id: 'instance-admin1', username: 'instance-admin1', passwordHash: 'h', passwordSalt: 's',
+      role: 'admin', orgId: null, active: true, tokenVersion: 0, createdAt: Date.now()
+    });
   });
 
   after(async () => {
@@ -31,6 +44,8 @@ describe('backfill-hierarchy', () => {
     const result = await backfill(store);
     assert.ok(result.orgId);
     assert.equal(result.stamped, 3); // p1, p2, p3 — not the deleted p4
+    assert.equal(result.assignedUsers, 1); // member1 only — instance admin is skipped
+    firstRunOrgId = result.orgId;
 
     for(const id of ['p1', 'p2', 'p3']){
       const row = await store.getPatientRaw(id);
@@ -45,6 +60,30 @@ describe('backfill-hierarchy', () => {
     const deletedRow = await store.getPatientRaw('p4');
     const deletedData = JSON.parse(deletedRow.data);
     assert.equal(deletedData.unitId, undefined, 'deleted patients are not stamped');
+  });
+
+  test('assigns existing unassigned members to the default org root (no-stranding)', async () => {
+    const member = await store.getUserById('member1');
+    assert.equal(member.assignmentType, 'org');
+    assert.equal(member.assignmentId, firstRunOrgId);
+
+    const actor = {
+      id: member.id,
+      role: 'member',
+      orgId: member.orgId,
+      assignment: { type: member.assignmentType, id: member.assignmentId }
+    };
+    const scope = await resolveScope(actor, store);
+    assert.equal(scope.unrestricted, false);
+    assert.ok(scope.unitIds.size > 0, 'migrated member must not be stranded with an empty unit set');
+
+    const p1 = JSON.parse((await store.getPatientRaw('p1')).data);
+    assert.ok(scope.unitIds.has(p1.unitId), 'migrated member should see units created by the backfill');
+  });
+
+  test('the instance admin is not given an assignment', async () => {
+    const admin = await store.getUserById('instance-admin1');
+    assert.equal(admin.assignmentId, null);
   });
 
   test('normalized ward names ("7FOW" / "7 fow") collapse to one ward', async () => {
@@ -74,6 +113,7 @@ describe('backfill-hierarchy', () => {
     assert.equal(result.created.wards, 0);
     assert.equal(result.created.units, 0);
     assert.equal(result.stamped, 3);
+    assert.equal(result.assignedUsers, 0, 're-run must not assign any further users');
 
     const after1 = JSON.parse((await store.getPatientRaw('p1')).data);
     assert.deepEqual(after1, before1);
