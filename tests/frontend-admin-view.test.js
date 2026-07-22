@@ -75,3 +75,16 @@ describe('admin view rendering', () => {
     assert.match(cards[0].textContent, /7/);
   });
 });
+
+describe('flag OFF — zero admin UI', () => {
+  test('admin entries stay hidden even for admins', () => {
+    const { window, document } = loadFrontendEnv();
+    window.localStorage.setItem('ortho_role', 'admin');
+    window.serverFlags = {};
+    window.updateAccountUI();
+    const btn = document.getElementById('moreAdminBtn');
+    assert.ok(btn, 'button exists in DOM');
+    assert.equal(btn.style.display, 'none');
+    assert.equal(document.getElementById('adminView').hidden, true);
+  });
+});

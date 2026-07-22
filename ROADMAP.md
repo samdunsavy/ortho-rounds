@@ -57,6 +57,7 @@ Phase 1's auth/sync scoping resumes once this list is worked through.
 - [x] Org → hospital → ward hierarchy schema (additive tables/columns, both SQLite and MongoDB — see `DESIGN-multitenant.md`), inert until the `MULTI_TENANT` flag is used
 - [x] Verified an existing pre-Phase-1 database upgrades automatically (new columns added, no destructive migration, existing rows unaffected — covered by a regression test)
 - [x] Auth + sync scoping by ward/org, built and tested with `MULTI_TENANT` both on and off — shipped 2026-07-22: see docs/superpowers/specs/2026-07-22-auth-sync-scoping-design.md
+- [x] Org/department admin console + provisioning (shipped 2026-07-22 — see docs/superpowers/specs/2026-07-22-admin-console-design.md)
 - [ ] Build a one-way migration tool: existing SQLite/Mongo instance → hosted multi-tenant backend, run by the customer, on demand, reversible via the existing export
 - [ ] Org-scoped roles (admin/attending/PG) layered on top of the current auth system, not replacing it
 - [ ] Billing scaffold (Stripe) wired but dormant — no charges yet, just plumbing

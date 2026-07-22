@@ -74,7 +74,7 @@ sync, and the admin console simultaneously, and deserves its own review:
    This is the highest-risk change in the whole roadmap — it's the endpoint
    every existing client already depends on, hence why `/api/sync/v1` was
    versioned first (see Phase 0 work).
-3. **Org/ward admin console.** CRUD UI for an org admin to create hospitals,
+3. **Org/ward admin console.** ✅ done — 2026-07-22. CRUD UI for an org admin to create hospitals,
    wards, and invite users into them — net-new frontend surface.
 4. **Self-host migration tool.** A one-way, customer-run script: take an
    existing single-tenant SQLite/Mongo instance, create one org/hospital/ward
@@ -88,5 +88,6 @@ sync, and the admin console simultaneously, and deserves its own review:
 - Phase 1 (next pass): ✅ done — 2026-07-22: auth + sync scoping behind `MULTI_TENANT`, tested
   with the flag both on and off — off must remain byte-for-byte identical
   to today's behavior, which is the whole point of building it as a flag
-  rather than a rewrite.
-- Phase 1 (later): migration tool + admin console, first hosted pilot org.
+  rather than a rewrite. Admin console UI gated behind flag; bootstrapAdmin
+  self-heal ensures single-tenant mode always has a valid admin.
+- Phase 1 (later): migration tool, first hosted pilot org.
