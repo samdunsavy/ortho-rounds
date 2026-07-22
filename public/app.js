@@ -3603,13 +3603,33 @@ function bindAuthEvents(){
       catch(err){ showToast(err.message); }
       return;
     }
-    const addWard = e.target.closest('[data-add-ward]');
-    if(addWard){
-      const hid = addWard.dataset.addWard;
-      const input = document.querySelector(`[data-new-ward-name="${hid}"]`);
+    const addDept = e.target.closest('[data-add-department]');
+    if(addDept){
+      const hid = addDept.dataset.addDepartment;
+      const input = document.querySelector(`[data-new-department-name="${hid}"]`);
       const name = input?.value.trim();
       if(!name) return;
-      try{ await api('/api/admin/wards', { method: 'POST', body: JSON.stringify({ hospitalId: hid, name }) }); await loadAdminView(); }
+      try{ await api('/api/admin/departments', { method: 'POST', body: JSON.stringify({ hospitalId: hid, name }) }); await loadAdminView(); }
+      catch(err){ showToast(err.message); }
+      return;
+    }
+    const addWard = e.target.closest('[data-add-ward]');
+    if(addWard){
+      const did = addWard.dataset.addWard;
+      const input = document.querySelector(`[data-new-ward-name="${did}"]`);
+      const name = input?.value.trim();
+      if(!name) return;
+      try{ await api('/api/admin/wards', { method: 'POST', body: JSON.stringify({ departmentId: did, name }) }); await loadAdminView(); }
+      catch(err){ showToast(err.message); }
+      return;
+    }
+    const addUnit = e.target.closest('[data-add-unit]');
+    if(addUnit){
+      const wid = addUnit.dataset.addUnit;
+      const input = document.querySelector(`[data-new-unit-name="${wid}"]`);
+      const name = input?.value.trim();
+      if(!name) return;
+      try{ await api('/api/admin/units', { method: 'POST', body: JSON.stringify({ wardId: wid, name }) }); await loadAdminView(); }
       catch(err){ showToast(err.message); }
       return;
     }
@@ -7571,7 +7591,7 @@ async function refreshServerFlags(){
 }
 
 function renderAdminStatTiles(tree){
-  const postop = tree.hospitals.flatMap(h => h.wards).reduce((n, w) => n + (w.stats.byStatus.postop || 0), 0);
+  const postop = tree.hospitals.flatMap(h => h.departments).reduce((n, dep) => n + (dep.stats.byStatus.postop || 0), 0);
   const tiles = [
     { n: tree.totals.departments, l: 'Departments' },
     { n: tree.totals.usersActive, l: 'Active users' },
@@ -7591,22 +7611,44 @@ function renderAdminStatusBar(byStatus, total){
     seg(byStatus.fordischarge, 'var(--status-fordischarge)')}</div>`;
 }
 
+function renderAdminWardRowHTML(w){
+  const chips = w.units.map(u => `
+    <span class="admin-unit-chip" data-unit-id="${escapeHTML(u.id)}">${escapeHTML(u.name)} <span class="small-muted">(${u.stats.livePatients})</span></span>`
+  ).join('') || '<span class="small-muted">No units yet</span>';
+  return `
+    <div class="admin-ward-row" data-ward-id="${escapeHTML(w.id)}">
+      <div><strong>${escapeHTML(w.name)}</strong> <span class="small-muted">${w.stats.livePatients} live patient${w.stats.livePatients === 1 ? '' : 's'} · ${w.stats.users} user${w.stats.users === 1 ? '' : 's'}</span></div>
+      <div class="admin-unit-chips">${chips}</div>
+      <div class="admin-inline-form">
+        <input placeholder="New unit name" data-new-unit-name="${escapeHTML(w.id)}">
+        <button class="btn" data-add-unit="${escapeHTML(w.id)}">Add unit</button>
+      </div>
+    </div>`;
+}
+
 function renderAdminOrgSectionHTML(tree){
   const groups = tree.hospitals.map(h => `
     <div class="admin-hospital-group" data-hospital-id="${escapeHTML(h.id)}">
       <h3>${escapeHTML(h.name)}</h3>
       <div class="admin-dept-grid">
-        ${h.wards.map(w => `
-          <div class="admin-dept-card" data-ward-id="${escapeHTML(w.id)}">
-            <strong>${escapeHTML(w.name)}</strong> <span class="spec-badge">${escapeHTML(w.specialty || '')}</span>
-            <div class="small-muted">${w.stats.livePatients} live patient${w.stats.livePatients === 1 ? '' : 's'} · ${w.stats.users} user${w.stats.users === 1 ? '' : 's'}</div>
-            ${renderAdminStatusBar(w.stats.byStatus, w.stats.livePatients)}
-            <div class="small-muted">${w.stats.lastActivity ? 'Active ' + formatRelativeTime(w.stats.lastActivity) : 'No activity yet'}</div>
+        ${h.departments.map(dep => `
+          <div class="admin-dept-card" data-department-id="${escapeHTML(dep.id)}">
+            <strong>${escapeHTML(dep.name)}</strong> <span class="spec-badge">${escapeHTML(dep.specialty || '')}</span>
+            <div class="small-muted">${dep.stats.livePatients} live patient${dep.stats.livePatients === 1 ? '' : 's'} · ${dep.stats.users} user${dep.stats.users === 1 ? '' : 's'}</div>
+            ${renderAdminStatusBar(dep.stats.byStatus, dep.stats.livePatients)}
+            <div class="small-muted">${dep.stats.lastActivity ? 'Active ' + formatRelativeTime(dep.stats.lastActivity) : 'No activity yet'}</div>
+            <div class="admin-ward-list">
+              ${dep.wards.map(renderAdminWardRowHTML).join('') || '<div class="small-muted">No wards yet</div>'}
+            </div>
+            <div class="admin-inline-form">
+              <input placeholder="New ward name" data-new-ward-name="${escapeHTML(dep.id)}">
+              <button class="btn" data-add-ward="${escapeHTML(dep.id)}">Add ward</button>
+            </div>
           </div>`).join('')}
       </div>
       <div class="admin-inline-form">
-        <input placeholder="New department name" data-new-ward-name="${escapeHTML(h.id)}">
-        <button class="btn" data-add-ward="${escapeHTML(h.id)}">Add department</button>
+        <input placeholder="New department name" data-new-department-name="${escapeHTML(h.id)}">
+        <button class="btn" data-add-department="${escapeHTML(h.id)}">Add department</button>
       </div>
     </div>`).join('');
   return `<h3>Organization</h3>${groups || '<div class="small-muted">No hospitals yet — add the first one.</div>'}
@@ -7616,19 +7658,53 @@ function renderAdminOrgSectionHTML(tree){
     </div>`;
 }
 
+// Walks the tree into per-level groups so the assignment <select> can render
+// an <optgroup> per node type (hospital/department/ward/unit). Option values
+// encode "type:id" — the change handler below splits on the first ":".
+function buildAssignNodeGroups(tree){
+  const groups = { hospital: [], department: [], ward: [], unit: [] };
+  for(const h of tree.hospitals){
+    groups.hospital.push({ id: h.id, label: h.name });
+    for(const dep of h.departments){
+      groups.department.push({ id: dep.id, label: `${dep.name} (${h.name})` });
+      for(const w of dep.wards){
+        groups.ward.push({ id: w.id, label: `${w.name} (${dep.name})` });
+        for(const u of w.units){
+          groups.unit.push({ id: u.id, label: `${u.name} (${w.name})` });
+        }
+      }
+    }
+  }
+  return groups;
+}
+
+function renderAssignSelectOptionsHTML(groups, selType, selId){
+  const optgroup = (label, type, items) => items.length ? `<optgroup label="${escapeHTML(label)}">${items.map(it =>
+    `<option value="${type}:${escapeHTML(it.id)}" ${type === selType && it.id === selId ? 'selected' : ''}>${escapeHTML(it.label)}</option>`
+  ).join('')}</optgroup>` : '';
+  return `<option value="">— none —</option>` +
+    optgroup('Hospitals', 'hospital', groups.hospital) +
+    optgroup('Departments', 'department', groups.department) +
+    optgroup('Wards', 'ward', groups.ward) +
+    optgroup('Units', 'unit', groups.unit);
+}
+
 function renderAdminUsersSectionHTML(tree, users){
-  const wardOptions = tree.hospitals.flatMap(h => h.wards.map(w => ({ id: w.id, label: `${w.name} (${h.name})` })));
-  const opts = (sel) => `<option value="">— none —</option>` + wardOptions.map(w =>
-    `<option value="${escapeHTML(w.id)}" ${w.id === sel ? 'selected' : ''}>${escapeHTML(w.label)}</option>`).join('');
-  const rows = users.map(u => `
+  const groups = buildAssignNodeGroups(tree);
+  const rows = users.map(u => {
+    const selType = u.assignmentType || null;
+    const selId = u.assignmentId || null;
+    const prev = selType && selId ? `${selType}:${selId}` : '';
+    return `
     <tr>
       <td>${escapeHTML(u.username)}</td>
       <td>${u.role === 'admin' ? '<span class="spec-badge">admin</span>' : 'member'}</td>
-      <td><select data-assign-user="${escapeHTML(u.id)}" data-prev="${escapeHTML(u.wardId || '')}">${opts(u.wardId)}</select></td>
+      <td><select data-assign-user="${escapeHTML(u.id)}" data-prev="${escapeHTML(prev)}">${renderAssignSelectOptionsHTML(groups, selType, selId)}</select></td>
       <td>${u.active ? 'active' : 'disabled'}</td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
   return `<h3>Users</h3><table class="admin-users-table">
-    <thead><tr><th>User</th><th>Role</th><th>Department</th><th>Status</th></tr></thead>
+    <thead><tr><th>User</th><th>Role</th><th>Assignment</th><th>Status</th></tr></thead>
     <tbody>${rows}</tbody></table>`;
 }
 
@@ -7699,10 +7775,14 @@ function closeAdminView(){
 document.getElementById('adminView')?.addEventListener('change', async (e) => {
   const sel = e.target.closest('[data-assign-user]');
   if(!sel) return;
+  const raw = sel.value;
+  const sepIdx = raw.indexOf(':');
+  const nodeType = sepIdx === -1 ? null : raw.slice(0, sepIdx);
+  const nodeId = sepIdx === -1 ? null : raw.slice(sepIdx + 1);
   try{
-    await api(`/api/admin/users/${sel.dataset.assignUser}/assign`, { method: 'POST', body: JSON.stringify({ wardId: sel.value || null }) });
-    sel.dataset.prev = sel.value;
-    showToast('Department updated');
+    await api(`/api/admin/users/${sel.dataset.assignUser}/assign`, { method: 'POST', body: JSON.stringify({ nodeType, nodeId }) });
+    sel.dataset.prev = raw;
+    showToast('Assignment updated');
   }catch(err){
     sel.value = sel.dataset.prev || '';
     showToast(err.message);
