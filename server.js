@@ -440,6 +440,9 @@ async function handleApi(req, res, pathname){
   }
 
   if(pathname === '/api/backup' && req.method === 'GET'){
+    if(isEnabled('MULTI_TENANT') && !(actor.role === 'admin' && !actor.orgId)){
+      return sendJSON(res, 403, { error: 'Instance admin only' });
+    }
     const filePath = store.backupFilePath ? store.backupFilePath() : null;
     if(filePath){
       res.writeHead(200, {
@@ -485,6 +488,9 @@ async function handleApi(req, res, pathname){
   }
 
   if(pathname === '/api/export' && req.method === 'GET'){
+    if(isEnabled('MULTI_TENANT') && !(actor.role === 'admin' && !actor.orgId)){
+      return sendJSON(res, 403, { error: 'Instance admin only' });
+    }
     const rows = await store.getActive();
     const payload = {
       exportedAt: new Date().toISOString(),
@@ -620,6 +626,9 @@ async function handleApi(req, res, pathname){
   }
 
   if(pathname === '/api/import' && req.method === 'POST'){
+    if(isEnabled('MULTI_TENANT') && !(actor.role === 'admin' && !actor.orgId)){
+      return sendJSON(res, 403, { error: 'Instance admin only' });
+    }
     const body = await readBody(req) || {};
     const incoming = Array.isArray(body.patients) ? body.patients : null;
     if(!incoming) return sendJSON(res, 400, { error: 'Invalid file format' });

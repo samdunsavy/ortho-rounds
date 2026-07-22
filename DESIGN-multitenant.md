@@ -85,7 +85,7 @@ sync, and the admin console simultaneously, and deserves its own review:
 ## Rollout plan
 
 - Phase 1 (now → next pass): schema exists, inert. ✅ done this pass.
-- Phase 1 (next pass): auth + sync scoping behind `MULTI_TENANT`, tested
+- Phase 1 (next pass): ✅ done — 2026-07-22: auth + sync scoping behind `MULTI_TENANT`, tested
   with the flag both on and off — off must remain byte-for-byte identical
   to today's behavior, which is the whole point of building it as a flag
   rather than a rewrite.
