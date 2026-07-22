@@ -197,6 +197,15 @@ function createSqliteStore({ dataDir }){
     async getAllUsers(){
       return db.prepare('SELECT * FROM users ORDER BY createdAt ASC').all();
     },
+    async listUsersByOrg(orgId){
+      return db.prepare('SELECT * FROM users WHERE orgId = ? ORDER BY createdAt ASC').all(orgId);
+    },
+    async hasInstanceAdmin(){
+      const row = db.prepare(
+        "SELECT 1 AS ok FROM users WHERE role = 'admin' AND active = 1 AND orgId IS NULL LIMIT 1"
+      ).get();
+      return !!row;
+    },
     async countUsers(){ return db.prepare('SELECT COUNT(*) AS n FROM users').get().n; },
     async createUser(user){
       db.prepare(`
@@ -433,6 +442,14 @@ async function createMongoStore({ mongoUri }){
     async getAllUsers(){
       const arr = await users.find({}).sort({ createdAt: 1 }).toArray();
       return arr.map(mapUser);
+    },
+    async listUsersByOrg(orgId){
+      const arr = await users.find({ orgId }).sort({ createdAt: 1 }).toArray();
+      return arr.map(mapUser);
+    },
+    async hasInstanceAdmin(){
+      const row = await users.findOne({ role: 'admin', active: 1, $or: [{ orgId: null }, { orgId: { $exists: false } }] });
+      return !!row;
     },
     async countUsers(){ return await users.countDocuments(); },
     async createUser(user){

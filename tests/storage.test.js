@@ -68,6 +68,37 @@ describe('SQLite storage — users', () => {
     const all = await store.getAllUsers();
     assert.equal(all.length, 2);
   });
+
+  test('listUsersByOrg returns only that org, hasInstanceAdmin detects active root admins', async () => {
+    // Create org-specific users
+    await store.createUser({ id: 'org-u1', username: 'orgu1', passwordHash: 'h', passwordSalt: 's',
+      role: 'member', active: true, tokenVersion: 0, createdAt: Date.now(), orgId: 'orgA', wardId: 'w1' });
+    await store.createUser({ id: 'org-u2', username: 'orgu2', passwordHash: 'h', passwordSalt: 's',
+      role: 'admin', active: true, tokenVersion: 0, createdAt: Date.now(), orgId: 'orgB', wardId: null });
+
+    // Test listUsersByOrg
+    const a = await store.listUsersByOrg('orgA');
+    assert.deepEqual(a.map(u => u.id), ['org-u1']);
+    assert.deepEqual((await store.listUsersByOrg('orgC')), []);
+
+    // Test hasInstanceAdmin: u1 from earlier tests is active admin with no orgId
+    // Disable u1 first to test the false case
+    await store.updateUser('u1', { active: false });
+    assert.equal(await store.hasInstanceAdmin(), false);
+
+    // Create root-x, an active admin with no orgId
+    await store.createUser({ id: 'root-x', username: 'rootx', passwordHash: 'h', passwordSalt: 's',
+      role: 'admin', active: true, tokenVersion: 0, createdAt: Date.now() });
+    assert.equal(await store.hasInstanceAdmin(), true);
+
+    // Disable root-x and verify it's inactive
+    await store.updateUser('root-x', { active: false });
+    const rootx = (await store.getAllUsers()).find(u => u.id === 'root-x');
+    assert.equal(!!rootx.active, false);
+
+    // With both root-x and u1 disabled, hasInstanceAdmin should be false
+    assert.equal(await store.hasInstanceAdmin(), false);
+  });
 });
 
 describe('SQLite storage — pushSubscriptions', () => {
