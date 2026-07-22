@@ -2,6 +2,7 @@
    and first-boot admin bootstrap for Ortho Rounds. */
 
 import crypto from 'node:crypto';
+import { isEnabled } from './flags.js';
 
 const LOGIN_RATE_LIMIT_MAX = 8;
 const LOGIN_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
@@ -74,7 +75,11 @@ export function checkLoginRateLimit(key, now = Date.now()){
  * already exists — this only ever runs once per install.
  */
 export async function bootstrapAdmin(store){
-  if((await store.countUsers()) > 0) return { created: false };
+  if(isEnabled('MULTI_TENANT')){
+    if(await store.hasInstanceAdmin()) return { created: false };
+  }else{
+    if((await store.countUsers()) > 0) return { created: false };
+  }
 
   const username = process.env.ORTHO_ADMIN_USERNAME || 'admin';
   const envPassword = process.env.ORTHO_ADMIN_PASSWORD;

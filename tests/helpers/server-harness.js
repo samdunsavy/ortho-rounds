@@ -27,29 +27,32 @@ async function waitForHealth(baseUrl, child, timeoutMs = 15000, stderrCapture = 
 }
 
 /** Boot the real server on a temp SQLite dir. `seed(store)` runs before boot. */
-export async function startServer({ multiTenant = false, seed = null } = {}){
+export async function startServer({ multiTenant = false, seed = null, seedRaw = null } = {}){
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ortho-it-'));
-  if(seed){
+  if(seed || seedRaw){
     const store = await createStore({ dataDir });
     await store.init();
     try{
-      await seed(store);
+      await (seed || seedRaw)(store);
       // Server's bootstrapAdmin no-ops once any user exists, so seeded tests
       // must create the instance admin themselves to keep login(baseUrl) working.
-      const existingAdmin = await store.getUserByUsername(ADMIN_USERNAME);
-      if(!existingAdmin){
-        await store.createUser({
-          id: 'root-admin',
-          username: ADMIN_USERNAME,
-          passwordHash: hashPassword(ADMIN_PASSWORD, 'harness-salt'),
-          passwordSalt: 'harness-salt',
-          role: 'admin',
-          orgId: null,
-          wardId: null,
-          active: true,
-          tokenVersion: 0,
-          createdAt: Date.now()
-        });
+      // But seedRaw skips this auto-admin block to test self-healing behavior.
+      if(seed){
+        const existingAdmin = await store.getUserByUsername(ADMIN_USERNAME);
+        if(!existingAdmin){
+          await store.createUser({
+            id: 'root-admin',
+            username: ADMIN_USERNAME,
+            passwordHash: hashPassword(ADMIN_PASSWORD, 'harness-salt'),
+            passwordSalt: 'harness-salt',
+            role: 'admin',
+            orgId: null,
+            wardId: null,
+            active: true,
+            tokenVersion: 0,
+            createdAt: Date.now()
+          });
+        }
       }
     }
     finally{ await store.close(); }
