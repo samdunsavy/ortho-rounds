@@ -15,8 +15,8 @@ describe('admin tree/stats builders', () => {
     await store.createOrganization({ id: 'o1', name: 'Org One', plan: 'free' });
     await store.createOrganization({ id: 'o2', name: 'Org Two', plan: 'paid' });
     await store.createHospital({ id: 'h1', orgId: 'o1', name: 'City Hospital' });
-    await store.createWard({ id: 'w1', hospitalId: 'h1', name: 'Ortho', specialty: 'ortho' });
-    await store.createWard({ id: 'w2', hospitalId: 'h1', name: 'Surgery', specialty: 'surgery' });
+    await store.createDepartment({ id: 'w1', hospitalId: 'h1', name: 'Ortho', specialty: 'ortho' });
+    await store.createDepartment({ id: 'w2', hospitalId: 'h1', name: 'Surgery', specialty: 'surgery' });
     const mkUser = (id, orgId, wardId, role = 'member', active = true) => store.createUser({
       id, username: id, passwordHash: 'h', passwordSalt: 's', role, active,
       tokenVersion: 0, createdAt: Date.now(), orgId, wardId

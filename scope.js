@@ -16,7 +16,7 @@ export async function resolveScope(actor, store){
     const wardIds = new Set();
     const hospitals = await store.listHospitalsByOrg(actor.orgId);
     for(const h of hospitals){
-      for(const w of await store.listWardsByHospital(h.id)) wardIds.add(w.id);
+      for(const w of await store.listDepartmentsByHospital(h.id)) wardIds.add(w.id);
     }
     return { unrestricted: false, wardIds, includeUnassigned: false };
   }

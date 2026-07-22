@@ -40,11 +40,11 @@ describe('admin console — end-to-end provisioning flow (flag on)', () => {
     const h = await api(srv.baseUrl, boss, '/api/admin/hospitals', { method: 'POST', body: { name: 'City Hospital' } });
     assert.equal(h.status, 200);
     hospitalId = h.json.id;
-    const w1 = await api(srv.baseUrl, boss, '/api/admin/wards', { method: 'POST', body: { hospitalId, name: 'Ortho' } });
+    const w1 = await api(srv.baseUrl, boss, '/api/admin/departments', { method: 'POST', body: { hospitalId, name: 'Ortho' } });
     assert.equal(w1.status, 200);
     wardId = w1.json.id;
     assert.equal(w1.json.specialty, 'ortho');
-    const w2 = await api(srv.baseUrl, boss, '/api/admin/wards', { method: 'POST', body: { hospitalId, name: 'Surgery', specialty: 'surgery' } });
+    const w2 = await api(srv.baseUrl, boss, '/api/admin/departments', { method: 'POST', body: { hospitalId, name: 'Surgery', specialty: 'surgery' } });
     ward2Id = w2.json.id;
   });
 
@@ -90,7 +90,7 @@ describe('admin console — end-to-end provisioning flow (flag on)', () => {
     const a2 = await api(srv.baseUrl, root, `/api/admin/orgs/${org2.json.id}/admin`, { method: 'POST', body: { username: 'boss2' } });
     const boss2 = (await login(srv.baseUrl, 'boss2', a2.json.temporaryPassword)).json.token;
 
-    assert.equal((await api(srv.baseUrl, boss2, '/api/admin/wards', { method: 'POST', body: { hospitalId, name: 'Sneaky' } })).status, 403);
+    assert.equal((await api(srv.baseUrl, boss2, '/api/admin/departments', { method: 'POST', body: { hospitalId, name: 'Sneaky' } })).status, 403);
     assert.equal((await api(srv.baseUrl, boss2, `/api/admin/users/${memberId}/assign`, { method: 'POST', body: { wardId: null } })).status, 403);
     assert.equal((await api(srv.baseUrl, boss2, `/api/admin/users/${memberId}/disable`, { method: 'POST' })).status, 403);
     const list2 = await api(srv.baseUrl, boss2, '/api/admin/users');
@@ -127,7 +127,7 @@ describe('admin console — flag OFF: new routes do not exist', () => {
       ['/api/admin/orgs', 'GET'],
       ['/api/admin/org', 'GET'],
       ['/api/admin/hospitals', 'POST', { name: 'X' }],
-      ['/api/admin/wards', 'POST', { hospitalId: 'h', name: 'X' }],
+      ['/api/admin/departments', 'POST', { hospitalId: 'h', name: 'X' }],
       ['/api/admin/users/u1/assign', 'POST', { wardId: null }]
     ]){
       const r = await api(srv.baseUrl, root, path, { method, body });

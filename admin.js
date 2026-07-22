@@ -30,7 +30,7 @@ export async function buildOrgTree(store, orgId){
   const outHospitals = [];
   const wardStats = new Map(); // wardId -> stats object (shared with output)
   for(const h of hospitals){
-    const wards = await store.listWardsByHospital(h.id);
+    const wards = await store.listDepartmentsByHospital(h.id);
     outHospitals.push({
       id: h.id, name: h.name,
       wards: wards.map(w => {

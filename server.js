@@ -234,11 +234,11 @@ function requestedOrgId(actor, explicit){
   return typeof explicit === 'string' && explicit ? explicit : null;
 }
 
-/** True iff wardId belongs to org orgId (looks up ward -> hospital -> org). */
-async function wardInOrg(wardId, orgId){
-  const ward = await store.getWard(wardId);
-  if(!ward) return false;
-  const hospital = await store.getHospital(ward.hospitalId);
+/** True iff wardId belongs to org orgId (looks up department -> hospital -> org). */
+async function departmentInOrg(wardId, orgId){
+  const department = await store.getDepartment(wardId);
+  if(!department) return false;
+  const hospital = await store.getHospital(department.hospitalId);
   return !!hospital && hospital.orgId === orgId;
 }
 
@@ -400,7 +400,7 @@ async function handleApi(req, res, pathname){
       return sendJSON(res, 200, { id: hospital.id, orgId, name });
     }
 
-    if(pathname === '/api/admin/wards' && req.method === 'POST'){
+    if(pathname === '/api/admin/departments' && req.method === 'POST'){
       if(actor.role !== 'admin') return sendJSON(res, 403, { error: 'Admin only' });
       const body = await readBody(req) || {};
       const hospital = body.hospitalId ? await store.getHospital(body.hospitalId) : null;
@@ -409,9 +409,9 @@ async function handleApi(req, res, pathname){
       const name = cleanName(body.name);
       if(!name) return sendJSON(res, 400, { error: 'Department name required (max 80 chars)' });
       const specialty = cleanName(body.specialty, 40) || 'ortho';
-      const ward = { id: crypto.randomUUID(), hospitalId: hospital.id, name, specialty, createdAt: Date.now() };
-      await store.createWard(ward);
-      return sendJSON(res, 200, { id: ward.id, hospitalId: hospital.id, name, specialty });
+      const department = { id: crypto.randomUUID(), hospitalId: hospital.id, name, specialty, createdAt: Date.now() };
+      await store.createDepartment(department);
+      return sendJSON(res, 200, { id: department.id, hospitalId: hospital.id, name, specialty });
     }
 
     const assignMatch = pathname.match(/^\/api\/admin\/users\/([^/]+)\/assign$/);
@@ -424,7 +424,7 @@ async function handleApi(req, res, pathname){
       const wardId = body.wardId === null || body.wardId === undefined ? null : String(body.wardId);
       if(wardId !== null){
         const targetOrg = isInstanceAdmin(actor) ? target.orgId : actor.orgId;
-        if(!targetOrg || !(await wardInOrg(wardId, targetOrg))) return sendJSON(res, 403, { error: 'Department is not in this organization' });
+        if(!targetOrg || !(await departmentInOrg(wardId, targetOrg))) return sendJSON(res, 403, { error: 'Department is not in this organization' });
       }
       await store.updateUser(target.id, { wardId });
       return sendJSON(res, 200, { ok: true, wardId });
@@ -465,14 +465,14 @@ async function handleApi(req, res, pathname){
       if(!isInstanceAdmin(actor)){
         newUser.orgId = actor.orgId;
         if(body.wardId){
-          if(!(await wardInOrg(String(body.wardId), actor.orgId))) return sendJSON(res, 403, { error: 'Department is not in this organization' });
+          if(!(await departmentInOrg(String(body.wardId), actor.orgId))) return sendJSON(res, 403, { error: 'Department is not in this organization' });
           newUser.wardId = String(body.wardId);
         }
       }else if(body.orgId){
         if(!(await store.getOrganization(body.orgId))) return sendJSON(res, 404, { error: 'Organization not found' });
         newUser.orgId = body.orgId;
         if(body.wardId){
-          if(!(await wardInOrg(String(body.wardId), body.orgId))) return sendJSON(res, 403, { error: 'Department is not in this organization' });
+          if(!(await departmentInOrg(String(body.wardId), body.orgId))) return sendJSON(res, 403, { error: 'Department is not in this organization' });
           newUser.wardId = String(body.wardId);
         }
       }

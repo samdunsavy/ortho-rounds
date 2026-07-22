@@ -215,7 +215,7 @@ describe('SQLite storage — multi-tenant hierarchy (roadmap Phase 1, unused unt
   test('creates the org -> hospital -> ward chain and reads it back', async () => {
     await store.createOrganization({ id: 'org1', name: 'City Hospital Group', plan: 'paid', createdAt: 1 });
     await store.createHospital({ id: 'hosp1', orgId: 'org1', name: 'City General', createdAt: 2 });
-    await store.createWard({ id: 'ward1', hospitalId: 'hosp1', name: 'Ortho A', specialty: 'ortho', createdAt: 3 });
+    await store.createDepartment({ id: 'ward1', hospitalId: 'hosp1', name: 'Ortho A', specialty: 'ortho', createdAt: 3 });
 
     const org = await store.getOrganization('org1');
     assert.equal(org.name, 'City Hospital Group');
@@ -225,7 +225,7 @@ describe('SQLite storage — multi-tenant hierarchy (roadmap Phase 1, unused unt
     assert.equal(hospitals.length, 1);
     assert.equal(hospitals[0].name, 'City General');
 
-    const wards = await store.listWardsByHospital('hosp1');
+    const wards = await store.listDepartmentsByHospital('hosp1');
     assert.equal(wards.length, 1);
     assert.equal(wards[0].specialty, 'ortho');
   });

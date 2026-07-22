@@ -21,9 +21,9 @@ describe('resolveScope', () => {
     await store.createHospital({ id: 'h1', orgId: 'org1', name: 'H1' });
     await store.createHospital({ id: 'h2', orgId: 'org1', name: 'H2' });
     await store.createHospital({ id: 'hx', orgId: 'org2', name: 'HX' });
-    await store.createWard({ id: 'w1', hospitalId: 'h1', name: 'Ortho' });
-    await store.createWard({ id: 'w2', hospitalId: 'h2', name: 'Surgery' });
-    await store.createWard({ id: 'wx', hospitalId: 'hx', name: 'Other-org ward' });
+    await store.createDepartment({ id: 'w1', hospitalId: 'h1', name: 'Ortho' });
+    await store.createDepartment({ id: 'w2', hospitalId: 'h2', name: 'Surgery' });
+    await store.createDepartment({ id: 'wx', hospitalId: 'hx', name: 'Other-org ward' });
   });
   after(async () => { await store.close(); fs.rmSync(dataDir, { recursive: true, force: true }); });
 

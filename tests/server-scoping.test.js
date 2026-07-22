@@ -28,9 +28,9 @@ describe('MULTI_TENANT sync scoping', () => {
         await store.createOrganization({ id: 'org2', name: 'Org2', plan: 'free' });
         await store.createHospital({ id: 'h1', orgId: 'org1', name: 'H1' });
         await store.createHospital({ id: 'hx', orgId: 'org2', name: 'HX' });
-        await store.createWard({ id: 'w1', hospitalId: 'h1', name: 'Ortho' });
-        await store.createWard({ id: 'w2', hospitalId: 'h1', name: 'Surgery' });
-        await store.createWard({ id: 'wx', hospitalId: 'hx', name: 'OtherOrg' });
+        await store.createDepartment({ id: 'w1', hospitalId: 'h1', name: 'Ortho' });
+        await store.createDepartment({ id: 'w2', hospitalId: 'h1', name: 'Surgery' });
+        await store.createDepartment({ id: 'wx', hospitalId: 'hx', name: 'OtherOrg' });
         await seedUser(store, { id: 'u1', username: 'pg1', orgId: 'org1', wardId: 'w1' });
         await seedUser(store, { id: 'u2', username: 'pg2', orgId: 'org1', wardId: 'w2' });
         await seedUser(store, { id: 'u3', username: 'boss1', orgId: 'org1', role: 'admin' });

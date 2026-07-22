@@ -128,7 +128,7 @@ function createSqliteStore({ dataDir }){
       `);
       db.exec('CREATE INDEX IF NOT EXISTS idx_hospitals_orgId ON hospitals(orgId);');
       db.exec(`
-        CREATE TABLE IF NOT EXISTS wards (
+        CREATE TABLE IF NOT EXISTS departments (
           id         TEXT PRIMARY KEY,
           hospitalId TEXT NOT NULL,
           name       TEXT NOT NULL,
@@ -136,7 +136,7 @@ function createSqliteStore({ dataDir }){
           createdAt  INTEGER NOT NULL
         );
       `);
-      db.exec('CREATE INDEX IF NOT EXISTS idx_wards_hospitalId ON wards(hospitalId);');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_departments_hospitalId ON departments(hospitalId);');
       db.exec(`
         CREATE TABLE IF NOT EXISTS pushSubscriptions (
           id           TEXT PRIMARY KEY,
@@ -276,15 +276,15 @@ function createSqliteStore({ dataDir }){
     async listHospitalsByOrg(orgId){
       return db.prepare('SELECT * FROM hospitals WHERE orgId = ? ORDER BY createdAt ASC').all(orgId);
     },
-    async createWard(ward){
-      db.prepare(`INSERT INTO wards (id, hospitalId, name, specialty, createdAt) VALUES (?, ?, ?, ?, ?)`)
-        .run(ward.id, ward.hospitalId, ward.name, ward.specialty || 'ortho', ward.createdAt || Date.now());
+    async createDepartment(dep){
+      db.prepare(`INSERT INTO departments (id, hospitalId, name, specialty, createdAt) VALUES (?, ?, ?, ?, ?)`)
+        .run(dep.id, dep.hospitalId, dep.name, dep.specialty || 'ortho', dep.createdAt || Date.now());
     },
-    async getWard(id){
-      return db.prepare('SELECT * FROM wards WHERE id = ?').get(id) || null;
+    async getDepartment(id){
+      return db.prepare('SELECT * FROM departments WHERE id = ?').get(id) || null;
     },
-    async listWardsByHospital(hospitalId){
-      return db.prepare('SELECT * FROM wards WHERE hospitalId = ? ORDER BY createdAt ASC').all(hospitalId);
+    async listDepartmentsByHospital(hospitalId){
+      return db.prepare('SELECT * FROM departments WHERE hospitalId = ? ORDER BY createdAt ASC').all(hospitalId);
     },
 
     async begin(){ db.exec('BEGIN'); },
@@ -369,13 +369,13 @@ async function createMongoStore({ mongoUri }){
   // unless something behind the MULTI_TENANT flag writes to them.
   const organizations = database.collection('organizations');
   const hospitals = database.collection('hospitals');
-  const wards = database.collection('wards');
+  const departments = database.collection('departments');
   await patients.createIndex({ updatedAt: 1 });
   await users.createIndex({ username: 1 }, { unique: true });
   await pushSubscriptions.createIndex({ endpoint: 1 }, { unique: true });
   await pushSubscriptions.createIndex({ userId: 1 });
   await hospitals.createIndex({ orgId: 1 });
-  await wards.createIndex({ hospitalId: 1 });
+  await departments.createIndex({ hospitalId: 1 });
 
   const freshStart = (await patients.estimatedDocumentCount()) === 0;
   const mapRow = d => d ? { id: d._id, updatedAt: d.updatedAt, deleted: d.deleted ? 1 : 0, data: d.data } : null;
@@ -531,18 +531,18 @@ async function createMongoStore({ mongoUri }){
       const arr = await hospitals.find({ orgId }).sort({ createdAt: 1 }).toArray();
       return arr.map(d => ({ id: d._id, orgId: d.orgId, name: d.name, createdAt: d.createdAt }));
     },
-    async createWard(ward){
-      await wards.insertOne({
-        _id: ward.id, hospitalId: ward.hospitalId, name: ward.name,
-        specialty: ward.specialty || 'ortho', createdAt: ward.createdAt || Date.now()
+    async createDepartment(dep){
+      await departments.insertOne({
+        _id: dep.id, hospitalId: dep.hospitalId, name: dep.name,
+        specialty: dep.specialty || 'ortho', createdAt: dep.createdAt || Date.now()
       });
     },
-    async getWard(id){
-      const d = await wards.findOne({ _id: id });
+    async getDepartment(id){
+      const d = await departments.findOne({ _id: id });
       return d ? { id: d._id, hospitalId: d.hospitalId, name: d.name, specialty: d.specialty, createdAt: d.createdAt } : null;
     },
-    async listWardsByHospital(hospitalId){
-      const arr = await wards.find({ hospitalId }).sort({ createdAt: 1 }).toArray();
+    async listDepartmentsByHospital(hospitalId){
+      const arr = await departments.find({ hospitalId }).sort({ createdAt: 1 }).toArray();
       return arr.map(d => ({ id: d._id, hospitalId: d.hospitalId, name: d.name, specialty: d.specialty, createdAt: d.createdAt }));
     },
 

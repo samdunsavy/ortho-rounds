@@ -19,7 +19,7 @@ describe('login response scope fields', () => {
       seed: async (store) => {
         await store.createOrganization({ id: 'org1', name: 'Org', plan: 'free' });
         await store.createHospital({ id: 'h1', orgId: 'org1', name: 'H1' });
-        await store.createWard({ id: 'w1', hospitalId: 'h1', name: 'Ortho' });
+        await store.createDepartment({ id: 'w1', hospitalId: 'h1', name: 'Ortho' });
         await seedUser(store, { id: 'u1', username: 'pg1', orgId: 'org1', wardId: 'w1' });
       }
     });
