@@ -22,3 +22,5 @@ P1 Task 4: complete (commits 09c02c6..9884f87, opus review clean)
   Minor (deferred): decision.wardId!==undefined branch unreachable-defensive; no write-layer cross-org-move rejection test; ordered shared-state tests; actor shape verified only cross-task.
 P1 Task 5: complete (commits 9884f87..ccf4e46, review clean)
   Minor (deferred): guard expression duplicated x3 (requireInstanceAdmin helper candidate).
+P1 Final review: Ready to merge after fixes (opus). Critical fix applied: /api/diag gated instance-admin-only + isInstanceAdmin helper x4 (0580738). Verified by controller: 248/248 green.
+Pre-hosted-pilot TODO: bootstrapAdmin cannot create root admin once org-scoped users exist; add provisioning check. Grep-audit rule: any handler reading patients store-wide must be scope-filtered or instance-admin-gated.
