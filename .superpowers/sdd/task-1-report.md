@@ -158,6 +158,19 @@ Message: feat: 15-key lab panel + extractOtherLabs capture in clinical-normalize
 Files: clinical-normalize.js, tests/clinical-normalize.test.js
 ```
 
+## Post-Implementation Bugfix
+
+**Finding:** `extractOtherLabs` raw.otherLabs loop did not skip known panel keys, allowing AI-returned analytes like `{name: 'hb', value: '11'}` to duplicate as chips.
+
+**Fix Applied:**
+- Added test: skips entries in explicit otherLabs array whose name is a known panel key
+- Covering test command: `npm test -- tests/clinical-normalize.test.js`
+  - Before: 17 pass, 1 fail
+  - After: 18 pass, 0 fail
+- Full suite: `npm test`
+  - Result: 212 pass, 0 fail (no regressions)
+- Commit: `6f5affe` — fix: drop known panel keys from explicit otherLabs entries
+
 ---
 
 **Status:** ✅ DONE  

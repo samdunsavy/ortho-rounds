@@ -9,3 +9,4 @@ Task 4: complete (commits 768ed1f..b2fa480, fix round for 2 Important findings, 
   Minor (deferred): mergePendingOtherLabs doesn't re-enforce 40/20 char caps client-side (upstream extractOtherLabs does); toast extraCount counts value-updates as new; modal seed not re-capped to 12.
 Task 5: complete (commits b2fa480..0396aad, review clean)
   Note: merge.js merges labs per-key, so otherLabs survives cross-client merges (better than spec worst case); regression test added.
+Final review: Ready to merge (opus whole-branch review). One required fix applied: known-key filter in explicit otherLabs array (6f5affe, 212/212 green). Accepted-as-is minors triaged in final review report.
