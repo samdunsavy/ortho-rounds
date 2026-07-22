@@ -76,7 +76,8 @@ Flag off: write path untouched, byte-identical.
 
 Matrix across both backends where applicable:
 
-- **Flag off:** full existing suite unchanged — the byte-identical guarantee.
+- **Flag off:** full existing suite unchanged — the byte-identical guarantee — plus a golden-response regression test: a fixed patient fixture synced through `/api/sync` with the flag off, response asserted field-for-field against today's shape (serverTime aside), so any accidental flag-off drift in the handler fails loudly.
+- **Wrap-only rule for the sync handler:** new scoping logic wraps around existing statements (guards and additions only); existing lines are not moved or restructured. This is a review gate, not just a convention.
 - **Flag on:** login response carries `orgId`/`wardId`; member reads only own department; null-ward member reads nothing and cannot write; admin reads all departments of own org; instance admin reads all; write stamping of new patients; skip of out-of-scope writes; stored `wardId` wins over member's incoming value; cross-org isolation (two orgs, bidirectional invisibility); pre-migration patients (no `wardId`) admin-only; backup/import/export 403 for non-instance-admins.
 
 ## Out of scope
