@@ -13,3 +13,12 @@ Final review: Ready to merge (opus whole-branch review). One required fix applie
 Phase1 auth/sync scoping: BASE 561e92f
 P1 Task 1: complete (commits 561e92f..f27b347, review clean)
   Minor (deferred): no test for instance-admin update path, org-admin vs unassigned patient, null-actor inputs.
+P1 Task 2: complete (commits f27b347..2d48833, fix round for 3 Important harness gaps, re-review clean)
+  Minor (deferred): seed() failure leaks temp dataDir; stderr 4KB bound approximate; no process-exit guard for orphaned children.
+P1 Task 3: complete (commits 2d48833..09c02c6, bootstrapAdmin deviation reverted mid-task, review clean)
+  Minor (deferred): harness root-admin id collision unguarded; stale first-round concern note in report.
+  Note for hosted pilot: bootstrapAdmin no-ops when ANY user exists -- hosted instance with only org-scoped users gets no root admin; deliberate decision needed later.
+P1 Task 4: complete (commits 09c02c6..9884f87, opus review clean)
+  Minor (deferred): decision.wardId!==undefined branch unreachable-defensive; no write-layer cross-org-move rejection test; ordered shared-state tests; actor shape verified only cross-task.
+P1 Task 5: complete (commits 9884f87..ccf4e46, review clean)
+  Minor (deferred): guard expression duplicated x3 (requireInstanceAdmin helper candidate).

@@ -1,0 +1,168 @@
+## Commits
+ccf4e46 feat: instance-admin gate on backup/import/export; tick Phase 1 auth/sync scoping
+
+## Stat
+ DESIGN-multitenant.md        |  2 +-
+ ROADMAP.md                   |  2 +-
+ server.js                    |  9 +++++++++
+ tests/server-scoping.test.js | 17 +++++++++++++++++
+ 4 files changed, 28 insertions(+), 2 deletions(-)
+
+## Diff
+diff --git a/DESIGN-multitenant.md b/DESIGN-multitenant.md
+index a2a7e10..935f929 100644
+--- a/DESIGN-multitenant.md
++++ b/DESIGN-multitenant.md
+@@ -78,15 +78,15 @@ sync, and the admin console simultaneously, and deserves its own review:
+    wards, and invite users into them — net-new frontend surface.
+ 4. **Self-host migration tool.** A one-way, customer-run script: take an
+    existing single-tenant SQLite/Mongo instance, create one org/hospital/ward
+    for it, backfill every existing user and patient into that ward, and
+    optionally push the result into the hosted multi-tenant backend. Reversible
+    via the existing export, per POLICY.md.
+ 
+ ## Rollout plan
+ 
+ - Phase 1 (now → next pass): schema exists, inert. ✅ done this pass.
+-- Phase 1 (next pass): auth + sync scoping behind `MULTI_TENANT`, tested
++- Phase 1 (next pass): ✅ done — 2026-07-22: auth + sync scoping behind `MULTI_TENANT`, tested
+   with the flag both on and off — off must remain byte-for-byte identical
+   to today's behavior, which is the whole point of building it as a flag
+   rather than a rewrite.
+ - Phase 1 (later): migration tool + admin console, first hosted pilot org.
+diff --git a/ROADMAP.md b/ROADMAP.md
+index 2394d0f..efc199e 100644
+--- a/ROADMAP.md
++++ b/ROADMAP.md
+@@ -49,21 +49,21 @@ being the most actively changed file in the codebase), then the
+ desktop/tablet responsive layout, a deliberate device-testing pass on touch
+ gestures, presentation-mode readability, and a contrast/print audit.
+ Phase 1's auth/sync scoping resumes once this list is worked through.
+ 
+ ## Phase 1 — Multi-tenant foundation (Months 1–4) — 🟡 IN PROGRESS (paused for polish sprint)
+ 
+ **Goal:** one codebase serves both the existing single-hospital self-host deploys *and* a new hosted multi-tenant product — a hospital shouldn't need its own server anymore unless it wants one.
+ 
+ - [x] Org → hospital → ward hierarchy schema (additive tables/columns, both SQLite and MongoDB — see `DESIGN-multitenant.md`), inert until the `MULTI_TENANT` flag is used
+ - [x] Verified an existing pre-Phase-1 database upgrades automatically (new columns added, no destructive migration, existing rows unaffected — covered by a regression test)
+-- [ ] Auth + sync scoping by ward/org, built and tested with `MULTI_TENANT` both on and off (next up)
++- [x] Auth + sync scoping by ward/org, built and tested with `MULTI_TENANT` both on and off — shipped 2026-07-22: see docs/superpowers/specs/2026-07-22-auth-sync-scoping-design.md
+ - [ ] Build a one-way migration tool: existing SQLite/Mongo instance → hosted multi-tenant backend, run by the customer, on demand, reversible via the existing export
+ - [ ] Org-scoped roles (admin/attending/PG) layered on top of the current auth system, not replacing it
+ - [ ] Billing scaffold (Stripe) wired but dormant — no charges yet, just plumbing
+ - [x] Self-host install path untouched: same `npm start`, same `data/` directory, same admin bootstrap flow
+ 
+ **Stays working:** self-hosted SQLite and MongoDB modes, exactly as documented in the current README. Multi-tenant is a new deployment option, not a replacement. Verified: 89/89 tests pass, including a simulated upgrade of a database created before this schema existed.
+ 
+ ---
+ 
+ ## Phase 2 — Compliance & AI monetization (Months 4–8)
+diff --git a/server.js b/server.js
+index f9a2af6..d3d1719 100644
+--- a/server.js
++++ b/server.js
+@@ -433,20 +433,23 @@ async function handleApi(req, res, pathname){
+     const rows = await store.getChangedSince(since);
+     // apiVersion is additive: existing clients that don't read it are
+     // unaffected; new clients can use it to confirm they're talking to the
+     // version of the sync contract they expect.
+     let outPatients = rows.map(rowToPatient);
+     if(scope) outPatients = outPatients.filter(p => canRead(p, scope));
+     return sendJSON(res, 200, { serverTime: now, patients: outPatients, apiVersion: SYNC_API_VERSION });
+   }
+ 
+   if(pathname === '/api/backup' && req.method === 'GET'){
++    if(isEnabled('MULTI_TENANT') && !(actor.role === 'admin' && !actor.orgId)){
++      return sendJSON(res, 403, { error: 'Instance admin only' });
++    }
+     const filePath = store.backupFilePath ? store.backupFilePath() : null;
+     if(filePath){
+       res.writeHead(200, {
+         'Content-Type': 'application/octet-stream',
+         'Content-Disposition': `attachment; filename="ortho_${new Date().toISOString().slice(0,10)}.db"`,
+         'Cache-Control': 'no-store'
+       });
+       return createReadStream(filePath).pipe(res);
+     }
+     // Backends without a file (e.g. MongoDB): hand back a full JSON dump.
+@@ -478,20 +481,23 @@ async function handleApi(req, res, pathname){
+     if(!img){ res.writeHead(404); return res.end('Not found'); }
+     res.writeHead(200, { 'Content-Type': img.contentType || 'application/octet-stream', 'Cache-Control': 'private, max-age=86400' });
+     return res.end(img.buffer);
+   }
+   if(imgMatch && req.method === 'DELETE'){
+     const ok = await store.deleteImage(imgMatch[1]);
+     return sendJSON(res, ok ? 200 : 404, { ok });
+   }
+ 
+   if(pathname === '/api/export' && req.method === 'GET'){
++    if(isEnabled('MULTI_TENANT') && !(actor.role === 'admin' && !actor.orgId)){
++      return sendJSON(res, 403, { error: 'Instance admin only' });
++    }
+     const rows = await store.getActive();
+     const payload = {
+       exportedAt: new Date().toISOString(),
+       appVersion: 2,
+       patients: rows.map(rowToPatient)
+     };
+     res.writeHead(200, {
+       'Content-Type': 'application/json; charset=utf-8',
+       'Content-Disposition': `attachment; filename="ortho_rounds_backup_${new Date().toISOString().slice(0,10)}.json"`,
+       'Cache-Control': 'no-store'
+@@ -613,20 +619,23 @@ async function handleApi(req, res, pathname){
+         return sendJSON(res, 200, { labs, otherLabs, reportDate });
+       }
+       return sendJSON(res, 404, { error: 'Unknown AI endpoint' });
+     }catch(err){
+       const status = err.statusCode || 502;
+       return sendJSON(res, status, { error: err.message || 'AI request failed' });
+     }
+   }
+ 
+   if(pathname === '/api/import' && req.method === 'POST'){
++    if(isEnabled('MULTI_TENANT') && !(actor.role === 'admin' && !actor.orgId)){
++      return sendJSON(res, 403, { error: 'Instance admin only' });
++    }
+     const body = await readBody(req) || {};
+     const incoming = Array.isArray(body.patients) ? body.patients : null;
+     if(!incoming) return sendJSON(res, 400, { error: 'Invalid file format' });
+     const replace = body.mode === 'replace';
+     const now = Date.now();
+ 
+     await store.begin();
+     try{
+       if(replace) await store.deleteAllPatients();
+       for(const p of incoming){
+diff --git a/tests/server-scoping.test.js b/tests/server-scoping.test.js
+index 89f7f9c..ce9714a 100644
+--- a/tests/server-scoping.test.js
++++ b/tests/server-scoping.test.js
+@@ -113,11 +113,28 @@ describe('MULTI_TENANT sync scoping', () => {
+     assert.equal(r.json.patients.find(p => p.id === 'pat-w1').wardId, 'w1');
+   });
+ 
+   test('org admin can move a patient within org scope', async () => {
+     await syncPost(srv.baseUrl, tokens.boss1, {
+       since: 0, changes: [{ id: 'pat-w2', wardId: 'w1', name: 'Patient of pg2', updatedAt: Date.now() + 10 }]
+     });
+     const r = await syncPost(srv.baseUrl, tokens.root, { since: 0, changes: [] });
+     assert.equal(r.json.patients.find(p => p.id === 'pat-w2').wardId, 'w1');
+   });
++
++  test('backup/export/import are instance-admin-only when flag on', async () => {
++    for(const [path, method] of [['/api/backup', 'GET'], ['/api/export', 'GET'], ['/api/import', 'POST']]){
++      for(const who of ['pg1', 'boss1']){
++        const res = await fetch(`${srv.baseUrl}${path}`, {
++          method, headers: { Authorization: `Bearer ${tokens[who]}`, 'Content-Type': 'application/json' },
++          body: method === 'POST' ? JSON.stringify({ patients: [] }) : undefined
++        });
++        assert.equal(res.status, 403, `${who} ${path} must be 403`);
++      }
++      const rootRes = await fetch(`${srv.baseUrl}${path}`, {
++        method, headers: { Authorization: `Bearer ${tokens.root}`, 'Content-Type': 'application/json' },
++        body: method === 'POST' ? JSON.stringify({ patients: [] }) : undefined
++      });
++      assert.notEqual(rootRes.status, 403, `instance admin ${path} must not be 403`);
++    }
++  });
+ });

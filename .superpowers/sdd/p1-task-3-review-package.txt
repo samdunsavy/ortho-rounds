@@ -1,0 +1,238 @@
+## Commits
+09c02c6 fix: revert bootstrapAdmin change; harness seeds instance admin for seeded boots
+ed29dd1 feat: actor and login response carry orgId/wardId (additive)
+
+## Stat
+ server.js                       |  4 +--
+ storage.js                      | 10 +++++---
+ tests/helpers/server-harness.js | 22 +++++++++++++++-
+ tests/server-auth-scope.test.js | 57 +++++++++++++++++++++++++++++++++++++++++
+ 4 files changed, 86 insertions(+), 7 deletions(-)
+
+## Diff
+diff --git a/server.js b/server.js
+index ae8d6c0..41c8624 100644
+--- a/server.js
++++ b/server.js
+@@ -238,33 +238,33 @@ async function handleApi(req, res, pathname){
+     if(!rate.ok){
+       return sendJSON(res, 429, { error: `Too many attempts — try again in ${rate.retryAfterSec}s` });
+     }
+     const user = username ? await store.getUserByUsername(username) : null;
+     const ok = user && user.active && verifyPasswordHash(body.password, user.passwordSalt, user.passwordHash);
+     if(!ok){
+       return sendJSON(res, 401, { error: 'Invalid username or password' });
+     }
+     const token = signToken({ sub: user.id, username: user.username, tokenVersion: user.tokenVersion }, config.tokenSecret);
+     recordEvent('login');
+-    return sendJSON(res, 200, { token, username: user.username, role: user.role });
++    return sendJSON(res, 200, { token, username: user.username, role: user.role, orgId: user.orgId ?? null, wardId: user.wardId ?? null });
+   }
+ 
+   // Everything below requires a valid, non-revoked token
+   const claims = verifyToken(getBearerToken(req), config.tokenSecret);
+   if(!claims){
+     return sendJSON(res, 401, { error: 'Login required' });
+   }
+   const authedUser = await store.getUserById(claims.sub);
+   if(!authedUser || !authedUser.active || authedUser.tokenVersion !== claims.tokenVersion){
+     return sendJSON(res, 401, { error: 'Session revoked — log in again' });
+   }
+-  const actor = { id: authedUser.id, username: authedUser.username, role: authedUser.role };
++  const actor = { id: authedUser.id, username: authedUser.username, role: authedUser.role, orgId: authedUser.orgId ?? null, wardId: authedUser.wardId ?? null };
+ 
+   if(pathname === '/api/account/revoke-sessions' && req.method === 'POST'){
+     await store.updateUser(actor.id, { tokenVersion: (authedUser.tokenVersion || 0) + 1 });
+     return sendJSON(res, 200, { ok: true });
+   }
+ 
+   if(pathname === '/api/account/change-password' && req.method === 'POST'){
+     const body = await readBody(req) || {};
+     const currentPassword = typeof body.currentPassword === 'string' ? body.currentPassword : '';
+     const newPassword = typeof body.newPassword === 'string' ? body.newPassword : '';
+diff --git a/storage.js b/storage.js
+index 309c40b..62781f4 100644
+--- a/storage.js
++++ b/storage.js
+@@ -193,26 +193,27 @@ function createSqliteStore({ dataDir }){
+     },
+     async getUserById(id){
+       return db.prepare('SELECT * FROM users WHERE id = ?').get(id) || null;
+     },
+     async getAllUsers(){
+       return db.prepare('SELECT * FROM users ORDER BY createdAt ASC').all();
+     },
+     async countUsers(){ return db.prepare('SELECT COUNT(*) AS n FROM users').get().n; },
+     async createUser(user){
+       db.prepare(`
+-        INSERT INTO users (id, username, passwordHash, passwordSalt, role, active, tokenVersion, createdAt)
+-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
++        INSERT INTO users (id, username, passwordHash, passwordSalt, role, active, tokenVersion, createdAt, orgId, wardId)
++        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       `).run(
+         user.id, user.username, user.passwordHash, user.passwordSalt,
+         user.role || 'member', user.active === false ? 0 : 1,
+-        user.tokenVersion || 0, user.createdAt || Date.now()
++        user.tokenVersion || 0, user.createdAt || Date.now(),
++        user.orgId ?? null, user.wardId ?? null
+       );
+     },
+     async updateUser(id, patch){
+       const fields = Object.keys(patch || {}).filter(k => USER_PATCH_FIELDS.includes(k));
+       if(!fields.length) return;
+       const setClause = fields.map(f => `${f} = ?`).join(', ');
+       const values = fields.map(f => (f === 'active' ? (patch[f] ? 1 : 0) : patch[f]));
+       db.prepare(`UPDATE users SET ${setClause} WHERE id = ?`).run(...values, id);
+     },
+ 
+@@ -432,21 +433,22 @@ async function createMongoStore({ mongoUri }){
+     async getAllUsers(){
+       const arr = await users.find({}).sort({ createdAt: 1 }).toArray();
+       return arr.map(mapUser);
+     },
+     async countUsers(){ return await users.countDocuments(); },
+     async createUser(user){
+       await users.insertOne({
+         _id: user.id, username: user.username, passwordHash: user.passwordHash,
+         passwordSalt: user.passwordSalt, role: user.role || 'member',
+         active: user.active === false ? 0 : 1, tokenVersion: user.tokenVersion || 0,
+-        createdAt: user.createdAt || Date.now()
++        createdAt: user.createdAt || Date.now(),
++        orgId: user.orgId ?? null, wardId: user.wardId ?? null
+       });
+     },
+     async updateUser(id, patch){
+       const fields = Object.keys(patch || {}).filter(k => USER_PATCH_FIELDS.includes(k));
+       if(!fields.length) return;
+       const set = {};
+       for(const f of fields) set[f] = f === 'active' ? (patch[f] ? 1 : 0) : patch[f];
+       await users.updateOne({ _id: id }, { $set: set });
+     },
+ 
+diff --git a/tests/helpers/server-harness.js b/tests/helpers/server-harness.js
+index e831a66..7d7ca0d 100644
+--- a/tests/helpers/server-harness.js
++++ b/tests/helpers/server-harness.js
+@@ -1,16 +1,17 @@
+ import { spawn } from 'node:child_process';
+ import fs from 'node:fs';
+ import os from 'node:os';
+ import path from 'node:path';
+ import { fileURLToPath } from 'node:url';
+ import { createStore } from '../../storage.js';
++import { hashPassword } from '../../auth.js';
+ 
+ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+ export const ADMIN_USERNAME = 'admin';
+ export const ADMIN_PASSWORD = 'test-admin-pass';
+ 
+ async function waitForHealth(baseUrl, child, timeoutMs = 15000, stderrCapture = []){
+   const deadline = Date.now() + timeoutMs;
+   let lastErr = null;
+   while(Date.now() < deadline){
+     if(child.exitCode !== null) throw new Error(`server exited early (code ${child.exitCode})`);
+@@ -24,21 +25,40 @@ async function waitForHealth(baseUrl, child, timeoutMs = 15000, stderrCapture =
+   const msg = `server did not become healthy: ${lastErr?.message}${stderrStr ? '\nstderr: ' + stderrStr : ''}`;
+   throw new Error(msg);
+ }
+ 
+ /** Boot the real server on a temp SQLite dir. `seed(store)` runs before boot. */
+ export async function startServer({ multiTenant = false, seed = null } = {}){
+   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ortho-it-'));
+   if(seed){
+     const store = await createStore({ dataDir });
+     await store.init();
+-    try{ await seed(store); }
++    try{
++      await seed(store);
++      // Server's bootstrapAdmin no-ops once any user exists, so seeded tests
++      // must create the instance admin themselves to keep login(baseUrl) working.
++      const existingAdmin = await store.getUserByUsername(ADMIN_USERNAME);
++      if(!existingAdmin){
++        await store.createUser({
++          id: 'root-admin',
++          username: ADMIN_USERNAME,
++          passwordHash: hashPassword(ADMIN_PASSWORD, 'harness-salt'),
++          passwordSalt: 'harness-salt',
++          role: 'admin',
++          orgId: null,
++          wardId: null,
++          active: true,
++          tokenVersion: 0,
++          createdAt: Date.now()
++        });
++      }
++    }
+     finally{ await store.close(); }
+   }
+ 
+   const env = {
+     ...process.env,
+     ORTHO_DATA_DIR: dataDir,
+     ORTHO_ADMIN_USERNAME: ADMIN_USERNAME,
+     ORTHO_ADMIN_PASSWORD: ADMIN_PASSWORD
+   };
+   delete env.ORTHO_FLAG_MULTI_TENANT;
+diff --git a/tests/server-auth-scope.test.js b/tests/server-auth-scope.test.js
+new file mode 100644
+index 0000000..31559b4
+--- /dev/null
++++ b/tests/server-auth-scope.test.js
+@@ -0,0 +1,57 @@
++import { test, describe, before, after } from 'node:test';
++import assert from 'node:assert/strict';
++import { hashPassword } from '../auth.js';
++import { startServer, login } from './helpers/server-harness.js';
++
++function seedUser(store, { id, username, orgId = null, wardId = null, role = 'member' }){
++  const salt = 'testsalt';
++  return store.createUser({
++    id, username, passwordSalt: salt, passwordHash: hashPassword('pw-' + username, salt),
++    role, active: true, tokenVersion: 0, createdAt: Date.now(), orgId, wardId
++  });
++}
++
++describe('login response scope fields', () => {
++  let srv;
++  before(async () => {
++    srv = await startServer({
++      multiTenant: true,
++      seed: async (store) => {
++        await store.createOrganization({ id: 'org1', name: 'Org', plan: 'free' });
++        await store.createHospital({ id: 'h1', orgId: 'org1', name: 'H1' });
++        await store.createWard({ id: 'w1', hospitalId: 'h1', name: 'Ortho' });
++        await seedUser(store, { id: 'u1', username: 'pg1', orgId: 'org1', wardId: 'w1' });
++      }
++    });
++  });
++  after(async () => { await srv.stop(); });
++
++  test('scoped user gets orgId/wardId in login response', async () => {
++    const l = await login(srv.baseUrl, 'pg1', 'pw-pg1');
++    assert.equal(l.status, 200);
++    assert.equal(l.json.orgId, 'org1');
++    assert.equal(l.json.wardId, 'w1');
++    assert.equal(l.json.role, 'member');
++  });
++
++  test('instance admin gets null orgId/wardId', async () => {
++    const l = await login(srv.baseUrl);
++    assert.equal(l.status, 200);
++    assert.equal(l.json.orgId, null);
++    assert.equal(l.json.wardId, null);
++  });
++});
++
++describe('login response scope fields — flag OFF (additive, null)', () => {
++  let srv;
++  before(async () => { srv = await startServer({ multiTenant: false }); });
++  after(async () => { await srv.stop(); });
++
++  test('admin login carries null orgId/wardId and unchanged existing keys', async () => {
++    const l = await login(srv.baseUrl);
++    assert.equal(l.status, 200);
++    assert.deepEqual(Object.keys(l.json).sort(), ['orgId', 'role', 'token', 'username', 'wardId']);
++    assert.equal(l.json.orgId, null);
++    assert.equal(l.json.wardId, null);
++  });
++});

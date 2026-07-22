@@ -1,0 +1,935 @@
+## Commits
+ccf4e46 feat: instance-admin gate on backup/import/export; tick Phase 1 auth/sync scoping
+9884f87 feat: MULTI_TENANT sync read filter + write enforcement (wrap-only)
+09c02c6 fix: revert bootstrapAdmin change; harness seeds instance admin for seeded boots
+ed29dd1 feat: actor and login response carry orgId/wardId (additive)
+2d48833 fix: harden server harness (cleanup, SIGKILL escalation, port retry, stderr capture)
+d8a54bb test: integration harness + flag-off golden sync contract
+f27b347 feat: pure department-scoping module (resolveScope/canRead/decideWrite)
+
+## Stat
+ DESIGN-multitenant.md            |   2 +-
+ ROADMAP.md                       |   2 +-
+ scope.js                         |  60 +++++++++++++++++
+ server.js                        |  30 +++++++--
+ storage.js                       |  10 +--
+ tests/helpers/server-harness.js  | 142 +++++++++++++++++++++++++++++++++++++++
+ tests/scope.test.js              | 139 ++++++++++++++++++++++++++++++++++++++
+ tests/server-auth-scope.test.js  |  57 ++++++++++++++++
+ tests/server-scoping.test.js     | 140 ++++++++++++++++++++++++++++++++++++++
+ tests/server-sync-golden.test.js |  47 +++++++++++++
+ 10 files changed, 619 insertions(+), 10 deletions(-)
+
+## Diff
+diff --git a/DESIGN-multitenant.md b/DESIGN-multitenant.md
+index a2a7e10..935f929 100644
+--- a/DESIGN-multitenant.md
++++ b/DESIGN-multitenant.md
+@@ -78,15 +78,15 @@ sync, and the admin console simultaneously, and deserves its own review:
+    wards, and invite users into them — net-new frontend surface.
+ 4. **Self-host migration tool.** A one-way, customer-run script: take an
+    existing single-tenant SQLite/Mongo instance, create one org/hospital/ward
+    for it, backfill every existing user and patient into that ward, and
+    optionally push the result into the hosted multi-tenant backend. Reversible
+    via the existing export, per POLICY.md.
+ 
+ ## Rollout plan
+ 
+ - Phase 1 (now → next pass): schema exists, inert. ✅ done this pass.
+-- Phase 1 (next pass): auth + sync scoping behind `MULTI_TENANT`, tested
++- Phase 1 (next pass): ✅ done — 2026-07-22: auth + sync scoping behind `MULTI_TENANT`, tested
+   with the flag both on and off — off must remain byte-for-byte identical
+   to today's behavior, which is the whole point of building it as a flag
+   rather than a rewrite.
+ - Phase 1 (later): migration tool + admin console, first hosted pilot org.
+diff --git a/ROADMAP.md b/ROADMAP.md
+index 2394d0f..efc199e 100644
+--- a/ROADMAP.md
++++ b/ROADMAP.md
+@@ -49,21 +49,21 @@ being the most actively changed file in the codebase), then the
+ desktop/tablet responsive layout, a deliberate device-testing pass on touch
+ gestures, presentation-mode readability, and a contrast/print audit.
+ Phase 1's auth/sync scoping resumes once this list is worked through.
+ 
+ ## Phase 1 — Multi-tenant foundation (Months 1–4) — 🟡 IN PROGRESS (paused for polish sprint)
+ 
+ **Goal:** one codebase serves both the existing single-hospital self-host deploys *and* a new hosted multi-tenant product — a hospital shouldn't need its own server anymore unless it wants one.
+ 
+ - [x] Org → hospital → ward hierarchy schema (additive tables/columns, both SQLite and MongoDB — see `DESIGN-multitenant.md`), inert until the `MULTI_TENANT` flag is used
+ - [x] Verified an existing pre-Phase-1 database upgrades automatically (new columns added, no destructive migration, existing rows unaffected — covered by a regression test)
+-- [ ] Auth + sync scoping by ward/org, built and tested with `MULTI_TENANT` both on and off (next up)
++- [x] Auth + sync scoping by ward/org, built and tested with `MULTI_TENANT` both on and off — shipped 2026-07-22: see docs/superpowers/specs/2026-07-22-auth-sync-scoping-design.md
+ - [ ] Build a one-way migration tool: existing SQLite/Mongo instance → hosted multi-tenant backend, run by the customer, on demand, reversible via the existing export
+ - [ ] Org-scoped roles (admin/attending/PG) layered on top of the current auth system, not replacing it
+ - [ ] Billing scaffold (Stripe) wired but dormant — no charges yet, just plumbing
+ - [x] Self-host install path untouched: same `npm start`, same `data/` directory, same admin bootstrap flow
+ 
+ **Stays working:** self-hosted SQLite and MongoDB modes, exactly as documented in the current README. Multi-tenant is a new deployment option, not a replacement. Verified: 89/89 tests pass, including a simulated upgrade of a database created before this schema existed.
+ 
+ ---
+ 
+ ## Phase 2 — Compliance & AI monetization (Months 4–8)
+diff --git a/scope.js b/scope.js
+new file mode 100644
+index 0000000..dcb17d1
+--- /dev/null
++++ b/scope.js
+@@ -0,0 +1,60 @@
++/* Pure scoping logic for MULTI_TENANT auth/sync (roadmap Phase 1).
++   Terminology: the `wards` table entity is the DEPARTMENT (access boundary);
++   patient `unit`/`ward` strings are metadata with no access semantics.
++   See docs/superpowers/specs/2026-07-22-auth-sync-scoping-design.md. */
++
++/** Resolve the set of departments an actor may read/write.
++ *  Scope = { unrestricted, wardIds: Set, includeUnassigned }.
++ *  Unassigned patients (no wardId) are instance-admin-only: an unassigned
++ *  patient cannot be attributed to an org, so org admins never see them. */
++export async function resolveScope(actor, store){
++  const isAdmin = actor?.role === 'admin';
++  if(isAdmin && !actor.orgId){
++    return { unrestricted: true, wardIds: new Set(), includeUnassigned: true };
++  }
++  if(isAdmin){
++    const wardIds = new Set();
++    const hospitals = await store.listHospitalsByOrg(actor.orgId);
++    for(const h of hospitals){
++      for(const w of await store.listWardsByHospital(h.id)) wardIds.add(w.id);
++    }
++    return { unrestricted: false, wardIds, includeUnassigned: false };
++  }
++  const wardIds = new Set(actor?.wardId ? [actor.wardId] : []);
++  return { unrestricted: false, wardIds, includeUnassigned: false };
++}
++
++export function canRead(patient, scope){
++  if(scope.unrestricted) return true;
++  if(!patient?.wardId) return scope.includeUnassigned;
++  return scope.wardIds.has(patient.wardId);
++}
++
++/** Decide whether a sync write is allowed and which wardId the stored
++ *  record must carry. wardId === undefined means "do not force a value". */
++export function decideWrite({ incoming, existing, actor, scope }){
++  const isAdmin = actor?.role === 'admin';
++
++  if(existing){
++    if(!canRead(existing, scope)) return { allow: false };
++    if(!isAdmin) return { allow: true, wardId: existing.wardId ?? null };
++    const requested = incoming?.wardId;
++    if(requested && (scope.unrestricted || scope.wardIds.has(requested))){
++      return { allow: true, wardId: requested };
++    }
++    return { allow: true, wardId: existing.wardId ?? null };
++  }
++
++  // New patient
++  if(!isAdmin){
++    if(!actor?.wardId) return { allow: false };
++    return { allow: true, wardId: actor.wardId };
++  }
++  if(scope.unrestricted){
++    return { allow: true, wardId: incoming?.wardId ?? null };
++  }
++  const requested = incoming?.wardId;
++  if(requested) return scope.wardIds.has(requested) ? { allow: true, wardId: requested } : { allow: false };
++  if(actor.wardId && scope.wardIds.has(actor.wardId)) return { allow: true, wardId: actor.wardId };
++  return { allow: false };
++}
+diff --git a/server.js b/server.js
+index ae8d6c0..d3d1719 100644
+--- a/server.js
++++ b/server.js
+@@ -55,21 +55,22 @@ import {
+   verifyPasswordHash,
+   generateReadablePassword,
+   signToken,
+   verifyToken,
+   checkLoginRateLimit,
+   bootstrapAdmin
+ } from './auth.js';
+ import { mergePatientRecords, stampAttribution } from './merge.js';
+ import { logError, logWarn } from './logger.js';
+ import { runDigestPass } from './notifications.js';
+-import { listFlags } from './flags.js';
++import { listFlags, isEnabled } from './flags.js';
++import { resolveScope, canRead, decideWrite } from './scope.js';
+ import { recordEvent, getSnapshot, isExportEnabled, startExportLoop } from './telemetry.js';
+ 
+ const __dirname = path.dirname(fileURLToPath(import.meta.url));
+ const PUBLIC_DIR = path.join(__dirname, 'public');
+ // SQLite data directory. MUST be on a persistent disk, or use the MongoDB
+ // backend (MONGODB_URI) so patients survive redeploys.
+ const DATA_DIR = process.env.ORTHO_DATA_DIR
+   ? path.resolve(process.env.ORTHO_DATA_DIR)
+   : path.join(__dirname, 'data');
+ const MONGODB_URI = process.env.MONGODB_URI || '';
+@@ -238,33 +239,33 @@ async function handleApi(req, res, pathname){
+     if(!rate.ok){
+       return sendJSON(res, 429, { error: `Too many attempts — try again in ${rate.retryAfterSec}s` });
+     }
+     const user = username ? await store.getUserByUsername(username) : null;
+     const ok = user && user.active && verifyPasswordHash(body.password, user.passwordSalt, user.passwordHash);
+     if(!ok){
+       return sendJSON(res, 401, { error: 'Invalid username or password' });
+     }
+     const token = signToken({ sub: user.id, username: user.username, tokenVersion: user.tokenVersion }, config.tokenSecret);
+     recordEvent('login');
+-    return sendJSON(res, 200, { token, username: user.username, role: user.role });
++    return sendJSON(res, 200, { token, username: user.username, role: user.role, orgId: user.orgId ?? null, wardId: user.wardId ?? null });
+   }
+ 
+   // Everything below requires a valid, non-revoked token
+   const claims = verifyToken(getBearerToken(req), config.tokenSecret);
+   if(!claims){
+     return sendJSON(res, 401, { error: 'Login required' });
+   }
+   const authedUser = await store.getUserById(claims.sub);
+   if(!authedUser || !authedUser.active || authedUser.tokenVersion !== claims.tokenVersion){
+     return sendJSON(res, 401, { error: 'Session revoked — log in again' });
+   }
+-  const actor = { id: authedUser.id, username: authedUser.username, role: authedUser.role };
++  const actor = { id: authedUser.id, username: authedUser.username, role: authedUser.role, orgId: authedUser.orgId ?? null, wardId: authedUser.wardId ?? null };
+ 
+   if(pathname === '/api/account/revoke-sessions' && req.method === 'POST'){
+     await store.updateUser(actor.id, { tokenVersion: (authedUser.tokenVersion || 0) + 1 });
+     return sendJSON(res, 200, { ok: true });
+   }
+ 
+   if(pathname === '/api/account/change-password' && req.method === 'POST'){
+     const body = await readBody(req) || {};
+     const currentPassword = typeof body.currentPassword === 'string' ? body.currentPassword : '';
+     const newPassword = typeof body.newPassword === 'string' ? body.newPassword : '';
+@@ -385,55 +386,70 @@ async function handleApi(req, res, pathname){
+       sample: live.slice(0, 10).map(r => { let nm=''; try{ nm = JSON.parse(r.data||'{}').name || ''; }catch{} return { id: r.id, name: nm, updatedAt: r.updatedAt }; })
+     });
+   }
+ 
+   if((pathname === '/api/sync' || pathname === '/api/sync/v1') && req.method === 'POST'){
+     recordEvent('sync');
+     const body = await readBody(req) || {};
+     const since = Number(body.since) || 0;
+     const changes = Array.isArray(body.changes) ? body.changes : [];
+     const now = Date.now();
++    const scope = isEnabled('MULTI_TENANT') ? await resolveScope(actor, store) : null;
+ 
+     await store.begin();
+     try{
+       for(const p of changes){
+         if(!p || typeof p.id !== 'string') continue;
+         const incomingUpdated = Number(p.updatedAt) || 0;
+         const existing = await store.getPatientRaw(p.id);
+         let existingObj = null;
+         if(existing){
+           try{ existingObj = JSON.parse(existing.data); }
+           catch{ existingObj = {}; }
+           existingObj.id = p.id;
+           existingObj.updatedAt = existing.updatedAt;
+         }
++        let decision = null;
++        if(scope){
++          decision = decideWrite({ incoming: p, existing: existingObj, actor, scope });
++          if(!decision.allow) continue;
++        }
+         stampAttribution(p, existingObj, actor);
+         if(!existing || incomingUpdated >= existing.updatedAt){
+           const stored = existingObj ? mergePatientRecords(p, existingObj) : Object.assign({}, p);
++          if(decision && decision.wardId !== undefined){
++            if(decision.wardId === null) delete stored.wardId;
++            else stored.wardId = decision.wardId;
++          }
+           stored.updatedAt = now;
+           await store.upsertPatient(p.id, now, p.deleted ? 1 : 0, JSON.stringify(stored));
+         }
+       }
+       await store.commit();
+     }catch(err){
+       await store.rollback();
+       throw err;
+     }
+ 
+     const rows = await store.getChangedSince(since);
+     // apiVersion is additive: existing clients that don't read it are
+     // unaffected; new clients can use it to confirm they're talking to the
+     // version of the sync contract they expect.
+-    return sendJSON(res, 200, { serverTime: now, patients: rows.map(rowToPatient), apiVersion: SYNC_API_VERSION });
++    let outPatients = rows.map(rowToPatient);
++    if(scope) outPatients = outPatients.filter(p => canRead(p, scope));
++    return sendJSON(res, 200, { serverTime: now, patients: outPatients, apiVersion: SYNC_API_VERSION });
+   }
+ 
+   if(pathname === '/api/backup' && req.method === 'GET'){
++    if(isEnabled('MULTI_TENANT') && !(actor.role === 'admin' && !actor.orgId)){
++      return sendJSON(res, 403, { error: 'Instance admin only' });
++    }
+     const filePath = store.backupFilePath ? store.backupFilePath() : null;
+     if(filePath){
+       res.writeHead(200, {
+         'Content-Type': 'application/octet-stream',
+         'Content-Disposition': `attachment; filename="ortho_${new Date().toISOString().slice(0,10)}.db"`,
+         'Cache-Control': 'no-store'
+       });
+       return createReadStream(filePath).pipe(res);
+     }
+     // Backends without a file (e.g. MongoDB): hand back a full JSON dump.
+@@ -465,20 +481,23 @@ async function handleApi(req, res, pathname){
+     if(!img){ res.writeHead(404); return res.end('Not found'); }
+     res.writeHead(200, { 'Content-Type': img.contentType || 'application/octet-stream', 'Cache-Control': 'private, max-age=86400' });
+     return res.end(img.buffer);
+   }
+   if(imgMatch && req.method === 'DELETE'){
+     const ok = await store.deleteImage(imgMatch[1]);
+     return sendJSON(res, ok ? 200 : 404, { ok });
+   }
+ 
+   if(pathname === '/api/export' && req.method === 'GET'){
++    if(isEnabled('MULTI_TENANT') && !(actor.role === 'admin' && !actor.orgId)){
++      return sendJSON(res, 403, { error: 'Instance admin only' });
++    }
+     const rows = await store.getActive();
+     const payload = {
+       exportedAt: new Date().toISOString(),
+       appVersion: 2,
+       patients: rows.map(rowToPatient)
+     };
+     res.writeHead(200, {
+       'Content-Type': 'application/json; charset=utf-8',
+       'Content-Disposition': `attachment; filename="ortho_rounds_backup_${new Date().toISOString().slice(0,10)}.json"`,
+       'Cache-Control': 'no-store'
+@@ -600,20 +619,23 @@ async function handleApi(req, res, pathname){
+         return sendJSON(res, 200, { labs, otherLabs, reportDate });
+       }
+       return sendJSON(res, 404, { error: 'Unknown AI endpoint' });
+     }catch(err){
+       const status = err.statusCode || 502;
+       return sendJSON(res, status, { error: err.message || 'AI request failed' });
+     }
+   }
+ 
+   if(pathname === '/api/import' && req.method === 'POST'){
++    if(isEnabled('MULTI_TENANT') && !(actor.role === 'admin' && !actor.orgId)){
++      return sendJSON(res, 403, { error: 'Instance admin only' });
++    }
+     const body = await readBody(req) || {};
+     const incoming = Array.isArray(body.patients) ? body.patients : null;
+     if(!incoming) return sendJSON(res, 400, { error: 'Invalid file format' });
+     const replace = body.mode === 'replace';
+     const now = Date.now();
+ 
+     await store.begin();
+     try{
+       if(replace) await store.deleteAllPatients();
+       for(const p of incoming){
+diff --git a/storage.js b/storage.js
+index 309c40b..62781f4 100644
+--- a/storage.js
++++ b/storage.js
+@@ -193,26 +193,27 @@ function createSqliteStore({ dataDir }){
+     },
+     async getUserById(id){
+       return db.prepare('SELECT * FROM users WHERE id = ?').get(id) || null;
+     },
+     async getAllUsers(){
+       return db.prepare('SELECT * FROM users ORDER BY createdAt ASC').all();
+     },
+     async countUsers(){ return db.prepare('SELECT COUNT(*) AS n FROM users').get().n; },
+     async createUser(user){
+       db.prepare(`
+-        INSERT INTO users (id, username, passwordHash, passwordSalt, role, active, tokenVersion, createdAt)
+-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
++        INSERT INTO users (id, username, passwordHash, passwordSalt, role, active, tokenVersion, createdAt, orgId, wardId)
++        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       `).run(
+         user.id, user.username, user.passwordHash, user.passwordSalt,
+         user.role || 'member', user.active === false ? 0 : 1,
+-        user.tokenVersion || 0, user.createdAt || Date.now()
++        user.tokenVersion || 0, user.createdAt || Date.now(),
++        user.orgId ?? null, user.wardId ?? null
+       );
+     },
+     async updateUser(id, patch){
+       const fields = Object.keys(patch || {}).filter(k => USER_PATCH_FIELDS.includes(k));
+       if(!fields.length) return;
+       const setClause = fields.map(f => `${f} = ?`).join(', ');
+       const values = fields.map(f => (f === 'active' ? (patch[f] ? 1 : 0) : patch[f]));
+       db.prepare(`UPDATE users SET ${setClause} WHERE id = ?`).run(...values, id);
+     },
+ 
+@@ -432,21 +433,22 @@ async function createMongoStore({ mongoUri }){
+     async getAllUsers(){
+       const arr = await users.find({}).sort({ createdAt: 1 }).toArray();
+       return arr.map(mapUser);
+     },
+     async countUsers(){ return await users.countDocuments(); },
+     async createUser(user){
+       await users.insertOne({
+         _id: user.id, username: user.username, passwordHash: user.passwordHash,
+         passwordSalt: user.passwordSalt, role: user.role || 'member',
+         active: user.active === false ? 0 : 1, tokenVersion: user.tokenVersion || 0,
+-        createdAt: user.createdAt || Date.now()
++        createdAt: user.createdAt || Date.now(),
++        orgId: user.orgId ?? null, wardId: user.wardId ?? null
+       });
+     },
+     async updateUser(id, patch){
+       const fields = Object.keys(patch || {}).filter(k => USER_PATCH_FIELDS.includes(k));
+       if(!fields.length) return;
+       const set = {};
+       for(const f of fields) set[f] = f === 'active' ? (patch[f] ? 1 : 0) : patch[f];
+       await users.updateOne({ _id: id }, { $set: set });
+     },
+ 
+diff --git a/tests/helpers/server-harness.js b/tests/helpers/server-harness.js
+new file mode 100644
+index 0000000..7d7ca0d
+--- /dev/null
++++ b/tests/helpers/server-harness.js
+@@ -0,0 +1,142 @@
++import { spawn } from 'node:child_process';
++import fs from 'node:fs';
++import os from 'node:os';
++import path from 'node:path';
++import { fileURLToPath } from 'node:url';
++import { createStore } from '../../storage.js';
++import { hashPassword } from '../../auth.js';
++
++const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
++export const ADMIN_USERNAME = 'admin';
++export const ADMIN_PASSWORD = 'test-admin-pass';
++
++async function waitForHealth(baseUrl, child, timeoutMs = 15000, stderrCapture = []){
++  const deadline = Date.now() + timeoutMs;
++  let lastErr = null;
++  while(Date.now() < deadline){
++    if(child.exitCode !== null) throw new Error(`server exited early (code ${child.exitCode})`);
++    try{
++      const res = await fetch(`${baseUrl}/api/health`);
++      if(res.ok) return;
++    }catch(err){ lastErr = err; }
++    await new Promise(r => setTimeout(r, 150));
++  }
++  const stderrStr = stderrCapture.join('');
++  const msg = `server did not become healthy: ${lastErr?.message}${stderrStr ? '\nstderr: ' + stderrStr : ''}`;
++  throw new Error(msg);
++}
++
++/** Boot the real server on a temp SQLite dir. `seed(store)` runs before boot. */
++export async function startServer({ multiTenant = false, seed = null } = {}){
++  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ortho-it-'));
++  if(seed){
++    const store = await createStore({ dataDir });
++    await store.init();
++    try{
++      await seed(store);
++      // Server's bootstrapAdmin no-ops once any user exists, so seeded tests
++      // must create the instance admin themselves to keep login(baseUrl) working.
++      const existingAdmin = await store.getUserByUsername(ADMIN_USERNAME);
++      if(!existingAdmin){
++        await store.createUser({
++          id: 'root-admin',
++          username: ADMIN_USERNAME,
++          passwordHash: hashPassword(ADMIN_PASSWORD, 'harness-salt'),
++          passwordSalt: 'harness-salt',
++          role: 'admin',
++          orgId: null,
++          wardId: null,
++          active: true,
++          tokenVersion: 0,
++          createdAt: Date.now()
++        });
++      }
++    }
++    finally{ await store.close(); }
++  }
++
++  const env = {
++    ...process.env,
++    ORTHO_DATA_DIR: dataDir,
++    ORTHO_ADMIN_USERNAME: ADMIN_USERNAME,
++    ORTHO_ADMIN_PASSWORD: ADMIN_PASSWORD
++  };
++  delete env.ORTHO_FLAG_MULTI_TENANT;
++  if(multiTenant) env.ORTHO_FLAG_MULTI_TENANT = '1';
++
++  // Retry loop: up to 3 attempts with fresh random ports
++  let lastErr = null;
++  for(let attempt = 0; attempt < 3; attempt++){
++    const port = 3100 + Math.floor(Math.random() * 2500);
++    env.PORT = String(port);
++
++    const stderrChunks = [];
++    const child = spawn(process.execPath, ['server.js'], {
++      cwd: REPO_ROOT,
++      env,
++      stdio: ['ignore', 'ignore', 'pipe']
++    });
++
++    // Capture stderr (last ~4KB)
++    child.stderr.on('data', (chunk) => {
++      stderrChunks.push(chunk.toString());
++      if(stderrChunks.join('').length > 4096){
++        stderrChunks.shift(); // Keep only last ~4KB
++      }
++    });
++
++    const baseUrl = `http://127.0.0.1:${port}`;
++    try{
++      await waitForHealth(baseUrl, child, 15000, stderrChunks);
++      // Success: return the server instance
++      return {
++        baseUrl,
++        dataDir,
++        async stop(){
++          child.kill('SIGTERM');
++          // Wait up to 2s for graceful exit
++          await Promise.race([
++            new Promise(r => child.once('exit', r)),
++            new Promise(r => setTimeout(r, 2000))
++          ]);
++          // If still alive, escalate to SIGKILL
++          if(child.exitCode === null){
++            child.kill('SIGKILL');
++            await new Promise(r => child.once('exit', r));
++          }
++          fs.rmSync(dataDir, { recursive: true, force: true });
++        }
++      };
++    }catch(err){
++      // Attempt failed: kill the child process and continue to next attempt
++      lastErr = err;
++      child.kill('SIGKILL');
++      // Let child exit before retrying
++      await new Promise(r => {
++        child.once('exit', r);
++        setTimeout(r, 500).unref?.();
++      });
++    }
++  }
++
++  // All attempts failed: cleanup and rethrow
++  fs.rmSync(dataDir, { recursive: true, force: true });
++  throw lastErr;
++}
++
++export async function login(baseUrl, username = ADMIN_USERNAME, password = ADMIN_PASSWORD){
++  const res = await fetch(`${baseUrl}/api/login`, {
++    method: 'POST', headers: { 'Content-Type': 'application/json' },
++    body: JSON.stringify({ username, password })
++  });
++  return { status: res.status, json: await res.json() };
++}
++
++export async function syncPost(baseUrl, token, body){
++  const res = await fetch(`${baseUrl}/api/sync/v1`, {
++    method: 'POST',
++    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
++    body: JSON.stringify(body)
++  });
++  return { status: res.status, json: await res.json() };
++}
+diff --git a/tests/scope.test.js b/tests/scope.test.js
+new file mode 100644
+index 0000000..58afd93
+--- /dev/null
++++ b/tests/scope.test.js
+@@ -0,0 +1,139 @@
++import { test, describe, before, after } from 'node:test';
++import assert from 'node:assert/strict';
++import fs from 'node:fs';
++import os from 'node:os';
++import path from 'node:path';
++import { createStore } from '../storage.js';
++import { resolveScope, canRead, decideWrite } from '../scope.js';
++
++const member = (wardId, orgId = 'org1') => ({ id: 'u1', username: 'pg1', role: 'member', orgId, wardId });
++const orgAdmin = (orgId = 'org1') => ({ id: 'a1', username: 'boss', role: 'admin', orgId, wardId: null });
++const instanceAdmin = () => ({ id: 'root', username: 'root', role: 'admin', orgId: null, wardId: null });
++
++describe('resolveScope', () => {
++  let dataDir, store;
++  before(async () => {
++    dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ortho-scope-'));
++    store = await createStore({ dataDir });
++    await store.init();
++    await store.createOrganization({ id: 'org1', name: 'Org One', plan: 'free' });
++    await store.createOrganization({ id: 'org2', name: 'Org Two', plan: 'free' });
++    await store.createHospital({ id: 'h1', orgId: 'org1', name: 'H1' });
++    await store.createHospital({ id: 'h2', orgId: 'org1', name: 'H2' });
++    await store.createHospital({ id: 'hx', orgId: 'org2', name: 'HX' });
++    await store.createWard({ id: 'w1', hospitalId: 'h1', name: 'Ortho' });
++    await store.createWard({ id: 'w2', hospitalId: 'h2', name: 'Surgery' });
++    await store.createWard({ id: 'wx', hospitalId: 'hx', name: 'Other-org ward' });
++  });
++  after(async () => { await store.close(); fs.rmSync(dataDir, { recursive: true, force: true }); });
++
++  test('member with ward: exactly that ward, no unassigned', async () => {
++    const s = await resolveScope(member('w1'), store);
++    assert.equal(s.unrestricted, false);
++    assert.deepEqual([...s.wardIds], ['w1']);
++    assert.equal(s.includeUnassigned, false);
++  });
++
++  test('member with no ward: empty scope (strict deny)', async () => {
++    const s = await resolveScope(member(null), store);
++    assert.equal(s.unrestricted, false);
++    assert.equal(s.wardIds.size, 0);
++    assert.equal(s.includeUnassigned, false);
++  });
++
++  test('org admin: all wards under all org hospitals, never other orgs, no unassigned', async () => {
++    const s = await resolveScope(orgAdmin(), store);
++    assert.equal(s.unrestricted, false);
++    assert.deepEqual([...s.wardIds].sort(), ['w1', 'w2']);
++    assert.equal(s.includeUnassigned, false);
++  });
++
++  test('org admin of empty org: empty scope', async () => {
++    await store.createOrganization({ id: 'org3', name: 'Empty', plan: 'free' });
++    const s = await resolveScope(orgAdmin('org3'), store);
++    assert.equal(s.wardIds.size, 0);
++  });
++
++  test('instance admin: unrestricted incl. unassigned', async () => {
++    const s = await resolveScope(instanceAdmin(), store);
++    assert.equal(s.unrestricted, true);
++    assert.equal(s.includeUnassigned, true);
++  });
++});
++
++describe('canRead', () => {
++  const memberScope = { unrestricted: false, wardIds: new Set(['w1']), includeUnassigned: false };
++  const rootScope = { unrestricted: true, wardIds: new Set(), includeUnassigned: true };
++
++  test('member reads own-ward patient only', () => {
++    assert.equal(canRead({ id: 'p1', wardId: 'w1' }, memberScope), true);
++    assert.equal(canRead({ id: 'p2', wardId: 'w2' }, memberScope), false);
++  });
++  test('unassigned patient: instance admin only', () => {
++    assert.equal(canRead({ id: 'p3' }, memberScope), false);
++    assert.equal(canRead({ id: 'p3' }, rootScope), true);
++  });
++  test('unrestricted reads everything', () => {
++    assert.equal(canRead({ id: 'p4', wardId: 'anything' }, rootScope), true);
++  });
++});
++
++describe('decideWrite', () => {
++  const mScope = { unrestricted: false, wardIds: new Set(['w1']), includeUnassigned: false };
++  const oScope = { unrestricted: false, wardIds: new Set(['w1', 'w2']), includeUnassigned: false };
++  const rScope = { unrestricted: true, wardIds: new Set(), includeUnassigned: true };
++
++  test('member creates: stamped with own ward', () => {
++    const d = decideWrite({ incoming: { id: 'p' }, existing: null, actor: member('w1'), scope: mScope });
++    assert.deepEqual(d, { allow: true, wardId: 'w1' });
++  });
++  test('member with no ward cannot create', () => {
++    const d = decideWrite({ incoming: { id: 'p' }, existing: null, actor: member(null), scope: { unrestricted: false, wardIds: new Set(), includeUnassigned: false } });
++    assert.equal(d.allow, false);
++  });
++  test('member updates own-ward patient; stored wardId wins over incoming', () => {
++    const d = decideWrite({ incoming: { id: 'p', wardId: 'w2' }, existing: { id: 'p', wardId: 'w1' }, actor: member('w1'), scope: mScope });
++    assert.deepEqual(d, { allow: true, wardId: 'w1' });
++  });
++  test('member cannot touch out-of-scope patient', () => {
++    const d = decideWrite({ incoming: { id: 'p' }, existing: { id: 'p', wardId: 'w2' }, actor: member('w1'), scope: mScope });
++    assert.equal(d.allow, false);
++  });
++  test('member cannot touch unassigned patient', () => {
++    const d = decideWrite({ incoming: { id: 'p' }, existing: { id: 'p' }, actor: member('w1'), scope: mScope });
++    assert.equal(d.allow, false);
++  });
++  test('org admin creates with in-scope incoming ward', () => {
++    const d = decideWrite({ incoming: { id: 'p', wardId: 'w2' }, existing: null, actor: orgAdmin(), scope: oScope });
++    assert.deepEqual(d, { allow: true, wardId: 'w2' });
++  });
++  test('org admin create with out-of-scope ward is skipped', () => {
++    const d = decideWrite({ incoming: { id: 'p', wardId: 'wx' }, existing: null, actor: orgAdmin(), scope: oScope });
++    assert.equal(d.allow, false);
++  });
++  test('org admin create with no ward and no own ward is skipped', () => {
++    const d = decideWrite({ incoming: { id: 'p' }, existing: null, actor: orgAdmin(), scope: oScope });
++    assert.equal(d.allow, false);
++  });
++  test('org admin create with no ward falls back to own ward', () => {
++    const actor = { ...orgAdmin(), wardId: 'w1' };
++    const d = decideWrite({ incoming: { id: 'p' }, existing: null, actor, scope: oScope });
++    assert.deepEqual(d, { allow: true, wardId: 'w1' });
++  });
++  test('org admin may move patient within scope', () => {
++    const d = decideWrite({ incoming: { id: 'p', wardId: 'w2' }, existing: { id: 'p', wardId: 'w1' }, actor: orgAdmin(), scope: oScope });
++    assert.deepEqual(d, { allow: true, wardId: 'w2' });
++  });
++  test('org admin incoming out-of-scope ward on update keeps stored ward', () => {
++    const d = decideWrite({ incoming: { id: 'p', wardId: 'wx' }, existing: { id: 'p', wardId: 'w1' }, actor: orgAdmin(), scope: oScope });
++    assert.deepEqual(d, { allow: true, wardId: 'w1' });
++  });
++  test('instance admin creates unassigned', () => {
++    const d = decideWrite({ incoming: { id: 'p' }, existing: null, actor: instanceAdmin(), scope: rScope });
++    assert.deepEqual(d, { allow: true, wardId: null });
++  });
++  test('instance admin keeps incoming ward on create', () => {
++    const d = decideWrite({ incoming: { id: 'p', wardId: 'wx' }, existing: null, actor: instanceAdmin(), scope: rScope });
++    assert.deepEqual(d, { allow: true, wardId: 'wx' });
++  });
++});
+diff --git a/tests/server-auth-scope.test.js b/tests/server-auth-scope.test.js
+new file mode 100644
+index 0000000..31559b4
+--- /dev/null
++++ b/tests/server-auth-scope.test.js
+@@ -0,0 +1,57 @@
++import { test, describe, before, after } from 'node:test';
++import assert from 'node:assert/strict';
++import { hashPassword } from '../auth.js';
++import { startServer, login } from './helpers/server-harness.js';
++
++function seedUser(store, { id, username, orgId = null, wardId = null, role = 'member' }){
++  const salt = 'testsalt';
++  return store.createUser({
++    id, username, passwordSalt: salt, passwordHash: hashPassword('pw-' + username, salt),
++    role, active: true, tokenVersion: 0, createdAt: Date.now(), orgId, wardId
++  });
++}
++
++describe('login response scope fields', () => {
++  let srv;
++  before(async () => {
++    srv = await startServer({
++      multiTenant: true,
++      seed: async (store) => {
++        await store.createOrganization({ id: 'org1', name: 'Org', plan: 'free' });
++        await store.createHospital({ id: 'h1', orgId: 'org1', name: 'H1' });
++        await store.createWard({ id: 'w1', hospitalId: 'h1', name: 'Ortho' });
++        await seedUser(store, { id: 'u1', username: 'pg1', orgId: 'org1', wardId: 'w1' });
++      }
++    });
++  });
++  after(async () => { await srv.stop(); });
++
++  test('scoped user gets orgId/wardId in login response', async () => {
++    const l = await login(srv.baseUrl, 'pg1', 'pw-pg1');
++    assert.equal(l.status, 200);
++    assert.equal(l.json.orgId, 'org1');
++    assert.equal(l.json.wardId, 'w1');
++    assert.equal(l.json.role, 'member');
++  });
++
++  test('instance admin gets null orgId/wardId', async () => {
++    const l = await login(srv.baseUrl);
++    assert.equal(l.status, 200);
++    assert.equal(l.json.orgId, null);
++    assert.equal(l.json.wardId, null);
++  });
++});
++
++describe('login response scope fields — flag OFF (additive, null)', () => {
++  let srv;
++  before(async () => { srv = await startServer({ multiTenant: false }); });
++  after(async () => { await srv.stop(); });
++
++  test('admin login carries null orgId/wardId and unchanged existing keys', async () => {
++    const l = await login(srv.baseUrl);
++    assert.equal(l.status, 200);
++    assert.deepEqual(Object.keys(l.json).sort(), ['orgId', 'role', 'token', 'username', 'wardId']);
++    assert.equal(l.json.orgId, null);
++    assert.equal(l.json.wardId, null);
++  });
++});
+diff --git a/tests/server-scoping.test.js b/tests/server-scoping.test.js
+new file mode 100644
+index 0000000..ce9714a
+--- /dev/null
++++ b/tests/server-scoping.test.js
+@@ -0,0 +1,140 @@
++import { test, describe, before, after } from 'node:test';
++import assert from 'node:assert/strict';
++import { hashPassword } from '../auth.js';
++import { startServer, login, syncPost } from './helpers/server-harness.js';
++
++function seedUser(store, { id, username, orgId = null, wardId = null, role = 'member' }){
++  const salt = 'testsalt';
++  return store.createUser({
++    id, username, passwordSalt: salt, passwordHash: hashPassword('pw-' + username, salt),
++    role, active: true, tokenVersion: 0, createdAt: Date.now(), orgId, wardId
++  });
++}
++
++async function tok(baseUrl, username, password){
++  const l = await login(baseUrl, username, password);
++  assert.equal(l.status, 200, `login failed for ${username}`);
++  return l.json.token;
++}
++const ids = (r) => r.json.patients.map(p => p.id).sort();
++
++describe('MULTI_TENANT sync scoping', () => {
++  let srv, tokens;
++  before(async () => {
++    srv = await startServer({
++      multiTenant: true,
++      seed: async (store) => {
++        await store.createOrganization({ id: 'org1', name: 'Org1', plan: 'free' });
++        await store.createOrganization({ id: 'org2', name: 'Org2', plan: 'free' });
++        await store.createHospital({ id: 'h1', orgId: 'org1', name: 'H1' });
++        await store.createHospital({ id: 'hx', orgId: 'org2', name: 'HX' });
++        await store.createWard({ id: 'w1', hospitalId: 'h1', name: 'Ortho' });
++        await store.createWard({ id: 'w2', hospitalId: 'h1', name: 'Surgery' });
++        await store.createWard({ id: 'wx', hospitalId: 'hx', name: 'OtherOrg' });
++        await seedUser(store, { id: 'u1', username: 'pg1', orgId: 'org1', wardId: 'w1' });
++        await seedUser(store, { id: 'u2', username: 'pg2', orgId: 'org1', wardId: 'w2' });
++        await seedUser(store, { id: 'u3', username: 'boss1', orgId: 'org1', role: 'admin' });
++        await seedUser(store, { id: 'u4', username: 'lost', orgId: 'org1' });
++        await seedUser(store, { id: 'u5', username: 'px', orgId: 'org2', wardId: 'wx' });
++      }
++    });
++    tokens = {
++      pg1: await tok(srv.baseUrl, 'pg1', 'pw-pg1'),
++      pg2: await tok(srv.baseUrl, 'pg2', 'pw-pg2'),
++      boss1: await tok(srv.baseUrl, 'boss1', 'pw-boss1'),
++      lost: await tok(srv.baseUrl, 'lost', 'pw-lost'),
++      px: await tok(srv.baseUrl, 'px', 'pw-px'),
++      root: await tok(srv.baseUrl, 'admin', 'test-admin-pass')
++    };
++    // Each member creates one patient in their own department.
++    for(const [who, id] of [['pg1', 'pat-w1'], ['pg2', 'pat-w2'], ['px', 'pat-wx']]){
++      const r = await syncPost(srv.baseUrl, tokens[who], {
++        since: 0, changes: [{ id, name: `Patient of ${who}`, updatedAt: Date.now() }]
++      });
++      assert.equal(r.status, 200);
++    }
++    // Instance admin creates an unassigned patient.
++    const r = await syncPost(srv.baseUrl, tokens.root, {
++      since: 0, changes: [{ id: 'pat-unassigned', name: 'Nobody', updatedAt: Date.now() }]
++    });
++    assert.equal(r.status, 200);
++  });
++  after(async () => { await srv.stop(); });
++
++  test('new patients are stamped with the creator\'s department', async () => {
++    const r = await syncPost(srv.baseUrl, tokens.root, { since: 0, changes: [] });
++    const p = r.json.patients.find(x => x.id === 'pat-w1');
++    assert.equal(p.wardId, 'w1');
++  });
++
++  test('member reads only own department', async () => {
++    assert.deepEqual(ids(await syncPost(srv.baseUrl, tokens.pg1, { since: 0, changes: [] })), ['pat-w1']);
++    assert.deepEqual(ids(await syncPost(srv.baseUrl, tokens.pg2, { since: 0, changes: [] })), ['pat-w2']);
++  });
++
++  test('unassigned member reads nothing and cannot create', async () => {
++    assert.deepEqual(ids(await syncPost(srv.baseUrl, tokens.lost, { since: 0, changes: [] })), []);
++    await syncPost(srv.baseUrl, tokens.lost, { since: 0, changes: [{ id: 'pat-lost', name: 'X', updatedAt: Date.now() }] });
++    const all = await syncPost(srv.baseUrl, tokens.root, { since: 0, changes: [] });
++    assert.equal(all.json.patients.some(p => p.id === 'pat-lost'), false);
++  });
++
++  test('org admin reads all org departments, not other orgs, not unassigned', async () => {
++    assert.deepEqual(ids(await syncPost(srv.baseUrl, tokens.boss1, { since: 0, changes: [] })), ['pat-w1', 'pat-w2']);
++  });
++
++  test('instance admin reads everything including unassigned', async () => {
++    assert.deepEqual(ids(await syncPost(srv.baseUrl, tokens.root, { since: 0, changes: [] })), ['pat-unassigned', 'pat-w1', 'pat-w2', 'pat-wx']);
++  });
++
++  test('cross-org isolation is bidirectional', async () => {
++    assert.deepEqual(ids(await syncPost(srv.baseUrl, tokens.px, { since: 0, changes: [] })), ['pat-wx']);
++    const boss = await syncPost(srv.baseUrl, tokens.boss1, { since: 0, changes: [] });
++    assert.equal(boss.json.patients.some(p => p.id === 'pat-wx'), false);
++  });
++
++  test('out-of-scope write is silently skipped', async () => {
++    const before = (await syncPost(srv.baseUrl, tokens.root, { since: 0, changes: [] }))
++      .json.patients.find(p => p.id === 'pat-w2');
++    const r = await syncPost(srv.baseUrl, tokens.pg1, {
++      since: 0, changes: [{ id: 'pat-w2', name: 'HIJACKED', updatedAt: Date.now() + 999999 }]
++    });
++    assert.equal(r.status, 200); // contract unchanged: no error
++    const after = (await syncPost(srv.baseUrl, tokens.root, { since: 0, changes: [] }))
++      .json.patients.find(p => p.id === 'pat-w2');
++    assert.equal(after.name, before.name);
++  });
++
++  test('member cannot move a patient across departments (stored wardId wins)', async () => {
++    await syncPost(srv.baseUrl, tokens.pg1, {
++      since: 0, changes: [{ id: 'pat-w1', name: 'Patient of pg1', wardId: 'w2', updatedAt: Date.now() + 5 }]
++    });
++    const r = await syncPost(srv.baseUrl, tokens.root, { since: 0, changes: [] });
++    assert.equal(r.json.patients.find(p => p.id === 'pat-w1').wardId, 'w1');
++  });
++
++  test('org admin can move a patient within org scope', async () => {
++    await syncPost(srv.baseUrl, tokens.boss1, {
++      since: 0, changes: [{ id: 'pat-w2', wardId: 'w1', name: 'Patient of pg2', updatedAt: Date.now() + 10 }]
++    });
++    const r = await syncPost(srv.baseUrl, tokens.root, { since: 0, changes: [] });
++    assert.equal(r.json.patients.find(p => p.id === 'pat-w2').wardId, 'w1');
++  });
++
++  test('backup/export/import are instance-admin-only when flag on', async () => {
++    for(const [path, method] of [['/api/backup', 'GET'], ['/api/export', 'GET'], ['/api/import', 'POST']]){
++      for(const who of ['pg1', 'boss1']){
++        const res = await fetch(`${srv.baseUrl}${path}`, {
++          method, headers: { Authorization: `Bearer ${tokens[who]}`, 'Content-Type': 'application/json' },
++          body: method === 'POST' ? JSON.stringify({ patients: [] }) : undefined
++        });
++        assert.equal(res.status, 403, `${who} ${path} must be 403`);
++      }
++      const rootRes = await fetch(`${srv.baseUrl}${path}`, {
++        method, headers: { Authorization: `Bearer ${tokens.root}`, 'Content-Type': 'application/json' },
++        body: method === 'POST' ? JSON.stringify({ patients: [] }) : undefined
++      });
++      assert.notEqual(rootRes.status, 403, `instance admin ${path} must not be 403`);
++    }
++  });
++});
+diff --git a/tests/server-sync-golden.test.js b/tests/server-sync-golden.test.js
+new file mode 100644
+index 0000000..c472b83
+--- /dev/null
++++ b/tests/server-sync-golden.test.js
+@@ -0,0 +1,47 @@
++import { test, describe, before, after } from 'node:test';
++import assert from 'node:assert/strict';
++import { startServer, login, syncPost } from './helpers/server-harness.js';
++
++/* Golden-response regression guard for the flag-OFF sync contract.
++   Any accidental behavior drift in the /api/sync handler while wiring
++   MULTI_TENANT scoping must fail here. */
++describe('flag OFF — /api/sync golden response', () => {
++  let srv, token;
++  before(async () => {
++    srv = await startServer({ multiTenant: false });
++    const l = await login(srv.baseUrl);
++    assert.equal(l.status, 200);
++    token = l.json.token;
++  });
++  after(async () => { await srv.stop(); });
++
++  test('push + pull round-trips a patient with the exact contract shape', async () => {
++    const patient = {
++      id: 'golden-p1', name: 'Golden Patient', diagnosis: 'Right femur shaft fracture',
++      status: 'postop', unit: 'ortho unit - IV', ward: 'W-3', updatedAt: Date.now()
++    };
++    const push = await syncPost(srv.baseUrl, token, { since: 0, changes: [patient] });
++    assert.equal(push.status, 200);
++    assert.deepEqual(Object.keys(push.json).sort(), ['apiVersion', 'patients', 'serverTime']);
++    assert.equal(push.json.apiVersion, 1);
++    assert.equal(typeof push.json.serverTime, 'number');
++
++    const pull = await syncPost(srv.baseUrl, token, { since: 0, changes: [] });
++    assert.equal(pull.status, 200);
++    const got = pull.json.patients.find(p => p.id === 'golden-p1');
++    assert.ok(got, 'pushed patient must come back');
++    assert.equal(got.name, 'Golden Patient');
++    assert.equal(got.diagnosis, 'Right femur shaft fracture');
++    assert.equal(got.unit, 'ortho unit - IV');
++    assert.equal(got.ward, 'W-3');
++    assert.equal(got.deleted, false);
++    assert.equal(typeof got.updatedAt, 'number');
++    // No scoping field is invented flag-off: the server must not add wardId.
++    assert.equal('wardId' in got, false);
++  });
++
++  test('admin pull still includes the pushed patient (flat instance)', async () => {
++    const pull = await syncPost(srv.baseUrl, token, { since: 0, changes: [] });
++    assert.ok(pull.json.patients.some(p => p.id === 'golden-p1'));
++  });
++});

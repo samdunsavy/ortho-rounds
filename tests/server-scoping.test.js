@@ -121,8 +121,8 @@ describe('MULTI_TENANT sync scoping', () => {
     assert.equal(r.json.patients.find(p => p.id === 'pat-w2').wardId, 'w1');
   });
 
-  test('backup/export/import are instance-admin-only when flag on', async () => {
-    for(const [path, method] of [['/api/backup', 'GET'], ['/api/export', 'GET'], ['/api/import', 'POST']]){
+  test('backup/export/import/diag are instance-admin-only when flag on', async () => {
+    for(const [path, method] of [['/api/backup', 'GET'], ['/api/export', 'GET'], ['/api/import', 'POST'], ['/api/diag', 'GET']]){
       for(const who of ['pg1', 'boss1']){
         const res = await fetch(`${srv.baseUrl}${path}`, {
           method, headers: { Authorization: `Bearer ${tokens[who]}`, 'Content-Type': 'application/json' },

@@ -81,4 +81,34 @@ Files changed: 2 files, 121 insertions
 
 ---
 
-**Ready for Task 3**: The integration harness is now available for all downstream tasks. The golden test establishes the baseline for flag-OFF behavior before any server-side scoping changes land.
+## Review Findings Fix (2d48833)
+
+### Changes Applied
+
+**Finding 1 (cleanup on failure)**: Wrapped spawn/waitForHealth in try/catch; on failure, kills child (SIGKILL) and removes dataDir before rethrowing.
+
+**Finding 2 (SIGKILL escalation)**: Modified `stop()` to SIGTERM first, wait up to 2s for graceful exit. If `child.exitCode === null` after 2s, escalates to SIGKILL and waits for exit before cleanup.
+
+**Finding 3 (port-collision retry)**: Added retry loop (up to 3 attempts) with fresh random port per attempt. On failure, kills child and continues; rethrows last error after final attempt.
+
+**Finding 4 (stderr capture)**: Modified spawn to use `stdio: ['ignore', 'ignore', 'pipe']` and accumulate stderr (last ~4KB) into error messages when health check fails.
+
+**Finding 5 (test name)**: Renamed test in server-sync-golden.test.js from 'every user sees every patient (flat instance)' to 'admin pull still includes the pushed patient (flat instance)'.
+
+### Test Results
+
+**Covering test**: `npm test -- tests/server-sync-golden.test.js`
+- 2 tests, 2 pass, 0 fail
+
+**Full suite**: `npm test`
+- 235 tests / 66 suites, 235 pass, 0 fail, ~15.7s
+
+### Commit
+
+```
+2d48833 fix: harden server harness (cleanup, SIGKILL escalation, port retry, stderr capture)
+```
+
+### Concerns
+
+None. All findings successfully implemented; tests validate robustness.

@@ -215,6 +215,12 @@ function serveStatic(req, res){
 
 /* ---------------- API routes ---------------- */
 
+/** Whole-instance routes (backup/export/import/diag) are instance-admin-only
+ *  when MULTI_TENANT is on: they expose or mutate every org's data at once. */
+function isInstanceAdmin(actor){
+  return actor.role === 'admin' && !actor.orgId;
+}
+
 async function handleApi(req, res, pathname){
   // Public endpoints (no auth)
   if(pathname === '/api/health' && req.method === 'GET'){
@@ -376,6 +382,9 @@ async function handleApi(req, res, pathname){
   }
 
   if(pathname === '/api/diag' && req.method === 'GET'){
+    if(isEnabled('MULTI_TENANT') && !isInstanceAdmin(actor)){
+      return sendJSON(res, 403, { error: 'Instance admin only' });
+    }
     const all = await store.getAll();
     const live = all.filter(r => !r.deleted);
     return sendJSON(res, 200, {
@@ -440,7 +449,7 @@ async function handleApi(req, res, pathname){
   }
 
   if(pathname === '/api/backup' && req.method === 'GET'){
-    if(isEnabled('MULTI_TENANT') && !(actor.role === 'admin' && !actor.orgId)){
+    if(isEnabled('MULTI_TENANT') && !isInstanceAdmin(actor)){
       return sendJSON(res, 403, { error: 'Instance admin only' });
     }
     const filePath = store.backupFilePath ? store.backupFilePath() : null;
@@ -488,7 +497,7 @@ async function handleApi(req, res, pathname){
   }
 
   if(pathname === '/api/export' && req.method === 'GET'){
-    if(isEnabled('MULTI_TENANT') && !(actor.role === 'admin' && !actor.orgId)){
+    if(isEnabled('MULTI_TENANT') && !isInstanceAdmin(actor)){
       return sendJSON(res, 403, { error: 'Instance admin only' });
     }
     const rows = await store.getActive();
@@ -626,7 +635,7 @@ async function handleApi(req, res, pathname){
   }
 
   if(pathname === '/api/import' && req.method === 'POST'){
-    if(isEnabled('MULTI_TENANT') && !(actor.role === 'admin' && !actor.orgId)){
+    if(isEnabled('MULTI_TENANT') && !isInstanceAdmin(actor)){
       return sendJSON(res, 403, { error: 'Instance admin only' });
     }
     const body = await readBody(req) || {};
