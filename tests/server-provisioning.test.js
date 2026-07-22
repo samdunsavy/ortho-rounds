@@ -27,6 +27,25 @@ describe('bootstrapAdmin self-heal (MULTI_TENANT on)', () => {
     }finally{ await srv.stop(); }
   });
 
+  test('self-heal reactivates a disabled same-username admin instead of crashing', async () => {
+    const srv = await startServer({
+      multiTenant: true,
+      seedRaw: async (store) => {
+        await store.createUser({ id: 'old-root', username: ADMIN_USERNAME, passwordSalt: 's',
+          passwordHash: hashPassword('old-forgotten-pw', 's'), role: 'admin', active: false,
+          tokenVersion: 3, createdAt: Date.now(), orgId: null, wardId: null });
+        await store.createUser({ id: 'ou2', username: 'orgadmin2', passwordSalt: 's',
+          passwordHash: hashPassword('pw', 's'), role: 'admin', active: true,
+          tokenVersion: 0, createdAt: Date.now(), orgId: 'oX', wardId: null });
+      }
+    });
+    try{
+      const l = await login(srv.baseUrl, ADMIN_USERNAME, ADMIN_PASSWORD);
+      assert.equal(l.status, 200, 'reactivated env admin must log in with env password');
+      assert.equal(l.json.orgId, null);
+    }finally{ await srv.stop(); }
+  });
+
   test('flag OFF: boot with existing users creates no admin (unchanged behavior)', async () => {
     const srv = await startServer({
       multiTenant: false,

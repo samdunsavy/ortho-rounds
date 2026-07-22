@@ -87,6 +87,30 @@ export async function bootstrapAdmin(store){
   const passwordSalt = crypto.randomBytes(16).toString('hex');
   const passwordHash = hashPassword(password, passwordSalt);
 
+  if(isEnabled('MULTI_TENANT')){
+    const existing = await store.getUserByUsername(username);
+    if(existing){
+      // Usernames are UNIQUE and offboarding is disable-only, so a disabled
+      // same-username row must be reactivated in place rather than re-created.
+      await store.updateUser(existing.id, {
+        active: true,
+        passwordHash,
+        passwordSalt,
+        tokenVersion: (existing.tokenVersion || 0) + 1,
+        orgId: null,
+        wardId: null,
+        role: 'admin'
+      });
+
+      return {
+        created: true,
+        username,
+        generatedPassword: envPassword ? null : password,
+        usingEnvPassword: !!envPassword
+      };
+    }
+  }
+
   await store.createUser({
     id: crypto.randomUUID(),
     username,

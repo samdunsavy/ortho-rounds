@@ -7624,7 +7624,7 @@ function renderAdminUsersSectionHTML(tree, users){
     <tr>
       <td>${escapeHTML(u.username)}</td>
       <td>${u.role === 'admin' ? '<span class="spec-badge">admin</span>' : 'member'}</td>
-      <td><select data-assign-user="${escapeHTML(u.id)}">${opts(u.wardId)}</select></td>
+      <td><select data-assign-user="${escapeHTML(u.id)}" data-prev="${escapeHTML(u.wardId || '')}">${opts(u.wardId)}</select></td>
       <td>${u.active ? 'active' : 'disabled'}</td>
     </tr>`).join('');
   return `<h3>Users</h3><table class="admin-users-table">
@@ -7701,8 +7701,12 @@ document.getElementById('adminView')?.addEventListener('change', async (e) => {
   if(!sel) return;
   try{
     await api(`/api/admin/users/${sel.dataset.assignUser}/assign`, { method: 'POST', body: JSON.stringify({ wardId: sel.value || null }) });
+    sel.dataset.prev = sel.value;
     showToast('Department updated');
-  }catch(err){ showToast(err.message); }
+  }catch(err){
+    sel.value = sel.dataset.prev || '';
+    showToast(err.message);
+  }
 });
 
 function openPresentationMode(){
