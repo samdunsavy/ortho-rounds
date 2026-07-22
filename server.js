@@ -242,6 +242,34 @@ async function departmentInOrg(wardId, orgId){
   return !!hospital && hospital.orgId === orgId;
 }
 
+/** True iff a hierarchy node (org/hospital/department/ward/unit) belongs to
+ *  org orgId — resolves the node's org by walking its parents. */
+async function nodeInOrg(store, type, id, orgId){
+  if(!id || !orgId) return false;
+  switch(type){
+    case 'unit': {
+      const unit = await store.getUnit(id);
+      return !!unit && (await nodeInOrg(store, 'ward', unit.wardId, orgId));
+    }
+    case 'ward': {
+      const ward = await store.getWard(id);
+      return !!ward && (await nodeInOrg(store, 'department', ward.departmentId, orgId));
+    }
+    case 'department': {
+      const department = await store.getDepartment(id);
+      return !!department && (await nodeInOrg(store, 'hospital', department.hospitalId, orgId));
+    }
+    case 'hospital': {
+      const hospital = await store.getHospital(id);
+      return !!hospital && hospital.orgId === orgId;
+    }
+    case 'org':
+      return id === orgId;
+    default:
+      return false;
+  }
+}
+
 async function handleApi(req, res, pathname){
   // Public endpoints (no auth)
   if(pathname === '/api/health' && req.method === 'GET'){
@@ -418,6 +446,32 @@ async function handleApi(req, res, pathname){
       return sendJSON(res, 200, { id: department.id, hospitalId: hospital.id, name, specialty });
     }
 
+    if(pathname === '/api/admin/wards' && req.method === 'POST'){
+      if(actor.role !== 'admin') return sendJSON(res, 403, { error: 'Admin only' });
+      const body = await readBody(req) || {};
+      const dep = body.departmentId ? await store.getDepartment(body.departmentId) : null;
+      if(!dep) return sendJSON(res, 404, { error: 'Department not found' });
+      if(!isInstanceAdmin(actor) && !(await departmentInOrg(dep.id, actor.orgId))) return sendJSON(res, 403, { error: 'Not your organization' });
+      const name = cleanName(body.name);
+      if(!name) return sendJSON(res, 400, { error: 'Ward name required (max 80 chars)' });
+      const ward = { id: crypto.randomUUID(), departmentId: dep.id, name, createdAt: Date.now() };
+      await store.createWard(ward);
+      return sendJSON(res, 200, { id: ward.id, departmentId: dep.id, name });
+    }
+
+    if(pathname === '/api/admin/units' && req.method === 'POST'){
+      if(actor.role !== 'admin') return sendJSON(res, 403, { error: 'Admin only' });
+      const body = await readBody(req) || {};
+      const ward = body.wardId ? await store.getWard(body.wardId) : null;
+      if(!ward) return sendJSON(res, 404, { error: 'Ward not found' });
+      if(!isInstanceAdmin(actor) && !(await departmentInOrg(ward.departmentId, actor.orgId))) return sendJSON(res, 403, { error: 'Not your organization' });
+      const name = cleanName(body.name);
+      if(!name) return sendJSON(res, 400, { error: 'Unit name required (max 80 chars)' });
+      const unit = { id: crypto.randomUUID(), wardId: ward.id, name, createdAt: Date.now() };
+      await store.createUnit(unit);
+      return sendJSON(res, 200, { id: unit.id, wardId: ward.id, name });
+    }
+
     const assignMatch = pathname.match(/^\/api\/admin\/users\/([^/]+)\/assign$/);
     if(assignMatch && req.method === 'POST'){
       if(actor.role !== 'admin') return sendJSON(res, 403, { error: 'Admin only' });
@@ -425,13 +479,15 @@ async function handleApi(req, res, pathname){
       if(!target) return sendJSON(res, 404, { error: 'User not found' });
       if(!isInstanceAdmin(actor) && target.orgId !== actor.orgId) return sendJSON(res, 403, { error: 'Not your organization' });
       const body = await readBody(req) || {};
-      const wardId = body.wardId === null || body.wardId === undefined ? null : String(body.wardId);
-      if(wardId !== null){
-        const targetOrg = isInstanceAdmin(actor) ? target.orgId : actor.orgId;
-        if(!targetOrg || !(await departmentInOrg(wardId, targetOrg))) return sendJSON(res, 403, { error: 'Department is not in this organization' });
+      if(body.nodeId === null || body.nodeId === undefined){
+        await store.updateUser(target.id, { assignmentType: null, assignmentId: null });
+        return sendJSON(res, 200, { ok: true, assignment: null });
       }
-      await store.updateUser(target.id, { wardId });
-      return sendJSON(res, 200, { ok: true, wardId });
+      const nodeType = String(body.nodeType || '');
+      const orgId = isInstanceAdmin(actor) ? target.orgId : actor.orgId;
+      if(!orgId || !(await nodeInOrg(store, nodeType, String(body.nodeId), orgId))) return sendJSON(res, 403, { error: 'Node is not in this organization' });
+      await store.updateUser(target.id, { assignmentType: nodeType, assignmentId: String(body.nodeId) });
+      return sendJSON(res, 200, { ok: true, assignment: { type: nodeType, id: String(body.nodeId) } });
     }
     // fall through: unmatched /api/admin/* paths continue to the routes below
   }
