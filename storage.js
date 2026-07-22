@@ -200,12 +200,13 @@ function createSqliteStore({ dataDir }){
     async countUsers(){ return db.prepare('SELECT COUNT(*) AS n FROM users').get().n; },
     async createUser(user){
       db.prepare(`
-        INSERT INTO users (id, username, passwordHash, passwordSalt, role, active, tokenVersion, createdAt)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO users (id, username, passwordHash, passwordSalt, role, active, tokenVersion, createdAt, orgId, wardId)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         user.id, user.username, user.passwordHash, user.passwordSalt,
         user.role || 'member', user.active === false ? 0 : 1,
-        user.tokenVersion || 0, user.createdAt || Date.now()
+        user.tokenVersion || 0, user.createdAt || Date.now(),
+        user.orgId ?? null, user.wardId ?? null
       );
     },
     async updateUser(id, patch){
@@ -439,7 +440,8 @@ async function createMongoStore({ mongoUri }){
         _id: user.id, username: user.username, passwordHash: user.passwordHash,
         passwordSalt: user.passwordSalt, role: user.role || 'member',
         active: user.active === false ? 0 : 1, tokenVersion: user.tokenVersion || 0,
-        createdAt: user.createdAt || Date.now()
+        createdAt: user.createdAt || Date.now(),
+        orgId: user.orgId ?? null, wardId: user.wardId ?? null
       });
     },
     async updateUser(id, patch){

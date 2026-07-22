@@ -245,7 +245,7 @@ async function handleApi(req, res, pathname){
     }
     const token = signToken({ sub: user.id, username: user.username, tokenVersion: user.tokenVersion }, config.tokenSecret);
     recordEvent('login');
-    return sendJSON(res, 200, { token, username: user.username, role: user.role });
+    return sendJSON(res, 200, { token, username: user.username, role: user.role, orgId: user.orgId ?? null, wardId: user.wardId ?? null });
   }
 
   // Everything below requires a valid, non-revoked token
@@ -257,7 +257,7 @@ async function handleApi(req, res, pathname){
   if(!authedUser || !authedUser.active || authedUser.tokenVersion !== claims.tokenVersion){
     return sendJSON(res, 401, { error: 'Session revoked — log in again' });
   }
-  const actor = { id: authedUser.id, username: authedUser.username, role: authedUser.role };
+  const actor = { id: authedUser.id, username: authedUser.username, role: authedUser.role, orgId: authedUser.orgId ?? null, wardId: authedUser.wardId ?? null };
 
   if(pathname === '/api/account/revoke-sessions' && req.method === 'POST'){
     await store.updateUser(actor.id, { tokenVersion: (authedUser.tokenVersion || 0) + 1 });
