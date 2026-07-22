@@ -112,6 +112,75 @@ export async function buildOrgTree(store, orgId){
   };
 }
 
+/* Builds a nested department->ward->unit tree scoped to a single node in the
+   hierarchy (as opposed to buildOrgTree, which always returns a whole org).
+   Used by GET /api/me/scope so a non-admin member (or a dept/org admin) can
+   fetch just their own subtree for the patient-form unit picker, without the
+   admin-only /api/admin/org route's org-wide access check. Names + ids only
+   — no stats, this isn't the admin console. */
+async function wardBranch(store, ward, onlyUnitId){
+  const units = await store.listUnitsByWard(ward.id);
+  const outUnits = onlyUnitId ? units.filter(u => u.id === onlyUnitId) : units;
+  return { id: ward.id, name: ward.name, units: outUnits.map(u => ({ id: u.id, name: u.name })) };
+}
+
+async function departmentBranch(store, dep, onlyWardId, onlyUnitId){
+  const wards = await store.listWardsByDepartment(dep.id);
+  const outWards = [];
+  for(const ward of wards){
+    if(onlyWardId && ward.id !== onlyWardId) continue;
+    outWards.push(await wardBranch(store, ward, onlyUnitId));
+  }
+  return { id: dep.id, name: dep.name, wards: outWards };
+}
+
+export async function buildScopeTree(store, node){
+  const empty = { departments: [] };
+  if(!node || !node.id) return empty;
+  switch(node.type){
+    case 'unit': {
+      const unit = await store.getUnit(node.id);
+      if(!unit) return empty;
+      const ward = await store.getWard(unit.wardId);
+      if(!ward) return empty;
+      const dep = await store.getDepartment(ward.departmentId);
+      if(!dep) return empty;
+      return { departments: [await departmentBranch(store, dep, ward.id, unit.id)] };
+    }
+    case 'ward': {
+      const ward = await store.getWard(node.id);
+      if(!ward) return empty;
+      const dep = await store.getDepartment(ward.departmentId);
+      if(!dep) return empty;
+      return { departments: [await departmentBranch(store, dep, ward.id, null)] };
+    }
+    case 'department': {
+      const dep = await store.getDepartment(node.id);
+      if(!dep) return empty;
+      return { departments: [await departmentBranch(store, dep, null, null)] };
+    }
+    case 'hospital': {
+      const hospital = await store.getHospital(node.id);
+      if(!hospital) return empty;
+      const deps = await store.listDepartmentsByHospital(hospital.id);
+      const out = [];
+      for(const dep of deps) out.push(await departmentBranch(store, dep, null, null));
+      return { departments: out };
+    }
+    case 'org': {
+      const hospitals = await store.listHospitalsByOrg(node.id);
+      const out = [];
+      for(const h of hospitals){
+        const deps = await store.listDepartmentsByHospital(h.id);
+        for(const dep of deps) out.push(await departmentBranch(store, dep, null, null));
+      }
+      return { departments: out };
+    }
+    default:
+      return empty;
+  }
+}
+
 export async function buildOrgRollups(store){
   const orgs = await store.listOrganizations();
   const out = [];

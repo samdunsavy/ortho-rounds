@@ -188,3 +188,83 @@ describe('MULTI_TENANT sync scoping (unit-based)', () => {
     }
   });
 });
+
+describe('GET /api/me/scope', () => {
+  let srv, tokens;
+  before(async () => {
+    srv = await startServer({
+      multiTenant: true,
+      seed: async (store) => {
+        // org1: hospital h1 -> dep1 (ward1 -> unit1, unit1b), dep2 (ward2 -> unit2)
+        await store.createOrganization({ id: 'org1', name: 'Org1', plan: 'free' });
+        await store.createHospital({ id: 'h1', orgId: 'org1', name: 'H1' });
+        await store.createDepartment({ id: 'dep1', hospitalId: 'h1', name: 'Ortho' });
+        await store.createDepartment({ id: 'dep2', hospitalId: 'h1', name: 'Surgery' });
+        await store.createWard({ id: 'ward1', departmentId: 'dep1', name: 'Ward One' });
+        await store.createWard({ id: 'ward2', departmentId: 'dep2', name: 'Ward Two' });
+        await store.createUnit({ id: 'unit1', wardId: 'ward1', name: 'Unit One' });
+        await store.createUnit({ id: 'unit1b', wardId: 'ward1', name: 'Unit One-B' });
+        await store.createUnit({ id: 'unit2', wardId: 'ward2', name: 'Unit Two' });
+        await seedUser(store, { id: 'u1', username: 'pg1', orgId: 'org1', assignment: { type: 'unit', id: 'unit1' } });
+        await seedUser(store, { id: 'u3', username: 'boss1', orgId: 'org1', role: 'admin' });
+        await seedUser(store, { id: 'u4', username: 'lost', orgId: 'org1' });
+      }
+    });
+    tokens = {
+      pg1: await tok(srv.baseUrl, 'pg1', 'pw-pg1'),
+      boss1: await tok(srv.baseUrl, 'boss1', 'pw-boss1'),
+      lost: await tok(srv.baseUrl, 'lost', 'pw-lost')
+    };
+  });
+  after(async () => { await srv.stop(); });
+
+  test('a single-unit member gets exactly their one-unit branch; sibling/out-of-scope units absent', async () => {
+    const res = await fetch(`${srv.baseUrl}/api/me/scope`, { headers: { Authorization: `Bearer ${tokens.pg1}` } });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.deepEqual(body.assignment, { type: 'unit', id: 'unit1' });
+    assert.equal(body.tree.departments.length, 1);
+    const dep = body.tree.departments[0];
+    assert.equal(dep.id, 'dep1');
+    assert.equal(dep.wards.length, 1);
+    assert.equal(dep.wards[0].id, 'ward1');
+    // unit1b is a sibling unit under the same ward but out of this member's
+    // scope (they're pinned to unit1 specifically) — it must not appear.
+    assert.deepEqual(dep.wards[0].units.map(u => u.id), ['unit1']);
+    // dep2/ward2/unit2 (a different department entirely) must not appear.
+    assert.equal(body.tree.departments.some(d => d.id === 'dep2'), false);
+  });
+
+  test('an org admin gets their full org subtree, nested department->ward->unit', async () => {
+    const res = await fetch(`${srv.baseUrl}/api/me/scope`, { headers: { Authorization: `Bearer ${tokens.boss1}` } });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.assignment, null);
+    const depIds = body.tree.departments.map(d => d.id).sort();
+    assert.deepEqual(depIds, ['dep1', 'dep2']);
+    const dep1 = body.tree.departments.find(d => d.id === 'dep1');
+    assert.deepEqual(dep1.wards[0].units.map(u => u.id).sort(), ['unit1', 'unit1b']);
+    const dep2 = body.tree.departments.find(d => d.id === 'dep2');
+    assert.deepEqual(dep2.wards[0].units.map(u => u.id), ['unit2']);
+  });
+
+  test('an unassigned member gets an empty tree, not an error', async () => {
+    const res = await fetch(`${srv.baseUrl}/api/me/scope`, { headers: { Authorization: `Bearer ${tokens.lost}` } });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.deepEqual(body.tree.departments, []);
+  });
+});
+
+describe('GET /api/me/scope — flag off', () => {
+  let srv;
+  before(async () => { srv = await startServer({ multiTenant: false }); });
+  after(async () => { await srv.stop(); });
+
+  test('404 when MULTI_TENANT is disabled', async () => {
+    const l = await login(srv.baseUrl);
+    assert.equal(l.status, 200);
+    const res = await fetch(`${srv.baseUrl}/api/me/scope`, { headers: { Authorization: `Bearer ${l.json.token}` } });
+    assert.equal(res.status, 404);
+  });
+});

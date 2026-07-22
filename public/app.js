@@ -6240,9 +6240,114 @@ function renderDischarged(){
   });
 }
 
+/* ---------------- patient form: dept/ward/unit picker (MULTI_TENANT) ----------------
+   Replaces the legacy free-text f_ward/f_unit inputs with three dependent
+   <select>s (f_department/f_ward/f_unit) sourced from the caller's own scope
+   subtree (GET /api/me/scope). The server derives ancestry + ward/unit
+   labels from the posted unitId (see decideWrite in scope.js) — this picker
+   only ever needs to persist unitId, never trust/write ward/unit strings. */
+
+let cachedScopeTree = null; // { assignment, tree } — fetched once per page session
+
+function scopePickerActive(){
+  return !!(serverFlags && serverFlags.MULTI_TENANT);
+}
+
+async function loadScopeTree(){
+  if(cachedScopeTree) return cachedScopeTree;
+  try{
+    cachedScopeTree = await api('/api/me/scope');
+  }catch(err){
+    console.error(err);
+    cachedScopeTree = { assignment: null, tree: { departments: [] } };
+  }
+  return cachedScopeTree;
+}
+
+function fillSelect(el, items, placeholder){
+  if(!el) return;
+  const opts = [`<option value="">${escapeHTML(placeholder)}</option>`]
+    .concat((items || []).map(it => `<option value="${escapeHTML(it.id)}">${escapeHTML(it.name)}</option>`));
+  el.innerHTML = opts.join('');
+}
+
+function populateUnitSelect(tree, departmentId, wardId, selectedUnitId){
+  const unitEl = document.getElementById('f_unit');
+  const dep = (tree.departments || []).find(x => x.id === departmentId);
+  const ward = dep ? (dep.wards || []).find(w => w.id === wardId) : null;
+  const units = ward ? (ward.units || []) : [];
+  fillSelect(unitEl, units, 'Select unit');
+  // Auto-select when there's only one option — genuine choices (2+ units)
+  // are left blank for the PG to pick.
+  let uid = selectedUnitId || '';
+  if(!uid && units.length === 1) uid = units[0].id;
+  if(unitEl) unitEl.value = uid;
+}
+
+function populateWardSelect(tree, departmentId, selectedWardId, selectedUnitId){
+  const wardEl = document.getElementById('f_ward');
+  const dep = (tree.departments || []).find(x => x.id === departmentId);
+  const wards = dep ? (dep.wards || []) : [];
+  fillSelect(wardEl, wards, 'Select ward');
+  let wid = selectedWardId || '';
+  if(!wid && wards.length === 1) wid = wards[0].id;
+  if(wardEl) wardEl.value = wid;
+  populateUnitSelect(tree, departmentId, wardEl ? wardEl.value : '', selectedUnitId);
+}
+
+// Returns the {departmentId,wardId,unitId} chain when the scope tree
+// contains exactly one unit total, otherwise null.
+function findSingleUnitChain(tree){
+  let chain = null, count = 0;
+  for(const dep of (tree.departments || [])){
+    for(const ward of (dep.wards || [])){
+      for(const unit of (ward.units || [])){
+        count++;
+        chain = { departmentId: dep.id, wardId: ward.id, unitId: unit.id };
+      }
+    }
+  }
+  return count === 1 ? chain : null;
+}
+
+async function populateScopePicker(d){
+  const depEl = document.getElementById('f_department');
+  const wardEl = document.getElementById('f_ward');
+  const unitEl = document.getElementById('f_unit');
+  if(!depEl || !wardEl || !unitEl) return; // legacy free-text form (flag off) — nothing to wire up
+
+  const { tree } = await loadScopeTree();
+  fillSelect(depEl, tree.departments, 'Select department');
+
+  const single = findSingleUnitChain(tree);
+  let selDep = d.departmentId || '';
+  let selWard = d.wardId || '';
+  let selUnit = d.unitId || '';
+  if(!selUnit && single){
+    selDep = single.departmentId;
+    selWard = single.wardId;
+    selUnit = single.unitId;
+  }
+
+  // Auto-select an unambiguous department even when the unit itself still
+  // needs a manual choice (e.g. one department/one ward but several units).
+  if(!selDep && (tree.departments || []).length === 1) selDep = tree.departments[0].id;
+
+  depEl.value = selDep;
+  populateWardSelect(tree, depEl.value, selWard, selUnit);
+
+  depEl.onchange = () => populateWardSelect(tree, depEl.value, '', '');
+  wardEl.onchange = () => populateUnitSelect(tree, depEl.value, wardEl.value, '');
+
+  const lock = !!single;
+  depEl.disabled = lock;
+  wardEl.disabled = lock;
+  unitEl.disabled = lock;
+}
+
 /* ---------------- ADD / EDIT MODAL ---------------- */
 
-function openPatientModal(p){
+async function openPatientModal(p){
   // Treat as edit only when this id is already on the ward list.
   // Clones use blankPatient() (new id) and must stay "Add" so Smart fill shows.
   const isExisting = !!(p && p.id && patients.some(x => x.id === p.id));
@@ -6259,8 +6364,10 @@ function openPatientModal(p){
   if(!isExisting){
     const ini = getPgInitials();
     if(ini && !modalWorkingData.assignedPg) modalWorkingData.assignedPg = ini;
-    const defaultUnit = getDefaultUnit();
-    if(defaultUnit && !modalWorkingData.unit) modalWorkingData.unit = defaultUnit;
+    if(!scopePickerActive()){
+      const defaultUnit = getDefaultUnit();
+      if(defaultUnit && !modalWorkingData.unit) modalWorkingData.unit = defaultUnit;
+    }
     // Ensure AI status is fresh so Smart fill is ready on desktop/FAB open.
     void refreshAiStatus();
   }
@@ -6269,6 +6376,7 @@ function openPatientModal(p){
   document.getElementById('modalBody').innerHTML = renderModalForm(modalWorkingData);
   bindModalDynamicLists();
   document.getElementById('patientModal').classList.add('active');
+  if(scopePickerActive()) await populateScopePicker(modalWorkingData);
   requestAnimationFrame(()=> snapshotModalBaseline());
 }
 
@@ -6276,8 +6384,12 @@ function readModalFieldsToObject(){
   const d = getWorkingData();
   d.name = document.getElementById('f_name')?.value.trim() || '';
   d.bed = document.getElementById('f_bed')?.value.trim() || '';
-  d.ward = document.getElementById('f_ward')?.value.trim() || '';
-  d.unit = document.getElementById('f_unit')?.value.trim() || '';
+  if(scopePickerActive()){
+    d.unitId = document.getElementById('f_unit')?.value || '';
+  }else{
+    d.ward = document.getElementById('f_ward')?.value.trim() || '';
+    d.unit = document.getElementById('f_unit')?.value.trim() || '';
+  }
   d.wardType = document.getElementById('f_wardType')?.value.trim() || '';
   d.assignedPg = document.getElementById('f_assignedPg')?.value.trim().toUpperCase() || '';
   d.diagnosis = document.getElementById('f_diagnosis')?.value.trim() || '';
@@ -6387,6 +6499,7 @@ function renderModalForm(d){
   // Smart fill on every Add (desktop FAB + mobile Add). Don't hide it just because
   // AI status hasn't returned yet — Fill still checks canUseAi() when clicked.
   const showSmartFill = !editingPatientId && !isConsultantMode();
+  const scopedPicker = scopePickerActive();
   return `
     ${showSmartFill ? `
     <div class="smart-paste-box">
@@ -6404,6 +6517,19 @@ function renderModalForm(d){
       <div><label>Patient name</label><input id="f_name" value="${escapeHTML(d.name)}" placeholder="Full name"></div>
       <div><label>Ward / bed</label><input id="f_bed" value="${escapeHTML(d.bed)}" placeholder="e.g. 7FOW-12"></div>
     </div>
+    ${scopedPicker ? `
+    <div class="form-row two">
+      <div><label>Department</label><select id="f_department"></select></div>
+      <div><label>Ward</label><select id="f_ward"></select></div>
+    </div>
+    <div class="form-row two">
+      <div><label>Unit</label><select id="f_unit"></select></div>
+      <div><label>Assigned PG</label><input id="f_assignedPg" value="${escapeHTML(d.assignedPg||'')}" placeholder="Initials e.g. AK" maxlength="6"></div>
+    </div>
+    <div class="form-row two">
+      <div><label>Ward type</label><input id="f_wardType" value="${escapeHTML(d.wardType||'')}" placeholder="e.g. Free ward"></div>
+      <div></div>
+    </div>` : `
     <div class="form-row two">
       <div><label>Ward group (optional)</label><input id="f_ward" value="${escapeHTML(d.ward||'')}" placeholder="e.g. 7FOW — auto from bed if blank"></div>
       <div><label>Assigned PG</label><input id="f_assignedPg" value="${escapeHTML(d.assignedPg||'')}" placeholder="Initials e.g. AK" maxlength="6"></div>
@@ -6411,7 +6537,7 @@ function renderModalForm(d){
     <div class="form-row two">
       <div><label>Ortho unit</label><input id="f_unit" value="${escapeHTML(d.unit||'')}" placeholder="e.g. IV — defaults from ward setting"></div>
       <div><label>Ward type</label><input id="f_wardType" value="${escapeHTML(d.wardType||'')}" placeholder="e.g. Free ward"></div>
-    </div>
+    </div>`}
     <div class="form-row two">
       <div><label>Age</label><input id="f_age" value="${escapeHTML(d.age)}" placeholder="e.g. 34" inputmode="numeric"></div>
       <div><label>Sex</label>
@@ -7294,8 +7420,15 @@ async function savePatientFromModal(){
     const prevPlanDate = d.dailyPlanDate || '';
     d.name = document.getElementById('f_name').value.trim();
     d.bed = document.getElementById('f_bed').value.trim();
-    d.ward = document.getElementById('f_ward').value.trim();
-    d.unit = document.getElementById('f_unit')?.value.trim() || '';
+    if(scopePickerActive()){
+      // The server derives ward/unit + the rest of the ancestry from unitId
+      // (see decideWrite in scope.js) — never write ward/unit strings here.
+      d.unitId = document.getElementById('f_unit')?.value || '';
+      if(!d.unitId){ showToast('Please select a unit'); return; }
+    }else{
+      d.ward = document.getElementById('f_ward').value.trim();
+      d.unit = document.getElementById('f_unit')?.value.trim() || '';
+    }
     d.wardType = document.getElementById('f_wardType')?.value.trim() || '';
     d.assignedPg = document.getElementById('f_assignedPg').value.trim().toUpperCase();
     d.age = document.getElementById('f_age').value.trim();

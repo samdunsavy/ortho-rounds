@@ -65,7 +65,7 @@ import { runDigestPass } from './notifications.js';
 import { listFlags, isEnabled } from './flags.js';
 import { resolveScope, canRead, decideWrite } from './scope.js';
 import { recordEvent, getSnapshot, isExportEnabled, startExportLoop } from './telemetry.js';
-import { buildOrgTree, buildOrgRollups } from './admin.js';
+import { buildOrgTree, buildOrgRollups, buildScopeTree } from './admin.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -370,6 +370,16 @@ async function handleApi(req, res, pathname){
   if(pathname === '/api/admin/telemetry' && req.method === 'GET'){
     if(actor.role !== 'admin') return sendJSON(res, 403, { error: 'Admin only' });
     return sendJSON(res, 200, { exportEnabled: isExportEnabled(), ...getSnapshot() });
+  }
+
+  if(pathname === '/api/me/scope' && req.method === 'GET'){
+    if(!isEnabled('MULTI_TENANT')) return sendJSON(res, 404, { error: 'Unknown endpoint' });
+    // Same node resolution scope.js's resolveScope uses for non-admins
+    // (actor.assignment) and org admins (their org), so this always matches
+    // what the caller can actually read/write via /api/sync.
+    const node = actor.assignment || (actor.role === 'admin' && actor.orgId ? { type: 'org', id: actor.orgId } : null);
+    const tree = await buildScopeTree(store, node);
+    return sendJSON(res, 200, { assignment: actor.assignment || null, tree });
   }
 
   if(isEnabled('MULTI_TENANT') && pathname.startsWith('/api/admin/')){
