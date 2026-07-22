@@ -114,3 +114,52 @@ None. Implementation matches brief exactly, all tests pass, documentation accura
 ---
 
 Phase 1 Task 5 complete. Backup/import/export endpoints now reject non-instance-admins with 403 when MULTI_TENANT flag is on. Migration tool + admin console remain as Phase 1 later work (Task 6).
+
+## Final-Review Findings Fix (2026-07-22)
+
+### Summary
+Fixed three final-review findings in a single commit via TDD: extended test first (RED), implemented fixes (GREEN), verified full suite, committed.
+
+**Commit: 0580738** — `fix: gate /api/diag instance-admin-only; extract isInstanceAdmin helper`
+
+### Findings Implemented
+
+**Finding 1 (Critical):** `/api/diag` leaked patient names across orgs when MULTI_TENANT is on.
+- **Fix:** Added instance-admin-only guard matching `/api/backup` policy (same condition, isInstanceAdmin helper)
+- **Location:** `server.js` line ~385
+
+**Finding 2 (Minor):** Extracted duplicated guard into `isInstanceAdmin(actor)` helper.
+- **Extracted:** `function isInstanceAdmin(actor){ return actor.role === 'admin' && !actor.orgId; }`
+- **Location:** `server.js` line ~220 (before handleApi)
+- **Applied to:** `/api/backup`, `/api/export`, `/api/import`, `/api/diag` (all four gates use it)
+
+**Finding 3:** Test coverage for diag gate.
+- **Test extended:** `tests/server-scoping.test.js` line 124
+- **Change:** Added `['/api/diag', 'GET']` to endpoint test array; renamed test to `backup/export/import/diag are instance-admin-only when flag on`
+
+### TDD Execution
+
+1. **RED Phase:** Extended test to include `/api/diag`
+   - Ran `npm test -- tests/server-scoping.test.js`
+   - Result: **FAILED** — `pg1 /api/diag must be 403` (returned 200)
+
+2. **GREEN Phase:** Implemented fix
+   - Added `isInstanceAdmin(actor)` helper
+   - Added guard to `/api/diag` endpoint
+   - Replaced guards in `/api/backup`, `/api/export`, `/api/import` to use helper
+   - Ran `npm test -- tests/server-scoping.test.js`
+   - Result: **PASSED** — all 10 tests green (including new diag test)
+
+3. **Verification:** Full suite
+   - Ran `npm test`
+   - Result: **248/248 PASS** (69 suites)
+   - Covering tests: `npm test -- tests/server-scoping.test.js tests/server-sync-golden.test.js` → **12/12 PASS**
+
+### Test Evidence
+- Test initially RED: `pg1 /api/diag must be 403` (200 !== 403)
+- Test final GREEN: `backup/export/import/diag are instance-admin-only when flag on` ✅
+- Full suite: 248 pass, 0 fail
+- No regressions in flag-off behavior (golden test unchanged)
+
+### Concerns
+None. All findings implemented, TDD cycle complete, all tests pass.
