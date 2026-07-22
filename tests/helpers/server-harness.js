@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createStore } from '../../storage.js';
+import { hashPassword } from '../../auth.js';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const ADMIN_USERNAME = 'admin';
@@ -31,7 +32,26 @@ export async function startServer({ multiTenant = false, seed = null } = {}){
   if(seed){
     const store = await createStore({ dataDir });
     await store.init();
-    try{ await seed(store); }
+    try{
+      await seed(store);
+      // Server's bootstrapAdmin no-ops once any user exists, so seeded tests
+      // must create the instance admin themselves to keep login(baseUrl) working.
+      const existingAdmin = await store.getUserByUsername(ADMIN_USERNAME);
+      if(!existingAdmin){
+        await store.createUser({
+          id: 'root-admin',
+          username: ADMIN_USERNAME,
+          passwordHash: hashPassword(ADMIN_PASSWORD, 'harness-salt'),
+          passwordSalt: 'harness-salt',
+          role: 'admin',
+          orgId: null,
+          wardId: null,
+          active: true,
+          tokenVersion: 0,
+          createdAt: Date.now()
+        });
+      }
+    }
     finally{ await store.close(); }
   }
 

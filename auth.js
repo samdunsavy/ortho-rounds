@@ -70,15 +70,11 @@ export function checkLoginRateLimit(key, now = Date.now()){
 }
 
 /**
- * Creates the first admin account on a fresh install. No-op if an
- * instance-level admin (orgId null) already exists — this only ever runs
- * once per install. Tenant-scoped users (orgId set) don't count: multi-tenant
- * installs can be pre-seeded with org/ward members before the instance admin
- * is bootstrapped.
+ * Creates the first admin account on a fresh install. No-op if any user
+ * already exists — this only ever runs once per install.
  */
 export async function bootstrapAdmin(store){
-  const existing = await store.getAllUsers();
-  if(existing.some(u => !u.orgId)) return { created: false };
+  if((await store.countUsers()) > 0) return { created: false };
 
   const username = process.env.ORTHO_ADMIN_USERNAME || 'admin';
   const envPassword = process.env.ORTHO_ADMIN_PASSWORD;

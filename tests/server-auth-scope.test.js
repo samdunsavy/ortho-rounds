@@ -34,7 +34,7 @@ describe('login response scope fields', () => {
     assert.equal(l.json.role, 'member');
   });
 
-  test('bootstrap admin gets null orgId/wardId (instance admin)', async () => {
+  test('instance admin gets null orgId/wardId', async () => {
     const l = await login(srv.baseUrl);
     assert.equal(l.status, 200);
     assert.equal(l.json.orgId, null);

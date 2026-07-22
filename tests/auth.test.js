@@ -102,7 +102,6 @@ describe('bootstrapAdmin', () => {
     return {
       users,
       async countUsers(){ return users.length; },
-      async getAllUsers(){ return users; },
       async createUser(u){ users.push(u); }
     };
   }
