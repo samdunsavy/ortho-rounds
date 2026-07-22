@@ -124,18 +124,38 @@ describe('MULTI_TENANT sync scoping (unit-based)', () => {
     assert.equal(after.name, before.name);
   });
 
-  test('member editing their own patient does not disturb stored ancestry', async () => {
-    // Real clients never send ancestry fields (unitId/wardId/...) — those are
-    // server-derived. A non-admin's decideWrite result omits `ancestry`
-    // entirely ("keep existing ancestry"), so the sync loop leaves the
-    // previously-stamped ancestry on the stored record untouched.
+  test('member cannot relabel a patient\'s unit by sending unitId in the sync payload', async () => {
+    // Security regression guard: a non-admin member is in-scope to edit their
+    // own patient (pat-w1, unitId=unit1), but if their payload includes a
+    // unitId pointing at a different unit — in scope (unit2, same org) or out
+    // of scope (unitx, a different org entirely) — the server must ignore it
+    // and keep stamping the server-resolved ancestry for the patient's
+    // existing unit. The client can never relabel ancestry on an edit.
     await syncPost(srv.baseUrl, tokens.pg1, {
-      since: 0, changes: [{ id: 'pat-w1', name: 'Renamed by pg1', updatedAt: Date.now() + 5 }]
+      since: 0, changes: [{ id: 'pat-w1', name: 'Renamed by pg1', unitId: 'unit2', updatedAt: Date.now() + 5 }]
     });
-    const r = await syncPost(srv.baseUrl, tokens.root, { since: 0, changes: [] });
-    const p = r.json.patients.find(x => x.id === 'pat-w1');
+    let r = await syncPost(srv.baseUrl, tokens.root, { since: 0, changes: [] });
+    let p = r.json.patients.find(x => x.id === 'pat-w1');
     assert.equal(p.unitId, 'unit1');
+    assert.equal(p.wardId, 'ward1');
+    assert.equal(p.departmentId, 'dep1');
+    assert.equal(p.hospitalId, 'h1');
+    assert.equal(p.orgId, 'org1');
+    assert.equal(p.ward, 'Ward One');
+    assert.equal(p.unit, 'Unit One');
     assert.equal(p.name, 'Renamed by pg1');
+
+    // Same attempt but pointing at a unit in an entirely different org.
+    await syncPost(srv.baseUrl, tokens.pg1, {
+      since: 0, changes: [{ id: 'pat-w1', name: 'Renamed again', unitId: 'unitx', updatedAt: Date.now() + 10 }]
+    });
+    r = await syncPost(srv.baseUrl, tokens.root, { since: 0, changes: [] });
+    p = r.json.patients.find(x => x.id === 'pat-w1');
+    assert.equal(p.unitId, 'unit1');
+    assert.equal(p.orgId, 'org1');
+    assert.equal(p.ward, 'Ward One');
+    assert.equal(p.unit, 'Unit One');
+    assert.equal(p.name, 'Renamed again');
   });
 
   test('org admin can move a patient within org scope', async () => {

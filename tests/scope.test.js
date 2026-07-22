@@ -132,17 +132,33 @@ describe('scope (unit-based subtree)', () => {
       assert.equal(d.ancestry.unitId, 'ux');
     });
 
+    test('decideWrite update: unassigned patient stays unassigned (ancestry resolves to null, not undefined)', async () => {
+      const s = await resolveScope(instanceAdmin(), store);
+      const d = await decideWrite({ incoming: {}, existing: { unitId: null }, actor: instanceAdmin(), scope: s, store });
+      assert.equal(d.allow, true);
+      assert.equal(d.ancestry, null);
+    });
+
     test('decideWrite update: member cannot touch out-of-scope patient', async () => {
       const s = await resolveScope(member('u1'), store);
       const d = await decideWrite({ incoming: {}, existing: { unitId: 'u2' }, actor: member('u1'), scope: s, store });
       assert.equal(d.allow, false);
     });
 
-    test('decideWrite update: member updates own-unit patient, ancestry left as-is', async () => {
+    test('decideWrite update: member updates own-unit patient, server re-stamps existing unit ancestry', async () => {
       const s = await resolveScope(member('u1'), store);
       const d = await decideWrite({ incoming: {}, existing: { unitId: 'u1' }, actor: member('u1'), scope: s, store });
       assert.equal(d.allow, true);
-      assert.equal(d.ancestry, undefined);
+      assert.equal(d.ancestry.unitId, 'u1');
+      assert.equal(d.ancestry.orgId, 'o1');
+    });
+
+    test('decideWrite update: non-admin sending a different unitId cannot relabel — server re-stamps the existing unit\'s ancestry, ignoring the incoming value', async () => {
+      const s = await resolveScope(member('u1'), store);
+      const d = await decideWrite({ incoming: { unitId: 'u2' }, existing: { unitId: 'u1' }, actor: member('u1'), scope: s, store });
+      assert.equal(d.allow, true);
+      assert.equal(d.ancestry.unitId, 'u1');
+      assert.notEqual(d.ancestry.unitId, 'u2');
     });
 
     test('decideWrite update: admin moving an in-scope patient to another in-scope unit is stamped', async () => {
@@ -152,11 +168,12 @@ describe('scope (unit-based subtree)', () => {
       assert.equal(d.ancestry.unitId, 'u2');
     });
 
-    test('decideWrite update: admin incoming out-of-scope unit leaves stored ancestry as-is', async () => {
+    test('decideWrite update: admin incoming out-of-scope unit is rejected — server re-stamps the existing unit\'s ancestry, ignoring the incoming value', async () => {
       const s = await resolveScope(deptAdmin('d1'), store);
       const d = await decideWrite({ incoming: { unitId: 'ux' }, existing: { unitId: 'u1' }, actor: deptAdmin('d1'), scope: s, store });
       assert.equal(d.allow, true);
-      assert.equal(d.ancestry, undefined);
+      assert.equal(d.ancestry.unitId, 'u1');
+      assert.notEqual(d.ancestry.unitId, 'ux');
     });
   });
 });

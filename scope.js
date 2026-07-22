@@ -31,7 +31,10 @@ export async function decideWrite({ incoming, existing, actor, scope, store }){
     if(isAdmin && requested && (scope.unrestricted || scope.unitIds.has(requested))){
       return { allow: true, ancestry: await resolveAncestry(store, requested) };
     }
-    return { allow: true }; // keep existing ancestry
+    // Not a legitimate re-assignment: force-stamp ancestry from server truth
+    // so a client-supplied unitId (or other ancestry keys) in the payload can
+    // never relabel the patient's tree position.
+    return { allow: true, ancestry: await resolveAncestry(store, existing.unitId) };
   }
 
   // New patient

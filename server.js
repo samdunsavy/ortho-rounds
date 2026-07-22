@@ -573,10 +573,11 @@ async function handleApi(req, res, pathname){
           const stored = existingObj ? mergePatientRecords(p, existingObj) : Object.assign({}, p);
           if(decision && decision.ancestry !== undefined){
             const a = decision.ancestry;
-            if(a === null){
-              delete stored.unitId; delete stored.wardId; delete stored.departmentId;
-              delete stored.hospitalId; delete stored.orgId;
-            }else{
+            // Always strip client-merged ancestry keys first so a client-supplied
+            // value can never linger when the server is about to re-stamp.
+            delete stored.unitId; delete stored.wardId; delete stored.departmentId;
+            delete stored.hospitalId; delete stored.orgId;
+            if(a !== null){
               Object.assign(stored, a);
               const ward = await store.getWard(a.wardId);
               const unit = await store.getUnit(a.unitId);
