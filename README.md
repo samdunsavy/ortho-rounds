@@ -167,6 +167,45 @@ New X-rays uploaded while online are stored under `data/images/` on the server
 (URL reference) instead of embedding base64 in the database. Older images
 embedded as base64 continue to work.
 
+## Rolling out the deep hierarchy
+
+The org → hospital → department → ward → unit model (multi-tenant scoping) is
+flag-gated behind `ORTHO_FLAG_MULTI_TENANT` and off by default, so an existing
+self-host keeps working exactly as before until you opt in. To turn it on for
+an install that already has patient data:
+
+1. **Back up first.** With the flag still off, hit `/api/export` (instance
+   admin token required once the flag is on, open while it's off) and keep
+   the JSON somewhere safe. This is your rollback path if anything below
+   looks wrong.
+2. **Run the backfill with the flag still off.** From the server host, against
+   the same Mongo/SQLite instance the app points at:
+   ```bash
+   node scripts/backfill-hierarchy.js
+   ```
+   This reconstructs a hierarchy from each patient's existing free-text
+   `ward`/`unit` fields and stamps `orgId`/`hospitalId`/`departmentId`/
+   `wardId`/`unitId` onto every active patient. It's idempotent — safe to
+   re-run if you add more patients before flipping the flag.
+3. **Review the reconstructed tree before anyone depends on it.** Once the
+   flag is on (step 4) the admin console's ward/unit screens show the tree
+   the backfill built; sanity-check that wards and units line up with what
+   the ward actually looks like on the ground, and fix any mis-groupings
+   there before clinicians start relying on scoped views.
+4. **Flip the flag and redeploy.** Set `ORTHO_FLAG_MULTI_TENANT=1` in the
+   server environment and redeploy/restart:
+   ```bash
+   ORTHO_FLAG_MULTI_TENANT=1 npm start
+   ```
+5. **Confirm clinicians still see their patients.** Log in as a regular
+   member (not the instance admin) and check their patient list still shows
+   everyone it did before — `GET /api/me/scope` should return the same unit
+   the backfill assigned them, and their sync pull should include exactly
+   the patients under that unit's subtree. If someone's patients go missing,
+   fix their assignment in the admin console rather than turning the flag
+   back off — the backfilled ancestry is already stamped, so a wrong
+   assignment is a config fix, not a data problem.
+
 ## AI assistants (optional)
 
 The app can draft daily plans, polish presentation scripts, and generate unit
