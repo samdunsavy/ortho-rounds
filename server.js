@@ -65,6 +65,7 @@ import { runDigestPass } from './notifications.js';
 import { listFlags, isEnabled } from './flags.js';
 import { resolveScope, canRead, decideWrite } from './scope.js';
 import { recordEvent, getSnapshot, isExportEnabled, startExportLoop } from './telemetry.js';
+import { buildOrgTree, buildOrgRollups } from './admin.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -221,6 +222,26 @@ function isInstanceAdmin(actor){
   return actor.role === 'admin' && !actor.orgId;
 }
 
+function cleanName(raw, max = 80){
+  const s = typeof raw === 'string' ? raw.trim() : '';
+  return s && s.length <= max ? s : null;
+}
+
+/** Which org is this admin request about? Org admins: their own.
+ *  Instance admins must target explicitly (query on GET, body on POST). */
+function requestedOrgId(actor, explicit){
+  if(!isInstanceAdmin(actor)) return actor.orgId || null;
+  return typeof explicit === 'string' && explicit ? explicit : null;
+}
+
+/** True iff wardId belongs to org orgId (looks up ward -> hospital -> org). */
+async function wardInOrg(wardId, orgId){
+  const ward = await store.getWard(wardId);
+  if(!ward) return false;
+  const hospital = await store.getHospital(ward.hospitalId);
+  return !!hospital && hospital.orgId === orgId;
+}
+
 async function handleApi(req, res, pathname){
   // Public endpoints (no auth)
   if(pathname === '/api/health' && req.method === 'GET'){
@@ -319,11 +340,107 @@ async function handleApi(req, res, pathname){
     return sendJSON(res, 200, { exportEnabled: isExportEnabled(), ...getSnapshot() });
   }
 
+  if(isEnabled('MULTI_TENANT') && pathname.startsWith('/api/admin/')){
+    const orgAdminMatch = pathname.match(/^\/api\/admin\/orgs\/([^/]+)\/admin$/);
+
+    if(pathname === '/api/admin/orgs' && req.method === 'POST'){
+      if(!isInstanceAdmin(actor)) return sendJSON(res, 403, { error: 'Instance admin only' });
+      const body = await readBody(req) || {};
+      const name = cleanName(body.name);
+      if(!name) return sendJSON(res, 400, { error: 'Organization name required (max 80 chars)' });
+      const org = { id: crypto.randomUUID(), name, plan: body.plan === 'paid' ? 'paid' : 'free', createdAt: Date.now() };
+      await store.createOrganization(org);
+      return sendJSON(res, 200, { id: org.id, name: org.name, plan: org.plan });
+    }
+
+    if(pathname === '/api/admin/orgs' && req.method === 'GET'){
+      if(!isInstanceAdmin(actor)) return sendJSON(res, 403, { error: 'Instance admin only' });
+      return sendJSON(res, 200, { orgs: await buildOrgRollups(store) });
+    }
+
+    if(orgAdminMatch && req.method === 'POST'){
+      if(!isInstanceAdmin(actor)) return sendJSON(res, 403, { error: 'Instance admin only' });
+      const org = await store.getOrganization(orgAdminMatch[1]);
+      if(!org) return sendJSON(res, 404, { error: 'Organization not found' });
+      const body = await readBody(req) || {};
+      const username = typeof body.username === 'string' ? body.username.trim() : '';
+      if(!username || username.length > 32) return sendJSON(res, 400, { error: 'Username required (max 32 chars)' });
+      if(await store.getUserByUsername(username)) return sendJSON(res, 409, { error: 'That username is already taken' });
+      const password = generateReadablePassword();
+      const passwordSalt = crypto.randomBytes(16).toString('hex');
+      const newUser = {
+        id: crypto.randomUUID(), username, passwordHash: hashPassword(password, passwordSalt), passwordSalt,
+        role: 'admin', active: true, tokenVersion: 0, createdAt: Date.now(), orgId: org.id, wardId: null
+      };
+      await store.createUser(newUser);
+      return sendJSON(res, 200, { id: newUser.id, username, role: 'admin', orgId: org.id, temporaryPassword: password });
+    }
+
+    if(pathname === '/api/admin/org' && req.method === 'GET'){
+      if(actor.role !== 'admin') return sendJSON(res, 403, { error: 'Admin only' });
+      const qIdx = req.url.indexOf('?');
+      const params = new URLSearchParams(qIdx >= 0 ? req.url.slice(qIdx + 1) : '');
+      const orgId = requestedOrgId(actor, params.get('orgId'));
+      if(!orgId) return sendJSON(res, 400, { error: 'orgId required' });
+      if(!(await store.getOrganization(orgId))) return sendJSON(res, 404, { error: 'Organization not found' });
+      if(!isInstanceAdmin(actor) && actor.orgId !== orgId) return sendJSON(res, 403, { error: 'Not your organization' });
+      return sendJSON(res, 200, await buildOrgTree(store, orgId));
+    }
+
+    if(pathname === '/api/admin/hospitals' && req.method === 'POST'){
+      if(actor.role !== 'admin') return sendJSON(res, 403, { error: 'Admin only' });
+      const body = await readBody(req) || {};
+      const orgId = requestedOrgId(actor, body.orgId);
+      if(!orgId) return sendJSON(res, 400, { error: 'orgId required' });
+      if(!(await store.getOrganization(orgId))) return sendJSON(res, 404, { error: 'Organization not found' });
+      const name = cleanName(body.name);
+      if(!name) return sendJSON(res, 400, { error: 'Hospital name required (max 80 chars)' });
+      const hospital = { id: crypto.randomUUID(), orgId, name, createdAt: Date.now() };
+      await store.createHospital(hospital);
+      return sendJSON(res, 200, { id: hospital.id, orgId, name });
+    }
+
+    if(pathname === '/api/admin/wards' && req.method === 'POST'){
+      if(actor.role !== 'admin') return sendJSON(res, 403, { error: 'Admin only' });
+      const body = await readBody(req) || {};
+      const hospital = body.hospitalId ? await store.getHospital(body.hospitalId) : null;
+      if(!hospital) return sendJSON(res, 404, { error: 'Hospital not found' });
+      if(!isInstanceAdmin(actor) && hospital.orgId !== actor.orgId) return sendJSON(res, 403, { error: 'Not your organization' });
+      const name = cleanName(body.name);
+      if(!name) return sendJSON(res, 400, { error: 'Department name required (max 80 chars)' });
+      const specialty = cleanName(body.specialty, 40) || 'ortho';
+      const ward = { id: crypto.randomUUID(), hospitalId: hospital.id, name, specialty, createdAt: Date.now() };
+      await store.createWard(ward);
+      return sendJSON(res, 200, { id: ward.id, hospitalId: hospital.id, name, specialty });
+    }
+
+    const assignMatch = pathname.match(/^\/api\/admin\/users\/([^/]+)\/assign$/);
+    if(assignMatch && req.method === 'POST'){
+      if(actor.role !== 'admin') return sendJSON(res, 403, { error: 'Admin only' });
+      const target = await store.getUserById(assignMatch[1]);
+      if(!target) return sendJSON(res, 404, { error: 'User not found' });
+      if(!isInstanceAdmin(actor) && target.orgId !== actor.orgId) return sendJSON(res, 403, { error: 'Not your organization' });
+      const body = await readBody(req) || {};
+      const wardId = body.wardId === null || body.wardId === undefined ? null : String(body.wardId);
+      if(wardId !== null){
+        const targetOrg = isInstanceAdmin(actor) ? target.orgId : actor.orgId;
+        if(!targetOrg || !(await wardInOrg(wardId, targetOrg))) return sendJSON(res, 403, { error: 'Department is not in this organization' });
+      }
+      await store.updateUser(target.id, { wardId });
+      return sendJSON(res, 200, { ok: true, wardId });
+    }
+    // fall through: unmatched /api/admin/* paths continue to the routes below
+  }
+
   if(pathname === '/api/admin/users' && req.method === 'GET'){
     if(actor.role !== 'admin') return sendJSON(res, 403, { error: 'Admin only' });
-    const users = await store.getAllUsers();
+    let users = await store.getAllUsers();
+    if(isEnabled('MULTI_TENANT') && !isInstanceAdmin(actor)){
+      users = users.filter(u => u.orgId === actor.orgId);
+    }
+    const extra = isEnabled('MULTI_TENANT') ? (u) => ({ wardId: u.wardId ?? null, orgId: u.orgId ?? null }) : () => ({});
     return sendJSON(res, 200, {
-      users: users.map(u => ({ id: u.id, username: u.username, role: u.role, active: !!u.active, createdAt: u.createdAt }))
+      users: users.map(u => ({ id: u.id, username: u.username, role: u.role, active: !!u.active, createdAt: u.createdAt, ...extra(u) }))
     });
   }
 
@@ -344,6 +461,22 @@ async function handleApi(req, res, pathname){
       id: crypto.randomUUID(), username, passwordHash, passwordSalt,
       role: body.role === 'admin' ? 'admin' : 'member', active: true, tokenVersion: 0, createdAt: Date.now()
     };
+    if(isEnabled('MULTI_TENANT')){
+      if(!isInstanceAdmin(actor)){
+        newUser.orgId = actor.orgId;
+        if(body.wardId){
+          if(!(await wardInOrg(String(body.wardId), actor.orgId))) return sendJSON(res, 403, { error: 'Department is not in this organization' });
+          newUser.wardId = String(body.wardId);
+        }
+      }else if(body.orgId){
+        if(!(await store.getOrganization(body.orgId))) return sendJSON(res, 404, { error: 'Organization not found' });
+        newUser.orgId = body.orgId;
+        if(body.wardId){
+          if(!(await wardInOrg(String(body.wardId), body.orgId))) return sendJSON(res, 403, { error: 'Department is not in this organization' });
+          newUser.wardId = String(body.wardId);
+        }
+      }
+    }
     await store.createUser(newUser);
     return sendJSON(res, 200, { id: newUser.id, username: newUser.username, role: newUser.role, temporaryPassword: password });
   }
@@ -353,6 +486,9 @@ async function handleApi(req, res, pathname){
     if(actor.role !== 'admin') return sendJSON(res, 403, { error: 'Admin only' });
     const target = await store.getUserById(disableMatch[1]);
     if(!target) return sendJSON(res, 404, { error: 'User not found' });
+    if(isEnabled('MULTI_TENANT') && !isInstanceAdmin(actor) && target.orgId !== actor.orgId){
+      return sendJSON(res, 403, { error: 'Not your organization' });
+    }
     if(target.id === actor.id){
       return sendJSON(res, 400, { error: 'You cannot disable your own account' });
     }
@@ -365,6 +501,9 @@ async function handleApi(req, res, pathname){
     if(actor.role !== 'admin') return sendJSON(res, 403, { error: 'Admin only' });
     const target = await store.getUserById(enableMatch[1]);
     if(!target) return sendJSON(res, 404, { error: 'User not found' });
+    if(isEnabled('MULTI_TENANT') && !isInstanceAdmin(actor) && target.orgId !== actor.orgId){
+      return sendJSON(res, 403, { error: 'Not your organization' });
+    }
     await store.updateUser(target.id, { active: true });
     return sendJSON(res, 200, { ok: true });
   }
@@ -374,6 +513,9 @@ async function handleApi(req, res, pathname){
     if(actor.role !== 'admin') return sendJSON(res, 403, { error: 'Admin only' });
     const target = await store.getUserById(resetMatch[1]);
     if(!target) return sendJSON(res, 404, { error: 'User not found' });
+    if(isEnabled('MULTI_TENANT') && !isInstanceAdmin(actor) && target.orgId !== actor.orgId){
+      return sendJSON(res, 403, { error: 'Not your organization' });
+    }
     const password = generateReadablePassword();
     const passwordSalt = crypto.randomBytes(16).toString('hex');
     const passwordHash = hashPassword(password, passwordSalt);
