@@ -3586,7 +3586,10 @@ function bindAuthEvents(){
   });
 
   document.getElementById('adminViewClose')?.addEventListener('click', closeAdminView);
-  document.getElementById('moreAdminBtn')?.addEventListener('click', openAdminView);
+  document.getElementById('moreAdminBtn')?.addEventListener('click', ()=>{
+    closeSheet('moreSheetOverlay');
+    openAdminView();
+  });
   document.getElementById('desktopAdminBtn')?.addEventListener('click', openAdminView);
   document.getElementById('adminView')?.addEventListener('click', async (e) => {
     const tab = e.target.closest('[data-admin-tab]');

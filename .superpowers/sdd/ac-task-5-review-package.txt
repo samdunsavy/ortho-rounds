@@ -1,0 +1,565 @@
+## Commits
+44ebd0e feat: flag-gated Admin console view (stats, org tree, users, orgs tab)
+
+## Stat
+ public/app.js                     | 215 ++++++++++++++++++++++++++++++++++++++
+ public/index.html                 |  42 ++++++++
+ tests/frontend-admin-view.test.js |  77 ++++++++++++++
+ 3 files changed, 334 insertions(+)
+
+## Diff
+diff --git a/public/app.js b/public/app.js
+index e85a0c9..feb903f 100644
+--- a/public/app.js
++++ b/public/app.js
+@@ -1955,35 +1955,38 @@ async function attemptLogin(){
+     const res = await fetch('/api/login', {
+       method:'POST',
+       headers:{'Content-Type':'application/json'},
+       body: JSON.stringify({ username, password: pw })
+     });
+     const data = await res.json().catch(()=> ({}));
+     if(!res.ok){ errEl.textContent = data.error || 'Login failed'; return; }
+     localStorage.setItem(LS_TOKEN, data.token);
+     localStorage.setItem(LS_USERNAME, data.username);
+     localStorage.setItem(LS_ROLE, data.role || 'member');
++    localStorage.setItem(LS_ORG_ID, data.orgId || '');
++    void refreshServerFlags();
+     updateAccountUI();
+     hideLogin();
+     await refreshAiStatus();
+     await syncNow({ fullReconcile: true });
+   }catch{
+     errEl.textContent = 'Cannot reach the server';
+   }finally{
+     btn.disabled = false;
+     btn.classList.remove('btn-busy');
+   }
+ }
+ function logout(){
+   localStorage.removeItem(LS_TOKEN);
+   localStorage.removeItem(LS_USERNAME);
+   localStorage.removeItem(LS_ROLE);
++  localStorage.removeItem(LS_ORG_ID);
+   updateAccountUI();
+   showLogin();
+ }
+ 
+ /* ---------------- helpers ---------------- */
+ 
+ function uid(){ return 'p_' + Date.now() + '_' + Math.random().toString(36).slice(2,8); }
+ 
+ // Local calendar date as YYYY-MM-DD (NOT UTC — avoids the date rolling a day
+ // early/late for non-UTC timezones, e.g. IST before 05:30).
+@@ -3450,20 +3453,21 @@ async function softDeletePatient(id){
+ 
+ async function init(){
+   document.getElementById('todayLabel').textContent = new Date().toLocaleDateString('en-IN', {weekday:'long', day:'numeric', month:'long'});
+   document.getElementById('todayLabel')?.classList.add('has-today');
+   restoreSavedFilter();
+   document.body.classList.toggle('consultant-mode', isConsultantMode());
+   bindEvents();
+   bindAuthEvents();
+   bindAiEvents();
+   updateStorageNotice();
++  void refreshServerFlags();
+   updateAccountUI();
+   renderWardHandoverBanner();
+   updateStickyHeaderOffset();
+   window.addEventListener('resize', updateStickyHeaderOffset);
+ 
+   try{
+     idb = await openCache();
+     await migrateLegacyRecords();
+     await reloadFromCache();
+     renderAll();
+@@ -3573,44 +3577,98 @@ function bindAuthEvents(){
+     openChangePasswordModal();
+   });
+   document.getElementById('accountUsersList')?.addEventListener('click', (e)=>{
+     const disableBtn = e.target.closest('[data-disable-user]');
+     if(disableBtn){ void disableUser(disableBtn.dataset.disableUser); return; }
+     const enableBtn = e.target.closest('[data-enable-user]');
+     if(enableBtn){ void enableUser(enableBtn.dataset.enableUser); return; }
+     const resetBtn = e.target.closest('[data-reset-user]');
+     if(resetBtn){ void resetUserPassword(resetBtn.dataset.resetUser); return; }
+   });
++
++  document.getElementById('adminViewClose')?.addEventListener('click', closeAdminView);
++  document.getElementById('moreAdminBtn')?.addEventListener('click', openAdminView);
++  document.getElementById('desktopAdminBtn')?.addEventListener('click', openAdminView);
++  document.getElementById('adminView')?.addEventListener('click', async (e) => {
++    const tab = e.target.closest('[data-admin-tab]');
++    if(tab){ switchAdminTab(tab.dataset.adminTab); return; }
++    const addHosp = e.target.closest('#adminAddHospitalBtn');
++    if(addHosp){
++      const name = document.getElementById('adminNewHospitalName')?.value.trim();
++      if(!name) return;
++      const body = isInstanceAdminUser() && adminViewOrgId ? { name, orgId: adminViewOrgId } : { name };
++      try{ await api('/api/admin/hospitals', { method: 'POST', body: JSON.stringify(body) }); await loadAdminView(); }
++      catch(err){ showToast(err.message); }
++      return;
++    }
++    const addWard = e.target.closest('[data-add-ward]');
++    if(addWard){
++      const hid = addWard.dataset.addWard;
++      const input = document.querySelector(`[data-new-ward-name="${hid}"]`);
++      const name = input?.value.trim();
++      if(!name) return;
++      try{ await api('/api/admin/wards', { method: 'POST', body: JSON.stringify({ hospitalId: hid, name }) }); await loadAdminView(); }
++      catch(err){ showToast(err.message); }
++      return;
++    }
++    const addOrg = e.target.closest('#adminAddOrgBtn');
++    if(addOrg){
++      const name = document.getElementById('adminNewOrgName')?.value.trim();
++      if(!name) return;
++      try{ await api('/api/admin/orgs', { method: 'POST', body: JSON.stringify({ name }) }); await loadAdminView(); }
++      catch(err){ showToast(err.message); }
++      return;
++    }
++    const mkAdmin = e.target.closest('[data-create-org-admin]');
++    if(mkAdmin){
++      const oid = mkAdmin.dataset.createOrgAdmin;
++      const input = document.querySelector(`[data-new-org-admin="${oid}"]`);
++      const username = input?.value.trim();
++      if(!username) return;
++      try{
++        const r = await api(`/api/admin/orgs/${oid}/admin`, { method: 'POST', body: JSON.stringify({ username }) });
++        await showConfirm('Org admin created', `Temporary password for ${r.username}: ${r.temporaryPassword}\nIt is not shown again.`, { confirmLabel: 'Done' });
++        await loadAdminView();
++      }catch(err){ showToast(err.message); }
++      return;
++    }
++    const viewOrg = e.target.closest('[data-view-org]');
++    if(viewOrg){ adminViewOrgId = viewOrg.dataset.viewOrg; switchAdminTab('org'); loadAdminView().catch(err => showToast(err.message)); return; }
++  });
+ }
+ 
+ function isAdmin(){
+   return localStorage.getItem(LS_ROLE) === 'admin';
+ }
+ 
+ function updateAccountUI(){
+   const username = localStorage.getItem(LS_USERNAME) || '—';
+   const admin = isAdmin();
+   const roleTag = admin ? ' (admin)' : '';
+ 
+   const label = document.getElementById('moreAccountUsername');
+   if(label) label.textContent = username;
+   const roleEl = document.getElementById('moreAccountRole');
+   if(roleEl) roleEl.textContent = roleTag;
+   const manageBtn = document.getElementById('moreManageUsersBtn');
+   if(manageBtn) manageBtn.style.display = admin ? '' : 'none';
++  const adminBtn = document.getElementById('moreAdminBtn');
++  if(adminBtn) adminBtn.style.display = adminUiVisible() ? '' : 'none';
+ 
+   const dLabel = document.getElementById('desktopAccountUsername');
+   if(dLabel) dLabel.textContent = username;
+   const dRoleEl = document.getElementById('desktopAccountRole');
+   if(dRoleEl) dRoleEl.textContent = roleTag;
+   const dManageBtn = document.getElementById('desktopManageUsersBtn');
+   if(dManageBtn) dManageBtn.style.display = admin ? '' : 'none';
++  const dAdminBtn = document.getElementById('desktopAdminBtn');
++  if(dAdminBtn) dAdminBtn.style.display = adminUiVisible() ? '' : 'none';
+ }
+ 
+ /* ---------------- push reminders ---------------- */
+ 
+ // The Push API/service workers simply don't exist on an insecure origin
+ // (except localhost) — this is the documented plain-HTTP LAN use case, so
+ // the toggle must not even appear there rather than showing a dead control.
+ function isPushEligible(){
+   return ('serviceWorker' in navigator) && ('PushManager' in window)
+     && (location.protocol === 'https:' || location.hostname === 'localhost');
+@@ -7480,20 +7538,177 @@ function renderPresentationExtras(p){
+   }
+   if(comps.length){
+     html += `<div class="pres-section"><div class="pres-label">Complications</div><div class="pres-plan">${comps.map(c=>escapeHTML((c.type||'Note') + (c.note ? ': '+c.note : ''))).join(' · ')}</div></div>`;
+   }
+   if(!hasPlanToday(p) && p.dailyPlan){
+     html += `<div class="pres-section"><div class="pres-label">Plan note</div><div class="pres-plan" style="opacity:0.85;">Outdated — last set ${escapeHTML(fmtDate(p.dailyPlanDate)||'earlier')}</div></div>`;
+   }
+   return html;
+ }
+ 
++/* ---------------- admin console (MULTI_TENANT) ---------------- */
++
++var serverFlags = {}; // populated from /api/health at startup and login
++const LS_ORG_ID = 'ortho_org_id';
++
++function adminUiVisible(){
++  return isAdmin() && !!(serverFlags && serverFlags.MULTI_TENANT);
++}
++
++function isInstanceAdminUser(){
++  return isAdmin() && !localStorage.getItem(LS_ORG_ID);
++}
++
++async function refreshServerFlags(){
++  try{
++    const res = await fetch('/api/health');
++    const data = await res.json();
++    serverFlags = data.flags || {};
++  }catch{ /* offline — leave as-is */ }
++  updateAccountUI();
++}
++
++function renderAdminStatTiles(tree){
++  const postop = tree.hospitals.flatMap(h => h.wards).reduce((n, w) => n + (w.stats.byStatus.postop || 0), 0);
++  const tiles = [
++    { n: tree.totals.departments, l: 'Departments' },
++    { n: tree.totals.usersActive, l: 'Active users' },
++    { n: tree.totals.livePatients, l: 'Live patients' },
++    { n: postop, l: 'Post-op' }
++  ];
++  return tiles.map(t => `<div class="admin-stat-tile"><div class="n">${t.n}</div><div class="l">${t.l}</div></div>`).join('');
++}
++
++function renderAdminStatusBar(byStatus, total){
++  if(!total) return '<div class="admin-status-bar"></div>';
++  const seg = (n, color) => n ? `<span style="width:${(n / total) * 100}%;background:${color}"></span>` : '';
++  return `<div class="admin-status-bar">${
++    seg(byStatus.postop, 'var(--status-postop)')}${
++    seg(byStatus.preop, 'var(--status-preop)')}${
++    seg(byStatus.conservative, 'var(--status-conservative)')}${
++    seg(byStatus.fordischarge, 'var(--status-fordischarge)')}</div>`;
++}
++
++function renderAdminOrgSectionHTML(tree){
++  const groups = tree.hospitals.map(h => `
++    <div class="admin-hospital-group" data-hospital-id="${escapeHTML(h.id)}">
++      <h3>${escapeHTML(h.name)}</h3>
++      <div class="admin-dept-grid">
++        ${h.wards.map(w => `
++          <div class="admin-dept-card" data-ward-id="${escapeHTML(w.id)}">
++            <strong>${escapeHTML(w.name)}</strong> <span class="spec-badge">${escapeHTML(w.specialty || '')}</span>
++            <div class="small-muted">${w.stats.livePatients} live patient${w.stats.livePatients === 1 ? '' : 's'} · ${w.stats.users} user${w.stats.users === 1 ? '' : 's'}</div>
++            ${renderAdminStatusBar(w.stats.byStatus, w.stats.livePatients)}
++            <div class="small-muted">${w.stats.lastActivity ? 'Active ' + formatRelativeTime(w.stats.lastActivity) : 'No activity yet'}</div>
++          </div>`).join('')}
++      </div>
++      <div class="admin-inline-form">
++        <input placeholder="New department name" data-new-ward-name="${escapeHTML(h.id)}">
++        <button class="btn" data-add-ward="${escapeHTML(h.id)}">Add department</button>
++      </div>
++    </div>`).join('');
++  return `<h3>Organization</h3>${groups || '<div class="small-muted">No hospitals yet — add the first one.</div>'}
++    <div class="admin-inline-form">
++      <input placeholder="New hospital name" id="adminNewHospitalName">
++      <button class="btn" id="adminAddHospitalBtn">Add hospital</button>
++    </div>`;
++}
++
++function renderAdminUsersSectionHTML(tree, users){
++  const wardOptions = tree.hospitals.flatMap(h => h.wards.map(w => ({ id: w.id, label: `${w.name} (${h.name})` })));
++  const opts = (sel) => `<option value="">— none —</option>` + wardOptions.map(w =>
++    `<option value="${escapeHTML(w.id)}" ${w.id === sel ? 'selected' : ''}>${escapeHTML(w.label)}</option>`).join('');
++  const rows = users.map(u => `
++    <tr>
++      <td>${escapeHTML(u.username)}</td>
++      <td>${u.role === 'admin' ? '<span class="spec-badge">admin</span>' : 'member'}</td>
++      <td><select data-assign-user="${escapeHTML(u.id)}">${opts(u.wardId)}</select></td>
++      <td>${u.active ? 'active' : 'disabled'}</td>
++    </tr>`).join('');
++  return `<h3>Users</h3><table class="admin-users-table">
++    <thead><tr><th>User</th><th>Role</th><th>Department</th><th>Status</th></tr></thead>
++    <tbody>${rows}</tbody></table>`;
++}
++
++function renderAdminView(tree, users){
++  document.getElementById('adminStatTiles').innerHTML = renderAdminStatTiles(tree);
++  document.getElementById('adminOrgSection').innerHTML = renderAdminOrgSectionHTML(tree);
++  document.getElementById('adminUsersSection').innerHTML = renderAdminUsersSectionHTML(tree, users);
++}
++
++function renderAdminOrgsTab(orgs){
++  const el = document.getElementById('adminOrgsTab');
++  el.innerHTML = `<h3>Organizations</h3>` + orgs.map(o => `
++    <div class="admin-org-card" data-org-id="${escapeHTML(o.id)}">
++      <strong>${escapeHTML(o.name)}</strong> <span class="spec-badge">${escapeHTML(o.plan)}</span>
++      <div class="small-muted">${o.stats.hospitals} hospitals · ${o.stats.departments} departments · ${o.stats.users} users · ${o.stats.livePatients} live patients</div>
++      <div class="admin-inline-form">
++        <input placeholder="New org admin username" data-new-org-admin="${escapeHTML(o.id)}">
++        <button class="btn" data-create-org-admin="${escapeHTML(o.id)}">Create org admin</button>
++        <button class="btn" data-view-org="${escapeHTML(o.id)}">View</button>
++      </div>
++    </div>`).join('') + `
++    <div class="admin-inline-form">
++      <input placeholder="New organization name" id="adminNewOrgName">
++      <button class="btn" id="adminAddOrgBtn">Create organization</button>
++    </div>`;
++}
++
++let adminViewOrgId = null; // instance admin: which org's tree is loaded
++
++async function loadAdminView(){
++  const qs = isInstanceAdminUser() && adminViewOrgId ? `?orgId=${encodeURIComponent(adminViewOrgId)}` : '';
++  if(isInstanceAdminUser() && !adminViewOrgId){
++    document.getElementById('adminTabs').style.display = '';
++    switchAdminTab('orgs');
++    renderAdminOrgsTab((await api('/api/admin/orgs')).orgs);
++    return;
++  }
++  const [tree, usersRes] = await Promise.all([api('/api/admin/org' + qs), api('/api/admin/users')]);
++  let users = usersRes.users;
++  if(isInstanceAdminUser() && adminViewOrgId) users = users.filter(u => u.orgId === adminViewOrgId);
++  renderAdminView(tree, users);
++}
++
++function switchAdminTab(tab){
++  document.getElementById('adminOrgPane').style.display = tab === 'org' ? '' : 'none';
++  document.getElementById('adminOrgsTab').style.display = tab === 'orgs' ? '' : 'none';
++  document.querySelectorAll('.admin-tab').forEach(b => b.classList.toggle('active', b.dataset.adminTab === tab));
++}
++
++function openAdminView(){
++  document.getElementById('adminView').hidden = false;
++  adminViewOrgId = null;
++  for(const id of ['adminStatTiles', 'adminOrgSection', 'adminUsersSection']){
++    const el = document.getElementById(id);
++    if(el) el.innerHTML = '<div class="small-muted">Loading…</div>';
++  }
++  loadAdminView().catch(err => showToast(err.message || 'Could not load admin data'));
++}
++
++function closeAdminView(){
++  document.getElementById('adminView').hidden = true;
++}
++
++// Delegated at module scope (not inside bindEvents/init) so the assign
++// control works as soon as renderAdminView paints a row — the admin view
++// is unreachable flag-off anyway (buttons hidden, view `hidden`), so this
++// doesn't need to be gated behind MULTI_TENANT/isAdmin checks either.
++document.getElementById('adminView')?.addEventListener('change', async (e) => {
++  const sel = e.target.closest('[data-assign-user]');
++  if(!sel) return;
++  try{
++    await api(`/api/admin/users/${sel.dataset.assignUser}/assign`, { method: 'POST', body: JSON.stringify({ wardId: sel.value || null }) });
++    showToast('Department updated');
++  }catch(err){ showToast(err.message); }
++});
++
+ function openPresentationMode(){
+   const list = getPresentationList();
+   if(!list.length){
+     if(presentationUnpresentedOnly){
+       showToast('All patients presented');
+       presentationUnpresentedOnly = false;
+       localStorage.setItem(LS_PRESENT_UNPRESENTED, '0');
+       const cb = document.getElementById('presentUnpresentedOnly');
+       if(cb) cb.checked = false;
+     }else{
+diff --git a/public/index.html b/public/index.html
+index d148c57..def2dfd 100644
+--- a/public/index.html
++++ b/public/index.html
+@@ -699,20 +699,42 @@
+   .pg-initials:focus{outline:none;border-color:var(--accent);box-shadow:var(--focus-ring);}
+   .pg-initials::placeholder{color:#8892a0;}
+ 
+   .ward-handover-banner{
+     background:var(--warn-bg);border-bottom:1px solid #ecd5b8;padding:8px 14px;
+     font-size:12.5px;display:none;gap:10px;align-items:flex-start;
+   }
+   .ward-handover-text{flex:1;line-height:1.45;}
+   .ward-handover-actions{display:flex;gap:6px;flex-shrink:0;}
+ 
++  /* ---------- admin console ---------- */
++  .admin-view{position:fixed;inset:0;z-index:60;background:var(--bg);overflow-y:auto;padding:16px;}
++  .admin-view[hidden]{display:none;}
++  .admin-view-header{display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap;}
++  .admin-stat-tiles{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:18px;}
++  @media (min-width:720px){.admin-stat-tiles{grid-template-columns:repeat(4,1fr);}}
++  .admin-stat-tile{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;text-align:center;}
++  .admin-stat-tile .n{font-size:28px;font-weight:700;color:var(--ink);}
++  .admin-stat-tile .l{font-size:12px;color:var(--muted);margin-top:2px;}
++  .admin-hospital-group{margin-bottom:18px;}
++  .admin-hospital-group h3{margin:0 0 8px;display:flex;align-items:center;gap:8px;}
++  .admin-dept-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px;}
++  .admin-dept-card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px;}
++  .admin-dept-card .spec-badge{font-size:11px;border:1px solid var(--line);border-radius:10px;padding:1px 8px;color:var(--muted);}
++  .admin-status-bar{display:flex;height:8px;border-radius:4px;overflow:hidden;background:var(--line);margin:8px 0;}
++  .admin-status-bar span{display:block;height:100%;}
++  .admin-inline-form{display:flex;gap:6px;margin-top:8px;}
++  .admin-inline-form input{flex:1;min-width:0;}
++  .admin-users-table{width:100%;border-collapse:collapse;}
++  .admin-users-table th,.admin-users-table td{padding:8px 6px;border-bottom:1px solid var(--line);text-align:left;font-size:14px;}
++  .admin-org-card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:10px;}
++
+   /* ---------- presentation mode ---------- */
+   .presentation-overlay{
+     display:none;position:fixed;inset:0;z-index:450;
+     background:radial-gradient(ellipse 100% 80% at 50% 0%,rgba(44,95,110,0.25),transparent 60%),var(--chrome);
+     color:var(--chrome-fg);flex-direction:column;
+   }
+   .presentation-overlay.active{display:flex;}
+   .presentation-top{
+     /* z-index is required here, not just position:relative. The Options
+        dropdown (.pres-options-panel) is absolutely positioned inside this
+@@ -1697,20 +1719,21 @@
+       <svg class="icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+     </button>
+     <div class="more-menu-wrap">
+       <button class="ibtn" id="moreMenuBtn" title="More actions">⋮ More</button>
+       <div class="more-menu-panel" id="moreMenuPanel">
+         <div class="sheet-account-row">
+           <span>Logged in as <strong id="desktopAccountUsername">—</strong><span id="desktopAccountRole" class="role-tag"></span></span>
+           <button type="button" class="btn btn-sm" id="desktopLogoutBtn">Log out</button>
+         </div>
+         <button class="ibtn" id="desktopManageUsersBtn" style="display:none;">Manage users</button>
++        <button class="ibtn" id="desktopAdminBtn" style="display:none;">🏥 Admin console</button>
+         <button class="ibtn" id="desktopChangePasswordBtn">Change password</button>
+         <button class="ibtn" id="desktopPushToggleBtn" style="display:none;">Enable reminders</button>
+         <button class="ibtn" id="exportBtn">Export</button>
+         <button class="ibtn" id="importBtn">Import</button>
+         <button class="ibtn" id="templatesBtn">Templates</button>
+         <button class="ibtn" id="censusBtn">Census</button>
+         <button class="ibtn" id="handoverSheetBtn">Handover sheet</button>
+         <button class="ibtn" id="whatsappHandoverBtn">Copy handover</button>
+         <button class="ibtn" id="defaultUnitBtn">Default unit</button>
+         <button class="ibtn" id="defaultOtDoctorsBtn">Default OT doctors</button>
+@@ -1847,20 +1870,21 @@
+       <h2 id="moreSheetTitle">More</h2>
+       <button type="button" class="modal-close" id="moreSheetClose">&times;</button>
+     </div>
+     <div class="sheet-body">
+       <div class="sheet-account-row">
+         <span>Logged in as <strong id="moreAccountUsername">—</strong><span id="moreAccountRole" class="role-tag"></span></span>
+         <button type="button" class="btn btn-sm" id="moreLogoutBtn">Log out</button>
+       </div>
+       <div class="sheet-actions">
+         <button type="button" class="sheet-action-btn" data-more-action="account" id="moreManageUsersBtn" style="display:none;"><span class="sa-icon"><svg viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></span> Manage users</button>
++        <button type="button" class="sheet-action-btn menu-item" id="moreAdminBtn" style="display:none;"><span class="sa-icon">🏥</span> Admin console</button>
+         <button type="button" class="sheet-action-btn" data-more-action="changepassword" id="moreChangePasswordBtn"><span class="sa-icon">🔑</span> Change password</button>
+         <button type="button" class="sheet-action-btn" id="morePushToggleBtn" style="display:none;"><span class="sa-icon"><svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg></span> <span id="morePushToggleLabel">Enable reminders</span></button>
+         <button type="button" class="sheet-action-btn" data-more-action="present"><span class="sa-icon">▶</span> Presentation mode</button>
+         <button type="button" class="sheet-action-btn" data-more-action="otlist"><span class="sa-icon">OT</span> OT list</button>
+         <button type="button" class="sheet-action-btn" data-more-action="export"><span class="sa-icon">↓</span> Export backup</button>
+         <button type="button" class="sheet-action-btn" data-more-action="import"><span class="sa-icon">↑</span> Import backup</button>
+         <button type="button" class="sheet-action-btn" data-more-action="templates"><span class="sa-icon"><svg viewBox="0 0 24 24"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg></span> Templates</button>
+         <button type="button" class="sheet-action-btn" data-more-action="census"><span class="sa-icon">#</span> Census</button>
+         <button type="button" class="sheet-action-btn" data-more-action="handover"><span class="sa-icon">↪</span> Handover sheet</button>
+         <button type="button" class="sheet-action-btn" data-more-action="whatsapp"><span class="sa-icon">⎘</span> Copy handover</button>
+@@ -1989,20 +2013,38 @@
+       <button class="modal-close" id="imgTypeCloseBtn">&times;</button>
+     </div>
+     <div class="modal-body" style="display:flex;flex-direction:column;gap:8px;">
+       <button class="btn primary" id="imgTypePreop" style="text-align:left;padding:12px;">Pre-op</button>
+       <button class="btn primary" id="imgTypePostop" style="text-align:left;padding:12px;">Post-op</button>
+       <button class="btn primary" id="imgTypeFollowup" style="text-align:left;padding:12px;">Follow-up</button>
+     </div>
+   </div>
+ </div>
+ 
++<!-- ADMIN CONSOLE (MULTI_TENANT admins only) -->
++<div class="admin-view" id="adminView" hidden>
++  <div class="admin-view-header">
++    <button class="btn" id="adminViewClose">← Back</button>
++    <h2 id="adminViewTitle">Admin console</h2>
++    <div class="admin-tabs" id="adminTabs" style="display:none">
++      <button class="btn admin-tab active" data-admin-tab="org">Organization</button>
++      <button class="btn admin-tab" data-admin-tab="orgs">Organizations</button>
++    </div>
++  </div>
++  <div id="adminOrgPane">
++    <div class="admin-stat-tiles" id="adminStatTiles"></div>
++    <div id="adminOrgSection"></div>
++    <div id="adminUsersSection"></div>
++  </div>
++  <div id="adminOrgsTab" style="display:none"></div>
++</div>
++
+ <!-- PRESENTATION MODE -->
+ <div class="presentation-overlay" id="presentationOverlay">
+   <div class="presentation-top">
+     <button type="button" class="ibtn" id="presentationClose">Close</button>
+     <div class="presentation-top-mid">
+       <div id="presentationCounter" class="presentation-ward">1 / 1</div>
+       <div id="presentationWard" class="presentation-ward"></div>
+     </div>
+     <button type="button" class="ibtn" id="presentationOptionsBtn" aria-haspopup="true">Options</button>
+     <div class="pres-options-panel" id="presentationOptions">
+diff --git a/tests/frontend-admin-view.test.js b/tests/frontend-admin-view.test.js
+new file mode 100644
+index 0000000..4027043
+--- /dev/null
++++ b/tests/frontend-admin-view.test.js
+@@ -0,0 +1,77 @@
++import { test, describe } from 'node:test';
++import assert from 'node:assert/strict';
++import { loadFrontendEnv } from './helpers/frontend-env.js';
++
++const TREE = {
++  totals: { hospitals: 1, departments: 2, usersActive: 3, usersDisabled: 1, livePatients: 7 },
++  hospitals: [{ id: 'h1', name: 'City Hospital', wards: [
++    { id: 'w1', name: 'Ortho', specialty: 'ortho',
++      stats: { livePatients: 5, byStatus: { postop: 3, preop: 1, conservative: 1, fordischarge: 0 }, users: 2, lastActivity: Date.now() - 60000 } },
++    { id: 'w2', name: 'Surgery', specialty: 'surgery',
++      stats: { livePatients: 2, byStatus: { postop: 2, preop: 0, conservative: 0, fordischarge: 0 }, users: 1, lastActivity: null } }
++  ]}]
++};
++const USERS = [
++  { id: 'u1', username: 'boss', role: 'admin', active: true, createdAt: 1, wardId: null, orgId: 'o1' },
++  { id: 'u2', username: 'pg9', role: 'member', active: true, createdAt: 2, wardId: 'w1', orgId: 'o1' }
++];
++
++describe('admin view rendering', () => {
++  test('adminUiVisible: only admin + MULTI_TENANT flag', () => {
++    const { window } = loadFrontendEnv();
++    window.localStorage.setItem('ortho_role', 'admin');
++    window.serverFlags = { MULTI_TENANT: true };
++    assert.equal(window.adminUiVisible(), true);
++    window.serverFlags = { MULTI_TENANT: false };
++    assert.equal(window.adminUiVisible(), false);
++    window.localStorage.setItem('ortho_role', 'member');
++    window.serverFlags = { MULTI_TENANT: true };
++    assert.equal(window.adminUiVisible(), false);
++  });
++
++  test('renderAdminView paints stat tiles, department cards, user rows', () => {
++    const { window, document } = loadFrontendEnv();
++    window.renderAdminView(TREE, USERS);
++    const tiles = [...document.querySelectorAll('#adminStatTiles .admin-stat-tile')];
++    assert.equal(tiles.length, 4);
++    const tileText = tiles.map(t => t.textContent).join(' ');
++    assert.match(tileText, /2/);  // departments
++    assert.match(tileText, /3/);  // active users
++    assert.match(tileText, /7/);  // live patients
++    assert.match(tileText, /5/);  // post-op (3+2)
++    const cards = document.querySelectorAll('#adminOrgSection .admin-dept-card');
++    assert.equal(cards.length, 2);
++    assert.match(cards[0].textContent, /Ortho/);
++    assert.ok(cards[0].querySelector('.admin-status-bar'), 'department card has a status bar');
++    const rows = document.querySelectorAll('#adminUsersSection tbody tr');
++    assert.equal(rows.length, 2);
++    const sel = rows[1].querySelector('select[data-assign-user="u2"]');
++    assert.ok(sel, 'member row has an assign select');
++    assert.equal(sel.value, 'w1');
++  });
++
++  test('assign select fires the assign endpoint', async () => {
++    const { window, document } = loadFrontendEnv();
++    const calls = [];
++    window.api = async (path, opts) => { calls.push({ path, opts }); return { ok: true }; };
++    window.renderAdminView(TREE, USERS);
++    const sel = document.querySelector('select[data-assign-user="u2"]');
++    sel.value = 'w2';
++    sel.dispatchEvent(new window.Event('change', { bubbles: true }));
++    await new Promise(r => setTimeout(r, 0));
++    assert.equal(calls.length, 1);
++    assert.equal(calls[0].path, '/api/admin/users/u2/assign');
++    assert.deepEqual(JSON.parse(calls[0].opts.body), { wardId: 'w2' });
++  });
++
++  test('orgs tab renders rollup cards (instance admin surface)', () => {
++    const { window, document } = loadFrontendEnv();
++    window.renderAdminOrgsTab([
++      { id: 'o1', name: 'Pilot Org', plan: 'free', createdAt: 1, stats: { hospitals: 1, departments: 2, users: 4, livePatients: 7 } }
++    ]);
++    const cards = document.querySelectorAll('#adminOrgsTab .admin-org-card');
++    assert.equal(cards.length, 1);
++    assert.match(cards[0].textContent, /Pilot Org/);
++    assert.match(cards[0].textContent, /7/);
++  });
++});

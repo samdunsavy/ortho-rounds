@@ -1,0 +1,128 @@
+## Commits
+e359cf5 feat: storage listUsersByOrg + hasInstanceAdmin (both backends)
+
+## Stat
+ storage.js            | 17 +++++++++++++++++
+ tests/storage.test.js | 31 +++++++++++++++++++++++++++++++
+ 2 files changed, 48 insertions(+)
+
+## Diff
+diff --git a/storage.js b/storage.js
+index 62781f4..13ba7ad 100644
+--- a/storage.js
++++ b/storage.js
+@@ -190,20 +190,29 @@ function createSqliteStore({ dataDir }){
+ 
+     async getUserByUsername(username){
+       return db.prepare('SELECT * FROM users WHERE username = ?').get(username) || null;
+     },
+     async getUserById(id){
+       return db.prepare('SELECT * FROM users WHERE id = ?').get(id) || null;
+     },
+     async getAllUsers(){
+       return db.prepare('SELECT * FROM users ORDER BY createdAt ASC').all();
+     },
++    async listUsersByOrg(orgId){
++      return db.prepare('SELECT * FROM users WHERE orgId = ? ORDER BY createdAt ASC').all(orgId);
++    },
++    async hasInstanceAdmin(){
++      const row = db.prepare(
++        "SELECT 1 AS ok FROM users WHERE role = 'admin' AND active = 1 AND orgId IS NULL LIMIT 1"
++      ).get();
++      return !!row;
++    },
+     async countUsers(){ return db.prepare('SELECT COUNT(*) AS n FROM users').get().n; },
+     async createUser(user){
+       db.prepare(`
+         INSERT INTO users (id, username, passwordHash, passwordSalt, role, active, tokenVersion, createdAt, orgId, wardId)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       `).run(
+         user.id, user.username, user.passwordHash, user.passwordSalt,
+         user.role || 'member', user.active === false ? 0 : 1,
+         user.tokenVersion || 0, user.createdAt || Date.now(),
+         user.orgId ?? null, user.wardId ?? null
+@@ -427,20 +436,28 @@ async function createMongoStore({ mongoUri }){
+     async getUserByUsername(username){
+       return mapUser(await users.findOne({ username }));
+     },
+     async getUserById(id){
+       return mapUser(await users.findOne({ _id: id }));
+     },
+     async getAllUsers(){
+       const arr = await users.find({}).sort({ createdAt: 1 }).toArray();
+       return arr.map(mapUser);
+     },
++    async listUsersByOrg(orgId){
++      const arr = await users.find({ orgId }).sort({ createdAt: 1 }).toArray();
++      return arr.map(mapUser);
++    },
++    async hasInstanceAdmin(){
++      const row = await users.findOne({ role: 'admin', active: 1, $or: [{ orgId: null }, { orgId: { $exists: false } }] });
++      return !!row;
++    },
+     async countUsers(){ return await users.countDocuments(); },
+     async createUser(user){
+       await users.insertOne({
+         _id: user.id, username: user.username, passwordHash: user.passwordHash,
+         passwordSalt: user.passwordSalt, role: user.role || 'member',
+         active: user.active === false ? 0 : 1, tokenVersion: user.tokenVersion || 0,
+         createdAt: user.createdAt || Date.now(),
+         orgId: user.orgId ?? null, wardId: user.wardId ?? null
+       });
+     },
+diff --git a/tests/storage.test.js b/tests/storage.test.js
+index 32e144b..c0c851d 100644
+--- a/tests/storage.test.js
++++ b/tests/storage.test.js
+@@ -61,20 +61,51 @@ describe('SQLite storage — users', () => {
+     await store.updateUser('u3', { active: true });
+     const u = await store.getUserById('u3');
+     assert.equal(u.active, 1);
+   });
+ 
+   test('getAllUsers lists everyone successfully created so far', async () => {
+     // u1 and u3 succeeded; u2 was rejected for a duplicate username above.
+     const all = await store.getAllUsers();
+     assert.equal(all.length, 2);
+   });
++
++  test('listUsersByOrg returns only that org, hasInstanceAdmin detects active root admins', async () => {
++    // Create org-specific users
++    await store.createUser({ id: 'org-u1', username: 'orgu1', passwordHash: 'h', passwordSalt: 's',
++      role: 'member', active: true, tokenVersion: 0, createdAt: Date.now(), orgId: 'orgA', wardId: 'w1' });
++    await store.createUser({ id: 'org-u2', username: 'orgu2', passwordHash: 'h', passwordSalt: 's',
++      role: 'admin', active: true, tokenVersion: 0, createdAt: Date.now(), orgId: 'orgB', wardId: null });
++
++    // Test listUsersByOrg
++    const a = await store.listUsersByOrg('orgA');
++    assert.deepEqual(a.map(u => u.id), ['org-u1']);
++    assert.deepEqual((await store.listUsersByOrg('orgC')), []);
++
++    // Test hasInstanceAdmin: u1 from earlier tests is active admin with no orgId
++    // Disable u1 first to test the false case
++    await store.updateUser('u1', { active: false });
++    assert.equal(await store.hasInstanceAdmin(), false);
++
++    // Create root-x, an active admin with no orgId
++    await store.createUser({ id: 'root-x', username: 'rootx', passwordHash: 'h', passwordSalt: 's',
++      role: 'admin', active: true, tokenVersion: 0, createdAt: Date.now() });
++    assert.equal(await store.hasInstanceAdmin(), true);
++
++    // Disable root-x and verify it's inactive
++    await store.updateUser('root-x', { active: false });
++    const rootx = (await store.getAllUsers()).find(u => u.id === 'root-x');
++    assert.equal(!!rootx.active, false);
++
++    // With both root-x and u1 disabled, hasInstanceAdmin should be false
++    assert.equal(await store.hasInstanceAdmin(), false);
++  });
+ });
+ 
+ describe('SQLite storage — pushSubscriptions', () => {
+   let dataDir;
+   let store;
+ 
+   before(async () => {
+     dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ortho-test-'));
+     store = await createStore({ dataDir });
+     await store.init();

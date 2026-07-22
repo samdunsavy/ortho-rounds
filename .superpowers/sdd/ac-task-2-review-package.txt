@@ -1,0 +1,175 @@
+## Commits
+46ff575 feat: bootstrapAdmin self-heals root admin when MULTI_TENANT on
+
+## Stat
+ auth.js                           |  7 ++++++-
+ tests/helpers/server-harness.js   | 37 +++++++++++++++++---------------
+ tests/server-provisioning.test.js | 44 +++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 70 insertions(+), 18 deletions(-)
+
+## Diff
+diff --git a/auth.js b/auth.js
+index 629a60b..7bd4b2a 100644
+--- a/auth.js
++++ b/auth.js
+@@ -1,14 +1,15 @@
+ /* Per-user accounts: password hashing, signed tokens, login rate limiting,
+    and first-boot admin bootstrap for Ortho Rounds. */
+ 
+ import crypto from 'node:crypto';
++import { isEnabled } from './flags.js';
+ 
+ const LOGIN_RATE_LIMIT_MAX = 8;
+ const LOGIN_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
+ 
+ const loginRateBuckets = new Map();
+ 
+ export function generateReadablePassword(){
+   const words = ['bone', 'plate', 'screw', 'radius', 'femur', 'tibia', 'ulna', 'splint', 'suture', 'cast', 'rounds', 'ward'];
+   const w = () => words[crypto.randomInt(words.length)];
+   return `${w()}-${w()}-${crypto.randomInt(1000, 9999)}`;
+@@ -67,21 +68,25 @@ export function checkLoginRateLimit(key, now = Date.now()){
+     return { ok: false, retryAfterSec: Math.ceil((bucket.start + LOGIN_RATE_LIMIT_WINDOW_MS - now) / 1000) };
+   }
+   return { ok: true };
+ }
+ 
+ /**
+  * Creates the first admin account on a fresh install. No-op if any user
+  * already exists — this only ever runs once per install.
+  */
+ export async function bootstrapAdmin(store){
+-  if((await store.countUsers()) > 0) return { created: false };
++  if(isEnabled('MULTI_TENANT')){
++    if(await store.hasInstanceAdmin()) return { created: false };
++  }else{
++    if((await store.countUsers()) > 0) return { created: false };
++  }
+ 
+   const username = process.env.ORTHO_ADMIN_USERNAME || 'admin';
+   const envPassword = process.env.ORTHO_ADMIN_PASSWORD;
+   const password = envPassword || generateReadablePassword();
+   const passwordSalt = crypto.randomBytes(16).toString('hex');
+   const passwordHash = hashPassword(password, passwordSalt);
+ 
+   await store.createUser({
+     id: crypto.randomUUID(),
+     username,
+diff --git a/tests/helpers/server-harness.js b/tests/helpers/server-harness.js
+index 7d7ca0d..0872b82 100644
+--- a/tests/helpers/server-harness.js
++++ b/tests/helpers/server-harness.js
+@@ -20,43 +20,46 @@ async function waitForHealth(baseUrl, child, timeoutMs = 15000, stderrCapture =
+       if(res.ok) return;
+     }catch(err){ lastErr = err; }
+     await new Promise(r => setTimeout(r, 150));
+   }
+   const stderrStr = stderrCapture.join('');
+   const msg = `server did not become healthy: ${lastErr?.message}${stderrStr ? '\nstderr: ' + stderrStr : ''}`;
+   throw new Error(msg);
+ }
+ 
+ /** Boot the real server on a temp SQLite dir. `seed(store)` runs before boot. */
+-export async function startServer({ multiTenant = false, seed = null } = {}){
++export async function startServer({ multiTenant = false, seed = null, seedRaw = null } = {}){
+   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ortho-it-'));
+-  if(seed){
++  if(seed || seedRaw){
+     const store = await createStore({ dataDir });
+     await store.init();
+     try{
+-      await seed(store);
++      await (seed || seedRaw)(store);
+       // Server's bootstrapAdmin no-ops once any user exists, so seeded tests
+       // must create the instance admin themselves to keep login(baseUrl) working.
+-      const existingAdmin = await store.getUserByUsername(ADMIN_USERNAME);
+-      if(!existingAdmin){
+-        await store.createUser({
+-          id: 'root-admin',
+-          username: ADMIN_USERNAME,
+-          passwordHash: hashPassword(ADMIN_PASSWORD, 'harness-salt'),
+-          passwordSalt: 'harness-salt',
+-          role: 'admin',
+-          orgId: null,
+-          wardId: null,
+-          active: true,
+-          tokenVersion: 0,
+-          createdAt: Date.now()
+-        });
++      // But seedRaw skips this auto-admin block to test self-healing behavior.
++      if(seed){
++        const existingAdmin = await store.getUserByUsername(ADMIN_USERNAME);
++        if(!existingAdmin){
++          await store.createUser({
++            id: 'root-admin',
++            username: ADMIN_USERNAME,
++            passwordHash: hashPassword(ADMIN_PASSWORD, 'harness-salt'),
++            passwordSalt: 'harness-salt',
++            role: 'admin',
++            orgId: null,
++            wardId: null,
++            active: true,
++            tokenVersion: 0,
++            createdAt: Date.now()
++          });
++        }
+       }
+     }
+     finally{ await store.close(); }
+   }
+ 
+   const env = {
+     ...process.env,
+     ORTHO_DATA_DIR: dataDir,
+     ORTHO_ADMIN_USERNAME: ADMIN_USERNAME,
+     ORTHO_ADMIN_PASSWORD: ADMIN_PASSWORD
+diff --git a/tests/server-provisioning.test.js b/tests/server-provisioning.test.js
+new file mode 100644
+index 0000000..2528141
+--- /dev/null
++++ b/tests/server-provisioning.test.js
+@@ -0,0 +1,44 @@
++import { test, describe } from 'node:test';
++import assert from 'node:assert/strict';
++import { hashPassword } from '../auth.js';
++import { startServer, login, ADMIN_USERNAME, ADMIN_PASSWORD } from './helpers/server-harness.js';
++
++/* The harness auto-seeds an instance admin whenever `seed` is provided —
++   which would defeat this test. Seed ONLY org-scoped users, then delete the
++   harness-seeded root admin... impossible; instead: this test needs a seed
++   WITHOUT the harness's auto-admin. See Step 1 note below — the harness
++   gains a `seedRaw` option that skips the auto-admin. */
++
++describe('bootstrapAdmin self-heal (MULTI_TENANT on)', () => {
++  test('boot with only org-scoped users creates the env root admin', async () => {
++    const srv = await startServer({
++      multiTenant: true,
++      seedRaw: async (store) => {
++        await store.createOrganization({ id: 'o1', name: 'O', plan: 'free' });
++        await store.createUser({ id: 'ou1', username: 'orgadmin1', passwordSalt: 's',
++          passwordHash: hashPassword('pw', 's'), role: 'admin', active: true,
++          tokenVersion: 0, createdAt: Date.now(), orgId: 'o1', wardId: null });
++      }
++    });
++    try{
++      const l = await login(srv.baseUrl, ADMIN_USERNAME, ADMIN_PASSWORD);
++      assert.equal(l.status, 200, 'root admin must have been self-healed from env credentials');
++      assert.equal(l.json.orgId, null);
++    }finally{ await srv.stop(); }
++  });
++
++  test('flag OFF: boot with existing users creates no admin (unchanged behavior)', async () => {
++    const srv = await startServer({
++      multiTenant: false,
++      seedRaw: async (store) => {
++        await store.createUser({ id: 'u9', username: 'someone', passwordSalt: 's',
++          passwordHash: hashPassword('pw', 's'), role: 'member', active: true,
++          tokenVersion: 0, createdAt: Date.now() });
++      }
++    });
++    try{
++      const l = await login(srv.baseUrl, ADMIN_USERNAME, ADMIN_PASSWORD);
++      assert.equal(l.status, 401, 'flag off: bootstrapAdmin must still no-op when any user exists');
++    }finally{ await srv.stop(); }
++  });
++});

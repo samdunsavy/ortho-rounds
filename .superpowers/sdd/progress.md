@@ -24,3 +24,12 @@ P1 Task 5: complete (commits 9884f87..ccf4e46, review clean)
   Minor (deferred): guard expression duplicated x3 (requireInstanceAdmin helper candidate).
 P1 Final review: Ready to merge after fixes (opus). Critical fix applied: /api/diag gated instance-admin-only + isInstanceAdmin helper x4 (0580738). Verified by controller: 248/248 green.
 Pre-hosted-pilot TODO: bootstrapAdmin cannot create root admin once org-scoped users exist; add provisioning check. Grep-audit rule: any handler reading patients store-wide must be scope-filtered or instance-admin-gated.
+Admin console: BASE b45b87d
+AC Task 1: complete (commits b45b87d..e359cf5, review clean)
+  Minor (deferred): listUsersByOrg multi-user ordering unasserted.
+AC Task 2: complete (commits e359cf5..46ff575, review clean)
+  Minor (deferred): report overstated assertion counts (report-only inaccuracy).
+AC Task 3: complete (commits 46ff575..fdb1f95, review clean)
+  Minor (deferred): buildOrgRollups O(N orgs x active patients) rescan per org.
+AC Task 4: complete (commits fdb1f95..5f2a379, opus security review clean)
+  Minor (deferred): org admin can create org-scoped admins via POST users (lateral, not escalation -- spec ambiguity); 404-vs-403 existence oracle on user routes (UUIDs, negligible).
