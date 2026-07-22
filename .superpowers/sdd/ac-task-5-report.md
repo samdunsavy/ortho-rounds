@@ -38,3 +38,25 @@ Implemented per brief:
 ## Report path
 
 /Users/apuravdhankhar/ortho-rounds/.superpowers/sdd/ac-task-5-report.md
+
+---
+
+## Post-review fix (commit 536b4a3)
+
+**Finding 1 (Important): Mobile More-sheet overlay left open over admin view**
+- Fixed `public/app.js` line 3589: changed `moreAdminBtn` handler from direct `openAdminView` call to close sheet first: `closeSheet('moreSheetOverlay'); openAdminView();` (mirrors `moreLogoutBtn`/`morePushToggleBtn` pattern)
+
+**Finding 2 (Minor, visual): Undefined CSS custom properties**
+- Fixed `public/index.html` admin-view styles:
+  - Line 710: `.admin-view{background:var(--bg);}` → `var(--paper)` (page background)
+  - Line 717: `.admin-stat-tile .l{color:var(--muted);}` → `var(--ink-soft)` (muted text)
+  - Line 722: `.admin-dept-card .spec-badge{color:var(--muted);}` → `var(--ink-soft)` (muted text)
+- Real tokens used: `--paper` (from `:root` at line 27/1279/1306/1338), `--ink-soft` (from `:root` at line 1278/1305/1337)
+
+**Tests**
+- Covering test: `npm test -- tests/frontend-admin-view.test.js` → 4/4 pass
+- Full suite: `npm test` → 266/266 pass, 0 fail
+
+**Commit**: `536b4a3` — "fix: close More sheet before opening admin view; use real CSS tokens in admin styles"
+
+**Concerns**: None—both fixes are minimal, isolated to the admin view, and all tests pass.

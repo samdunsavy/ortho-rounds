@@ -1,0 +1,99 @@
+## Commits
+04fb794 chore: flag-off admin-UI golden, roadmap tick for admin console
+
+## Stat
+ DESIGN-multitenant.md             |  7 ++++---
+ ROADMAP.md                        |  1 +
+ tests/frontend-admin-view.test.js | 13 +++++++++++++
+ 3 files changed, 18 insertions(+), 3 deletions(-)
+
+## Diff
+diff --git a/DESIGN-multitenant.md b/DESIGN-multitenant.md
+index 935f929..6387b62 100644
+--- a/DESIGN-multitenant.md
++++ b/DESIGN-multitenant.md
+@@ -67,26 +67,27 @@ sync, and the admin console simultaneously, and deserves its own review:
+ 
+ 1. **Auth scoping.** `POST /api/login` and every authenticated route currently
+    assume one flat user list. Once `MULTI_TENANT` is on, a user's `orgId`
+    needs to scope which patients/wards they can even query.
+ 2. **Sync scoping.** `/api/sync` currently returns "everything changed since
+    `since`" for the whole instance. Multi-tenant mode needs it scoped to the
+    caller's ward (and possibly cross-ward for a hospital-wide admin view).
+    This is the highest-risk change in the whole roadmap — it's the endpoint
+    every existing client already depends on, hence why `/api/sync/v1` was
+    versioned first (see Phase 0 work).
+-3. **Org/ward admin console.** CRUD UI for an org admin to create hospitals,
++3. **Org/ward admin console.** ✅ done — 2026-07-22. CRUD UI for an org admin to create hospitals,
+    wards, and invite users into them — net-new frontend surface.
+ 4. **Self-host migration tool.** A one-way, customer-run script: take an
+    existing single-tenant SQLite/Mongo instance, create one org/hospital/ward
+    for it, backfill every existing user and patient into that ward, and
+    optionally push the result into the hosted multi-tenant backend. Reversible
+    via the existing export, per POLICY.md.
+ 
+ ## Rollout plan
+ 
+ - Phase 1 (now → next pass): schema exists, inert. ✅ done this pass.
+ - Phase 1 (next pass): ✅ done — 2026-07-22: auth + sync scoping behind `MULTI_TENANT`, tested
+   with the flag both on and off — off must remain byte-for-byte identical
+   to today's behavior, which is the whole point of building it as a flag
+-  rather than a rewrite.
+-- Phase 1 (later): migration tool + admin console, first hosted pilot org.
++  rather than a rewrite. Admin console UI gated behind flag; bootstrapAdmin
++  self-heal ensures single-tenant mode always has a valid admin.
++- Phase 1 (later): migration tool, first hosted pilot org.
+diff --git a/ROADMAP.md b/ROADMAP.md
+index efc199e..31bbd54 100644
+--- a/ROADMAP.md
++++ b/ROADMAP.md
+@@ -50,20 +50,21 @@ desktop/tablet responsive layout, a deliberate device-testing pass on touch
+ gestures, presentation-mode readability, and a contrast/print audit.
+ Phase 1's auth/sync scoping resumes once this list is worked through.
+ 
+ ## Phase 1 — Multi-tenant foundation (Months 1–4) — 🟡 IN PROGRESS (paused for polish sprint)
+ 
+ **Goal:** one codebase serves both the existing single-hospital self-host deploys *and* a new hosted multi-tenant product — a hospital shouldn't need its own server anymore unless it wants one.
+ 
+ - [x] Org → hospital → ward hierarchy schema (additive tables/columns, both SQLite and MongoDB — see `DESIGN-multitenant.md`), inert until the `MULTI_TENANT` flag is used
+ - [x] Verified an existing pre-Phase-1 database upgrades automatically (new columns added, no destructive migration, existing rows unaffected — covered by a regression test)
+ - [x] Auth + sync scoping by ward/org, built and tested with `MULTI_TENANT` both on and off — shipped 2026-07-22: see docs/superpowers/specs/2026-07-22-auth-sync-scoping-design.md
++- [x] Org/department admin console + provisioning (shipped 2026-07-22 — see docs/superpowers/specs/2026-07-22-admin-console-design.md)
+ - [ ] Build a one-way migration tool: existing SQLite/Mongo instance → hosted multi-tenant backend, run by the customer, on demand, reversible via the existing export
+ - [ ] Org-scoped roles (admin/attending/PG) layered on top of the current auth system, not replacing it
+ - [ ] Billing scaffold (Stripe) wired but dormant — no charges yet, just plumbing
+ - [x] Self-host install path untouched: same `npm start`, same `data/` directory, same admin bootstrap flow
+ 
+ **Stays working:** self-hosted SQLite and MongoDB modes, exactly as documented in the current README. Multi-tenant is a new deployment option, not a replacement. Verified: 89/89 tests pass, including a simulated upgrade of a database created before this schema existed.
+ 
+ ---
+ 
+ ## Phase 2 — Compliance & AI monetization (Months 4–8)
+diff --git a/tests/frontend-admin-view.test.js b/tests/frontend-admin-view.test.js
+index 4027043..f862ff9 100644
+--- a/tests/frontend-admin-view.test.js
++++ b/tests/frontend-admin-view.test.js
+@@ -68,10 +68,23 @@ describe('admin view rendering', () => {
+     const { window, document } = loadFrontendEnv();
+     window.renderAdminOrgsTab([
+       { id: 'o1', name: 'Pilot Org', plan: 'free', createdAt: 1, stats: { hospitals: 1, departments: 2, users: 4, livePatients: 7 } }
+     ]);
+     const cards = document.querySelectorAll('#adminOrgsTab .admin-org-card');
+     assert.equal(cards.length, 1);
+     assert.match(cards[0].textContent, /Pilot Org/);
+     assert.match(cards[0].textContent, /7/);
+   });
+ });
++
++describe('flag OFF — zero admin UI', () => {
++  test('admin entries stay hidden even for admins', () => {
++    const { window, document } = loadFrontendEnv();
++    window.localStorage.setItem('ortho_role', 'admin');
++    window.serverFlags = {};
++    window.updateAccountUI();
++    const btn = document.getElementById('moreAdminBtn');
++    assert.ok(btn, 'button exists in DOM');
++    assert.equal(btn.style.display, 'none');
++    assert.equal(document.getElementById('adminView').hidden, true);
++  });
++});

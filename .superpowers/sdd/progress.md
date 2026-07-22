@@ -33,3 +33,9 @@ AC Task 3: complete (commits 46ff575..fdb1f95, review clean)
   Minor (deferred): buildOrgRollups O(N orgs x active patients) rescan per org.
 AC Task 4: complete (commits fdb1f95..5f2a379, opus security review clean)
   Minor (deferred): org admin can create org-scoped admins via POST users (lateral, not escalation -- spec ambiguity); 404-vs-403 existence oracle on user routes (UUIDs, negligible).
+AC Task 5: complete (commits 5f2a379..536b4a3, fix round: More-sheet z-index + real CSS tokens, re-review clean)
+  Minor (deferred): attribute-selector strings built from unescaped dataset ids (UUIDs, low risk); pre-existing undefined --bg/--muted elsewhere in codebase (project-wide cleanup candidate).
+AC Task 6: complete (commits 536b4a3..04fb794, review clean)
+  Minor (deferred): adminView.hidden half of flag-off test vacuously true.
+AC Final review: Ready to merge with fixes (opus). Fixed: idempotent bootstrapAdmin self-heal (disabled-admin reactivation, e385e40) + assign-select revert on failure. Verified by controller: 268/268 green.
+Pre-scale notes: buildOrgRollups per-org rescan; unassigned pilot ops via console only.
