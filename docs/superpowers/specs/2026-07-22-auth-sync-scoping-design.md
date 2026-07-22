@@ -26,7 +26,7 @@ Within-department groupings — the patient's `unit` ("ortho unit - IV"), physic
 | admin with `orgId` | all departments under hospitals of their org | same set |
 | admin with `orgId NULL` (instance admin) | everything | everything |
 
-Patients whose JSON lacks `wardId` (pre-migration data) are visible to admins only. Strict semantics, documented; the future migration tool backfills `wardId`.
+Patients whose JSON lacks `wardId` (pre-migration data) are visible to **instance admins only** (`role admin`, `orgId NULL`). Org admins do not see unassigned patients — an unassigned patient cannot be attributed to an org, so showing it to org admins would leak across orgs. The future migration tool backfills `wardId`.
 
 Cross-org isolation is the core guarantee: two orgs on one hosted instance can never read or write each other's patients.
 
@@ -56,7 +56,7 @@ Filter semantics (flag on): keep a patient iff `patient.wardId` is in the actor'
 
 For each incoming change in the sync POST body:
 
-- **New patient** (no stored row): stamped `wardId = actor.wardId` before storing. A member with `wardId NULL` cannot create (change skipped). Admin-created patients take the incoming `wardId` if it is inside the admin's scope; an admin-created patient with no incoming `wardId` falls back to the admin's own `wardId` if set, else stores without `wardId` (admin-only visibility until assigned); an incoming `wardId` outside the admin's scope is skipped.
+- **New patient** (no stored row): stamped `wardId = actor.wardId` before storing. A member with `wardId NULL` cannot create (change skipped). Admin-created patients take the incoming `wardId` if it is inside the admin's scope; an org-admin-created patient with no incoming `wardId` falls back to the admin's own `wardId` if set, else the create is skipped (an org admin cannot create unassigned patients — they would be invisible to the whole org); an instance admin may create unassigned patients (visible to instance admins only); an incoming `wardId` outside the admin's scope is skipped.
 - **Existing patient**: change applied only if the stored patient's `wardId` is in the actor's readable set; otherwise skipped — same silent-skip shape as today's LWW losers, so no client-visible contract change.
 - **No cross-department moves by members**: on merge, the stored `wardId` wins over any incoming value for members. Admins may change `wardId` within their scope.
 
