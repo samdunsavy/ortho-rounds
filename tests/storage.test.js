@@ -246,6 +246,16 @@ describe('SQLite storage — multi-tenant hierarchy (roadmap Phase 1, unused unt
     assert.equal(u.orgId, 'org1');
     assert.equal(u.wardId, 'ward1');
   });
+
+  test('wards + units CRUD under a department', async () => {
+    await store.createDepartment({ id: 'd1', hospitalId: 'h1', name: 'Ortho' });
+    await store.createWard({ id: 'wa', departmentId: 'd1', name: '7FOW' });
+    await store.createUnit({ id: 'un', wardId: 'wa', name: 'IV' });
+    assert.equal((await store.getWard('wa')).departmentId, 'd1');
+    assert.equal((await store.getUnit('un')).wardId, 'wa');
+    assert.deepEqual((await store.listWardsByDepartment('d1')).map(w => w.id), ['wa']);
+    assert.deepEqual((await store.listUnitsByWard('wa')).map(u => u.id), ['un']);
+  });
 });
 
 describe('SQLite storage — upgrading a pre-multi-tenant database', () => {

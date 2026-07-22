@@ -138,6 +138,24 @@ function createSqliteStore({ dataDir }){
       `);
       db.exec('CREATE INDEX IF NOT EXISTS idx_departments_hospitalId ON departments(hospitalId);');
       db.exec(`
+        CREATE TABLE IF NOT EXISTS wards (
+          id           TEXT PRIMARY KEY,
+          departmentId TEXT NOT NULL,
+          name         TEXT NOT NULL,
+          createdAt    INTEGER NOT NULL
+        );
+      `);
+      db.exec('CREATE INDEX IF NOT EXISTS idx_wards_departmentId ON wards(departmentId);');
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS units (
+          id        TEXT PRIMARY KEY,
+          wardId    TEXT NOT NULL,
+          name      TEXT NOT NULL,
+          createdAt INTEGER NOT NULL
+        );
+      `);
+      db.exec('CREATE INDEX IF NOT EXISTS idx_units_wardId ON units(wardId);');
+      db.exec(`
         CREATE TABLE IF NOT EXISTS pushSubscriptions (
           id           TEXT PRIMARY KEY,
           userId       TEXT NOT NULL,
@@ -286,6 +304,22 @@ function createSqliteStore({ dataDir }){
     async listDepartmentsByHospital(hospitalId){
       return db.prepare('SELECT * FROM departments WHERE hospitalId = ? ORDER BY createdAt ASC').all(hospitalId);
     },
+    async createWard(ward){
+      db.prepare(`INSERT INTO wards (id, departmentId, name, createdAt) VALUES (?, ?, ?, ?)`)
+        .run(ward.id, ward.departmentId, ward.name, ward.createdAt || Date.now());
+    },
+    async getWard(id){ return db.prepare('SELECT * FROM wards WHERE id = ?').get(id) || null; },
+    async listWardsByDepartment(departmentId){
+      return db.prepare('SELECT * FROM wards WHERE departmentId = ? ORDER BY createdAt ASC').all(departmentId);
+    },
+    async createUnit(unit){
+      db.prepare(`INSERT INTO units (id, wardId, name, createdAt) VALUES (?, ?, ?, ?)`)
+        .run(unit.id, unit.wardId, unit.name, unit.createdAt || Date.now());
+    },
+    async getUnit(id){ return db.prepare('SELECT * FROM units WHERE id = ?').get(id) || null; },
+    async listUnitsByWard(wardId){
+      return db.prepare('SELECT * FROM units WHERE wardId = ? ORDER BY createdAt ASC').all(wardId);
+    },
 
     async begin(){ db.exec('BEGIN'); },
     async commit(){ db.exec('COMMIT'); },
@@ -370,12 +404,16 @@ async function createMongoStore({ mongoUri }){
   const organizations = database.collection('organizations');
   const hospitals = database.collection('hospitals');
   const departments = database.collection('departments');
+  const wards = database.collection('wards');
+  const units = database.collection('units');
   await patients.createIndex({ updatedAt: 1 });
   await users.createIndex({ username: 1 }, { unique: true });
   await pushSubscriptions.createIndex({ endpoint: 1 }, { unique: true });
   await pushSubscriptions.createIndex({ userId: 1 });
   await hospitals.createIndex({ orgId: 1 });
   await departments.createIndex({ hospitalId: 1 });
+  await wards.createIndex({ departmentId: 1 });
+  await units.createIndex({ wardId: 1 });
 
   const freshStart = (await patients.estimatedDocumentCount()) === 0;
   const mapRow = d => d ? { id: d._id, updatedAt: d.updatedAt, deleted: d.deleted ? 1 : 0, data: d.data } : null;
@@ -544,6 +582,28 @@ async function createMongoStore({ mongoUri }){
     async listDepartmentsByHospital(hospitalId){
       const arr = await departments.find({ hospitalId }).sort({ createdAt: 1 }).toArray();
       return arr.map(d => ({ id: d._id, hospitalId: d.hospitalId, name: d.name, specialty: d.specialty, createdAt: d.createdAt }));
+    },
+    async createWard(ward){
+      await wards.insertOne({ _id: ward.id, departmentId: ward.departmentId, name: ward.name, createdAt: ward.createdAt || Date.now() });
+    },
+    async getWard(id){
+      const d = await wards.findOne({ _id: id });
+      return d ? { id: d._id, departmentId: d.departmentId, name: d.name, createdAt: d.createdAt } : null;
+    },
+    async listWardsByDepartment(departmentId){
+      const arr = await wards.find({ departmentId }).sort({ createdAt: 1 }).toArray();
+      return arr.map(d => ({ id: d._id, departmentId: d.departmentId, name: d.name, createdAt: d.createdAt }));
+    },
+    async createUnit(unit){
+      await units.insertOne({ _id: unit.id, wardId: unit.wardId, name: unit.name, createdAt: unit.createdAt || Date.now() });
+    },
+    async getUnit(id){
+      const d = await units.findOne({ _id: id });
+      return d ? { id: d._id, wardId: d.wardId, name: d.name, createdAt: d.createdAt } : null;
+    },
+    async listUnitsByWard(wardId){
+      const arr = await units.find({ wardId }).sort({ createdAt: 1 }).toArray();
+      return arr.map(d => ({ id: d._id, wardId: d.wardId, name: d.name, createdAt: d.createdAt }));
     },
 
     // MongoDB upserts are individually atomic; multi-doc transactions aren't
