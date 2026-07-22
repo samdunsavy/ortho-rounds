@@ -62,7 +62,8 @@ import {
 import { mergePatientRecords, stampAttribution } from './merge.js';
 import { logError, logWarn } from './logger.js';
 import { runDigestPass } from './notifications.js';
-import { listFlags } from './flags.js';
+import { listFlags, isEnabled } from './flags.js';
+import { resolveScope, canRead, decideWrite } from './scope.js';
 import { recordEvent, getSnapshot, isExportEnabled, startExportLoop } from './telemetry.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -392,6 +393,7 @@ async function handleApi(req, res, pathname){
     const since = Number(body.since) || 0;
     const changes = Array.isArray(body.changes) ? body.changes : [];
     const now = Date.now();
+    const scope = isEnabled('MULTI_TENANT') ? await resolveScope(actor, store) : null;
 
     await store.begin();
     try{
@@ -406,9 +408,18 @@ async function handleApi(req, res, pathname){
           existingObj.id = p.id;
           existingObj.updatedAt = existing.updatedAt;
         }
+        let decision = null;
+        if(scope){
+          decision = decideWrite({ incoming: p, existing: existingObj, actor, scope });
+          if(!decision.allow) continue;
+        }
         stampAttribution(p, existingObj, actor);
         if(!existing || incomingUpdated >= existing.updatedAt){
           const stored = existingObj ? mergePatientRecords(p, existingObj) : Object.assign({}, p);
+          if(decision && decision.wardId !== undefined){
+            if(decision.wardId === null) delete stored.wardId;
+            else stored.wardId = decision.wardId;
+          }
           stored.updatedAt = now;
           await store.upsertPatient(p.id, now, p.deleted ? 1 : 0, JSON.stringify(stored));
         }
@@ -423,7 +434,9 @@ async function handleApi(req, res, pathname){
     // apiVersion is additive: existing clients that don't read it are
     // unaffected; new clients can use it to confirm they're talking to the
     // version of the sync contract they expect.
-    return sendJSON(res, 200, { serverTime: now, patients: rows.map(rowToPatient), apiVersion: SYNC_API_VERSION });
+    let outPatients = rows.map(rowToPatient);
+    if(scope) outPatients = outPatients.filter(p => canRead(p, scope));
+    return sendJSON(res, 200, { serverTime: now, patients: outPatients, apiVersion: SYNC_API_VERSION });
   }
 
   if(pathname === '/api/backup' && req.method === 'GET'){
