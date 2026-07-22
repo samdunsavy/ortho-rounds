@@ -31,7 +31,7 @@ const MAX_BACKUPS = 7;
 // gets NULL for both, which self-host/single-tenant code paths never read —
 // they're inert until something behind the MULTI_TENANT flag starts using
 // them.
-const USER_PATCH_FIELDS = ['passwordHash', 'passwordSalt', 'active', 'role', 'tokenVersion', 'orgId', 'wardId'];
+const USER_PATCH_FIELDS = ['passwordHash', 'passwordSalt', 'active', 'role', 'tokenVersion', 'orgId', 'wardId', 'assignmentType', 'assignmentId'];
 const SUBSCRIPTION_PATCH_FIELDS = ['lastDigestAt'];
 
 export async function createStore(opts){
@@ -95,7 +95,9 @@ function createSqliteStore({ dataDir }){
           tokenVersion INTEGER NOT NULL DEFAULT 0,
           createdAt    INTEGER NOT NULL,
           orgId        TEXT,
-          wardId       TEXT
+          wardId       TEXT,
+          assignmentType TEXT,
+          assignmentId   TEXT
         );
       `);
       // Existing databases created before orgId/wardId existed won't have
@@ -103,6 +105,8 @@ function createSqliteStore({ dataDir }){
       // row, which is exactly the "not part of any org yet" state.
       addColumnIfMissing(db, 'users', 'orgId', 'TEXT');
       addColumnIfMissing(db, 'users', 'wardId', 'TEXT');
+      addColumnIfMissing(db, 'users', 'assignmentType', 'TEXT');
+      addColumnIfMissing(db, 'users', 'assignmentId', 'TEXT');
 
       // ---- multi-tenant hierarchy (roadmap Phase 1, see DESIGN-multitenant.md) ----
       // These tables are created unconditionally (cheap, and avoids ever
@@ -227,13 +231,14 @@ function createSqliteStore({ dataDir }){
     async countUsers(){ return db.prepare('SELECT COUNT(*) AS n FROM users').get().n; },
     async createUser(user){
       db.prepare(`
-        INSERT INTO users (id, username, passwordHash, passwordSalt, role, active, tokenVersion, createdAt, orgId, wardId)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO users (id, username, passwordHash, passwordSalt, role, active, tokenVersion, createdAt, orgId, wardId, assignmentType, assignmentId)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         user.id, user.username, user.passwordHash, user.passwordSalt,
         user.role || 'member', user.active === false ? 0 : 1,
         user.tokenVersion || 0, user.createdAt || Date.now(),
-        user.orgId ?? null, user.wardId ?? null
+        user.orgId ?? null, user.wardId ?? null,
+        user.assignmentType ?? null, user.assignmentId ?? null
       );
     },
     async updateUser(id, patch){
@@ -421,7 +426,8 @@ async function createMongoStore({ mongoUri }){
     id: d._id, username: d.username, passwordHash: d.passwordHash, passwordSalt: d.passwordSalt,
     role: d.role || 'member', active: d.active === false ? 0 : 1,
     tokenVersion: d.tokenVersion || 0, createdAt: d.createdAt,
-    orgId: d.orgId || null, wardId: d.wardId || null
+    orgId: d.orgId || null, wardId: d.wardId || null,
+    assignmentType: d.assignmentType || null, assignmentId: d.assignmentId || null
   } : null;
   const mapSubscription = d => d ? {
     id: d._id, userId: d.userId, endpoint: d.endpoint, p256dh: d.p256dh, auth: d.auth,
@@ -496,7 +502,8 @@ async function createMongoStore({ mongoUri }){
         passwordSalt: user.passwordSalt, role: user.role || 'member',
         active: user.active === false ? 0 : 1, tokenVersion: user.tokenVersion || 0,
         createdAt: user.createdAt || Date.now(),
-        orgId: user.orgId ?? null, wardId: user.wardId ?? null
+        orgId: user.orgId ?? null, wardId: user.wardId ?? null,
+        assignmentType: user.assignmentType ?? null, assignmentId: user.assignmentId ?? null
       });
     },
     async updateUser(id, patch){

@@ -285,7 +285,11 @@ async function handleApi(req, res, pathname){
   if(!authedUser || !authedUser.active || authedUser.tokenVersion !== claims.tokenVersion){
     return sendJSON(res, 401, { error: 'Session revoked — log in again' });
   }
-  const actor = { id: authedUser.id, username: authedUser.username, role: authedUser.role, orgId: authedUser.orgId ?? null, wardId: authedUser.wardId ?? null };
+  const actor = {
+    id: authedUser.id, username: authedUser.username, role: authedUser.role,
+    orgId: authedUser.orgId ?? null, wardId: authedUser.wardId ?? null,
+    assignment: authedUser.assignmentId ? { type: authedUser.assignmentType, id: authedUser.assignmentId } : null
+  };
 
   if(pathname === '/api/account/revoke-sessions' && req.method === 'POST'){
     await store.updateUser(actor.id, { tokenVersion: (authedUser.tokenVersion || 0) + 1 });
@@ -561,15 +565,24 @@ async function handleApi(req, res, pathname){
         }
         let decision = null;
         if(scope){
-          decision = decideWrite({ incoming: p, existing: existingObj, actor, scope });
+          decision = await decideWrite({ incoming: p, existing: existingObj, actor, scope, store });
           if(!decision.allow) continue;
         }
         stampAttribution(p, existingObj, actor);
         if(!existing || incomingUpdated >= existing.updatedAt){
           const stored = existingObj ? mergePatientRecords(p, existingObj) : Object.assign({}, p);
-          if(decision && decision.wardId !== undefined){
-            if(decision.wardId === null) delete stored.wardId;
-            else stored.wardId = decision.wardId;
+          if(decision && decision.ancestry !== undefined){
+            const a = decision.ancestry;
+            if(a === null){
+              delete stored.unitId; delete stored.wardId; delete stored.departmentId;
+              delete stored.hospitalId; delete stored.orgId;
+            }else{
+              Object.assign(stored, a);
+              const ward = await store.getWard(a.wardId);
+              const unit = await store.getUnit(a.unitId);
+              if(ward) stored.ward = ward.name;
+              if(unit) stored.unit = unit.name;
+            }
           }
           stored.updatedAt = now;
           await store.upsertPatient(p.id, now, p.deleted ? 1 : 0, JSON.stringify(stored));
