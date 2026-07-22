@@ -6,134 +6,157 @@ import path from 'node:path';
 import { createStore } from '../storage.js';
 import { resolveScope, canRead, decideWrite } from '../scope.js';
 
-const member = (wardId, orgId = 'org1') => ({ id: 'u1', username: 'pg1', role: 'member', orgId, wardId });
-const orgAdmin = (orgId = 'org1') => ({ id: 'a1', username: 'boss', role: 'admin', orgId, wardId: null });
-const instanceAdmin = () => ({ id: 'root', username: 'root', role: 'admin', orgId: null, wardId: null });
+const member = (unitId, orgId = 'o1') => ({ id: 'u', username: 'pg', role: 'member', orgId, assignment: unitId ? { type: 'unit', id: unitId } : null });
+const deptAdmin = (depId = 'd1', orgId = 'o1') => ({ id: 'a', username: 'boss', role: 'admin', orgId, assignment: { type: 'department', id: depId } });
+const orgAdmin = (orgId = 'o1') => ({ id: 'oa', username: 'orgboss', role: 'admin', orgId, assignment: { type: 'org', id: orgId } });
+const instanceAdmin = () => ({ id: 'root', username: 'root', role: 'admin', orgId: null, assignment: null });
 
-describe('resolveScope', () => {
+describe('scope (unit-based subtree)', () => {
   let dataDir, store;
   before(async () => {
     dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ortho-scope-'));
     store = await createStore({ dataDir });
     await store.init();
-    await store.createOrganization({ id: 'org1', name: 'Org One', plan: 'free' });
-    await store.createOrganization({ id: 'org2', name: 'Org Two', plan: 'free' });
-    await store.createHospital({ id: 'h1', orgId: 'org1', name: 'H1' });
-    await store.createHospital({ id: 'h2', orgId: 'org1', name: 'H2' });
-    await store.createHospital({ id: 'hx', orgId: 'org2', name: 'HX' });
-    await store.createDepartment({ id: 'w1', hospitalId: 'h1', name: 'Ortho' });
-    await store.createDepartment({ id: 'w2', hospitalId: 'h2', name: 'Surgery' });
-    await store.createDepartment({ id: 'wx', hospitalId: 'hx', name: 'Other-org ward' });
+    // o1 -> h1 -> d1 -> w1 -> u1
+    //                -> w2 -> u2
+    await store.createOrganization({ id: 'o1', name: 'Org One', plan: 'free' });
+    await store.createHospital({ id: 'h1', orgId: 'o1', name: 'H1' });
+    await store.createDepartment({ id: 'd1', hospitalId: 'h1', name: 'Ortho' });
+    await store.createWard({ id: 'w1', departmentId: 'd1', name: 'W1' });
+    await store.createUnit({ id: 'u1', wardId: 'w1', name: 'U1' });
+    await store.createWard({ id: 'w2', departmentId: 'd1', name: 'W2' });
+    await store.createUnit({ id: 'u2', wardId: 'w2', name: 'U2' });
+
+    // o2 -> hx -> dx -> wx -> ux (second org, fully isolated)
+    await store.createOrganization({ id: 'o2', name: 'Org Two', plan: 'free' });
+    await store.createHospital({ id: 'hx', orgId: 'o2', name: 'HX' });
+    await store.createDepartment({ id: 'dx', hospitalId: 'hx', name: 'Other' });
+    await store.createWard({ id: 'wx', departmentId: 'dx', name: 'WX' });
+    await store.createUnit({ id: 'ux', wardId: 'wx', name: 'UX' });
   });
   after(async () => { await store.close(); fs.rmSync(dataDir, { recursive: true, force: true }); });
 
-  test('member with ward: exactly that ward, no unassigned', async () => {
-    const s = await resolveScope(member('w1'), store);
-    assert.equal(s.unrestricted, false);
-    assert.deepEqual([...s.wardIds], ['w1']);
-    assert.equal(s.includeUnassigned, false);
+  describe('resolveScope', () => {
+    test('member sees exactly their unit', async () => {
+      const s = await resolveScope(member('u1'), store);
+      assert.deepEqual([...s.unitIds], ['u1']);
+      assert.equal(s.includeUnassigned, false);
+      assert.equal(s.unrestricted, false);
+    });
+
+    test('member with no assignment: empty scope (strict deny)', async () => {
+      const s = await resolveScope(member(null), store);
+      assert.equal(s.unrestricted, false);
+      assert.equal(s.unitIds.size, 0);
+      assert.equal(s.includeUnassigned, false);
+    });
+
+    test('dept admin sees all units under the department', async () => {
+      const s = await resolveScope(deptAdmin('d1'), store);
+      assert.deepEqual([...s.unitIds].sort(), ['u1', 'u2']);
+      assert.equal(s.includeUnassigned, false);
+    });
+
+    test('org admin sees all units under the org, never other orgs', async () => {
+      const s = await resolveScope(orgAdmin('o1'), store);
+      assert.deepEqual([...s.unitIds].sort(), ['u1', 'u2']);
+    });
+
+    test('instance admin unrestricted + unassigned', async () => {
+      const s = await resolveScope(instanceAdmin(), store);
+      assert.equal(s.unrestricted, true);
+      assert.equal(s.includeUnassigned, true);
+    });
   });
 
-  test('member with no ward: empty scope (strict deny)', async () => {
-    const s = await resolveScope(member(null), store);
-    assert.equal(s.unrestricted, false);
-    assert.equal(s.wardIds.size, 0);
-    assert.equal(s.includeUnassigned, false);
+  describe('canRead', () => {
+    test('canRead: patient in-scope by unitId', async () => {
+      const s = await resolveScope(member('u1'), store);
+      assert.equal(canRead({ unitId: 'u1' }, s), true);
+      assert.equal(canRead({ unitId: 'u2' }, s), false);
+      assert.equal(canRead({ }, s), false); // unassigned, member
+    });
+
+    test('canRead: instance admin reads everything incl. unassigned', async () => {
+      const s = await resolveScope(instanceAdmin(), store);
+      assert.equal(canRead({ unitId: 'u1' }, s), true);
+      assert.equal(canRead({ }, s), true);
+    });
   });
 
-  test('org admin: all wards under all org hospitals, never other orgs, no unassigned', async () => {
-    const s = await resolveScope(orgAdmin(), store);
-    assert.equal(s.unrestricted, false);
-    assert.deepEqual([...s.wardIds].sort(), ['w1', 'w2']);
-    assert.equal(s.includeUnassigned, false);
-  });
+  describe('decideWrite', () => {
+    test('decideWrite new patient: member inherits their unit ancestry', async () => {
+      const s = await resolveScope(member('u1'), store);
+      const d = await decideWrite({ incoming: {}, existing: null, actor: member('u1'), scope: s, store });
+      assert.equal(d.allow, true);
+      assert.equal(d.ancestry.unitId, 'u1');
+      assert.equal(d.ancestry.orgId, 'o1');
+    });
 
-  test('org admin of empty org: empty scope', async () => {
-    await store.createOrganization({ id: 'org3', name: 'Empty', plan: 'free' });
-    const s = await resolveScope(orgAdmin('org3'), store);
-    assert.equal(s.wardIds.size, 0);
-  });
+    test('decideWrite new patient: member with no assignment is denied', async () => {
+      const s = await resolveScope(member(null), store);
+      const d = await decideWrite({ incoming: {}, existing: null, actor: member(null), scope: s, store });
+      assert.equal(d.allow, false);
+    });
 
-  test('instance admin: unrestricted incl. unassigned', async () => {
-    const s = await resolveScope(instanceAdmin(), store);
-    assert.equal(s.unrestricted, true);
-    assert.equal(s.includeUnassigned, true);
-  });
-});
+    test('decideWrite new patient: multi-unit admin with no chosen unit is denied', async () => {
+      const s = await resolveScope(deptAdmin('d1'), store);
+      const d = await decideWrite({ incoming: {}, existing: null, actor: deptAdmin('d1'), scope: s, store });
+      assert.equal(d.allow, false);
+    });
 
-describe('canRead', () => {
-  const memberScope = { unrestricted: false, wardIds: new Set(['w1']), includeUnassigned: false };
-  const rootScope = { unrestricted: true, wardIds: new Set(), includeUnassigned: true };
+    test('decideWrite new patient: admin choosing an in-scope unit is stamped', async () => {
+      const s = await resolveScope(deptAdmin('d1'), store);
+      const d = await decideWrite({ incoming: { unitId: 'u2' }, existing: null, actor: deptAdmin('d1'), scope: s, store });
+      assert.equal(d.allow, true);
+      assert.equal(d.ancestry.unitId, 'u2');
+    });
 
-  test('member reads own-ward patient only', () => {
-    assert.equal(canRead({ id: 'p1', wardId: 'w1' }, memberScope), true);
-    assert.equal(canRead({ id: 'p2', wardId: 'w2' }, memberScope), false);
-  });
-  test('unassigned patient: instance admin only', () => {
-    assert.equal(canRead({ id: 'p3' }, memberScope), false);
-    assert.equal(canRead({ id: 'p3' }, rootScope), true);
-  });
-  test('unrestricted reads everything', () => {
-    assert.equal(canRead({ id: 'p4', wardId: 'anything' }, rootScope), true);
-  });
-});
+    test('decideWrite new patient: admin choosing an out-of-scope unit is denied', async () => {
+      const s = await resolveScope(deptAdmin('d1'), store);
+      const d = await decideWrite({ incoming: { unitId: 'ux' }, existing: null, actor: deptAdmin('d1'), scope: s, store });
+      assert.equal(d.allow, false);
+    });
 
-describe('decideWrite', () => {
-  const mScope = { unrestricted: false, wardIds: new Set(['w1']), includeUnassigned: false };
-  const oScope = { unrestricted: false, wardIds: new Set(['w1', 'w2']), includeUnassigned: false };
-  const rScope = { unrestricted: true, wardIds: new Set(), includeUnassigned: true };
+    test('decideWrite new patient: instance admin with no unit stays unassigned', async () => {
+      const s = await resolveScope(instanceAdmin(), store);
+      const d = await decideWrite({ incoming: {}, existing: null, actor: instanceAdmin(), scope: s, store });
+      assert.equal(d.allow, true);
+      assert.equal(d.ancestry, undefined);
+    });
 
-  test('member creates: stamped with own ward', () => {
-    const d = decideWrite({ incoming: { id: 'p' }, existing: null, actor: member('w1'), scope: mScope });
-    assert.deepEqual(d, { allow: true, wardId: 'w1' });
-  });
-  test('member with no ward cannot create', () => {
-    const d = decideWrite({ incoming: { id: 'p' }, existing: null, actor: member(null), scope: { unrestricted: false, wardIds: new Set(), includeUnassigned: false } });
-    assert.equal(d.allow, false);
-  });
-  test('member updates own-ward patient; stored wardId wins over incoming', () => {
-    const d = decideWrite({ incoming: { id: 'p', wardId: 'w2' }, existing: { id: 'p', wardId: 'w1' }, actor: member('w1'), scope: mScope });
-    assert.deepEqual(d, { allow: true, wardId: 'w1' });
-  });
-  test('member cannot touch out-of-scope patient', () => {
-    const d = decideWrite({ incoming: { id: 'p' }, existing: { id: 'p', wardId: 'w2' }, actor: member('w1'), scope: mScope });
-    assert.equal(d.allow, false);
-  });
-  test('member cannot touch unassigned patient', () => {
-    const d = decideWrite({ incoming: { id: 'p' }, existing: { id: 'p' }, actor: member('w1'), scope: mScope });
-    assert.equal(d.allow, false);
-  });
-  test('org admin creates with in-scope incoming ward', () => {
-    const d = decideWrite({ incoming: { id: 'p', wardId: 'w2' }, existing: null, actor: orgAdmin(), scope: oScope });
-    assert.deepEqual(d, { allow: true, wardId: 'w2' });
-  });
-  test('org admin create with out-of-scope ward is skipped', () => {
-    const d = decideWrite({ incoming: { id: 'p', wardId: 'wx' }, existing: null, actor: orgAdmin(), scope: oScope });
-    assert.equal(d.allow, false);
-  });
-  test('org admin create with no ward and no own ward is skipped', () => {
-    const d = decideWrite({ incoming: { id: 'p' }, existing: null, actor: orgAdmin(), scope: oScope });
-    assert.equal(d.allow, false);
-  });
-  test('org admin create with no ward falls back to own ward', () => {
-    const actor = { ...orgAdmin(), wardId: 'w1' };
-    const d = decideWrite({ incoming: { id: 'p' }, existing: null, actor, scope: oScope });
-    assert.deepEqual(d, { allow: true, wardId: 'w1' });
-  });
-  test('org admin may move patient within scope', () => {
-    const d = decideWrite({ incoming: { id: 'p', wardId: 'w2' }, existing: { id: 'p', wardId: 'w1' }, actor: orgAdmin(), scope: oScope });
-    assert.deepEqual(d, { allow: true, wardId: 'w2' });
-  });
-  test('org admin incoming out-of-scope ward on update keeps stored ward', () => {
-    const d = decideWrite({ incoming: { id: 'p', wardId: 'wx' }, existing: { id: 'p', wardId: 'w1' }, actor: orgAdmin(), scope: oScope });
-    assert.deepEqual(d, { allow: true, wardId: 'w1' });
-  });
-  test('instance admin creates unassigned', () => {
-    const d = decideWrite({ incoming: { id: 'p' }, existing: null, actor: instanceAdmin(), scope: rScope });
-    assert.deepEqual(d, { allow: true, wardId: null });
-  });
-  test('instance admin keeps incoming ward on create', () => {
-    const d = decideWrite({ incoming: { id: 'p', wardId: 'wx' }, existing: null, actor: instanceAdmin(), scope: rScope });
-    assert.deepEqual(d, { allow: true, wardId: 'wx' });
+    test('decideWrite new patient: instance admin choosing a unit is stamped', async () => {
+      const s = await resolveScope(instanceAdmin(), store);
+      const d = await decideWrite({ incoming: { unitId: 'ux' }, existing: null, actor: instanceAdmin(), scope: s, store });
+      assert.equal(d.allow, true);
+      assert.equal(d.ancestry.unitId, 'ux');
+    });
+
+    test('decideWrite update: member cannot touch out-of-scope patient', async () => {
+      const s = await resolveScope(member('u1'), store);
+      const d = await decideWrite({ incoming: {}, existing: { unitId: 'u2' }, actor: member('u1'), scope: s, store });
+      assert.equal(d.allow, false);
+    });
+
+    test('decideWrite update: member updates own-unit patient, ancestry left as-is', async () => {
+      const s = await resolveScope(member('u1'), store);
+      const d = await decideWrite({ incoming: {}, existing: { unitId: 'u1' }, actor: member('u1'), scope: s, store });
+      assert.equal(d.allow, true);
+      assert.equal(d.ancestry, undefined);
+    });
+
+    test('decideWrite update: admin moving an in-scope patient to another in-scope unit is stamped', async () => {
+      const s = await resolveScope(deptAdmin('d1'), store);
+      const d = await decideWrite({ incoming: { unitId: 'u2' }, existing: { unitId: 'u1' }, actor: deptAdmin('d1'), scope: s, store });
+      assert.equal(d.allow, true);
+      assert.equal(d.ancestry.unitId, 'u2');
+    });
+
+    test('decideWrite update: admin incoming out-of-scope unit leaves stored ancestry as-is', async () => {
+      const s = await resolveScope(deptAdmin('d1'), store);
+      const d = await decideWrite({ incoming: { unitId: 'ux' }, existing: { unitId: 'u1' }, actor: deptAdmin('d1'), scope: s, store });
+      assert.equal(d.allow, true);
+      assert.equal(d.ancestry, undefined);
+    });
   });
 });

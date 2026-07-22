@@ -1,60 +1,54 @@
-/* Pure scoping logic for MULTI_TENANT auth/sync (roadmap Phase 1).
-   Terminology: the `wards` table entity is the DEPARTMENT (access boundary);
-   patient `unit`/`ward` strings are metadata with no access semantics.
-   See docs/superpowers/specs/2026-07-22-auth-sync-scoping-design.md. */
+/* Unit-based subtree scoping for MULTI_TENANT. A patient is pinned to a Unit
+   (leaf) carrying denormalized ancestry; a user is assigned to any node and
+   scoped to that node's subtree of units. See
+   docs/superpowers/specs/2026-07-22-hierarchy-expansion-design.md. */
+import { listUnitIdsUnder, resolveAncestry } from './hierarchy.js';
 
-/** Resolve the set of departments an actor may read/write.
- *  Scope = { unrestricted, wardIds: Set, includeUnassigned }.
- *  Unassigned patients (no wardId) are instance-admin-only: an unassigned
- *  patient cannot be attributed to an org, so org admins never see them. */
 export async function resolveScope(actor, store){
   const isAdmin = actor?.role === 'admin';
   if(isAdmin && !actor.orgId){
-    return { unrestricted: true, wardIds: new Set(), includeUnassigned: true };
+    return { unrestricted: true, unitIds: new Set(), includeUnassigned: true };
   }
-  if(isAdmin){
-    const wardIds = new Set();
-    const hospitals = await store.listHospitalsByOrg(actor.orgId);
-    for(const h of hospitals){
-      for(const w of await store.listDepartmentsByHospital(h.id)) wardIds.add(w.id);
-    }
-    return { unrestricted: false, wardIds, includeUnassigned: false };
-  }
-  const wardIds = new Set(actor?.wardId ? [actor.wardId] : []);
-  return { unrestricted: false, wardIds, includeUnassigned: false };
+  const node = actor?.assignment || (isAdmin && actor.orgId ? { type: 'org', id: actor.orgId } : null);
+  const unitIds = node ? await listUnitIdsUnder(store, node) : new Set();
+  return { unrestricted: false, unitIds, includeUnassigned: false };
 }
 
 export function canRead(patient, scope){
   if(scope.unrestricted) return true;
-  if(!patient?.wardId) return scope.includeUnassigned;
-  return scope.wardIds.has(patient.wardId);
+  if(!patient?.unitId) return scope.includeUnassigned;
+  return scope.unitIds.has(patient.unitId);
 }
 
-/** Decide whether a sync write is allowed and which wardId the stored
- *  record must carry. wardId === undefined means "do not force a value". */
-export function decideWrite({ incoming, existing, actor, scope }){
+/** Decide whether a write is allowed and the ancestry to stamp.
+ *  ancestry === undefined means "leave stored ancestry as-is". */
+export async function decideWrite({ incoming, existing, actor, scope, store }){
   const isAdmin = actor?.role === 'admin';
 
   if(existing){
     if(!canRead(existing, scope)) return { allow: false };
-    if(!isAdmin) return { allow: true, wardId: existing.wardId ?? null };
-    const requested = incoming?.wardId;
-    if(requested && (scope.unrestricted || scope.wardIds.has(requested))){
-      return { allow: true, wardId: requested };
+    const requested = incoming?.unitId;
+    if(isAdmin && requested && (scope.unrestricted || scope.unitIds.has(requested))){
+      return { allow: true, ancestry: await resolveAncestry(store, requested) };
     }
-    return { allow: true, wardId: existing.wardId ?? null };
+    return { allow: true }; // keep existing ancestry
   }
 
   // New patient
-  if(!isAdmin){
-    if(!actor?.wardId) return { allow: false };
-    return { allow: true, wardId: actor.wardId };
-  }
+  const requested = incoming?.unitId;
   if(scope.unrestricted){
-    return { allow: true, wardId: incoming?.wardId ?? null };
+    return requested ? { allow: true, ancestry: await resolveAncestry(store, requested) }
+                     : { allow: true, ancestry: undefined };
   }
-  const requested = incoming?.wardId;
-  if(requested) return scope.wardIds.has(requested) ? { allow: true, wardId: requested } : { allow: false };
-  if(actor.wardId && scope.wardIds.has(actor.wardId)) return { allow: true, wardId: actor.wardId };
+  if(requested){
+    return scope.unitIds.has(requested)
+      ? { allow: true, ancestry: await resolveAncestry(store, requested) }
+      : { allow: false };
+  }
+  // No explicit unit: only auto-resolvable when the actor is scoped to exactly one unit.
+  if(scope.unitIds.size === 1){
+    const only = [...scope.unitIds][0];
+    return { allow: true, ancestry: await resolveAncestry(store, only) };
+  }
   return { allow: false };
 }
