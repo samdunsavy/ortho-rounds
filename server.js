@@ -611,6 +611,16 @@ async function handleApi(req, res, pathname){
       for(const u of targets) await store.updateUser(u.id, { assignmentType: nodeType, assignmentId: nodeId });
       return sendJSON(res, 200, { assigned: targets.length });
     }
+
+    if(pathname === '/api/admin/repair-ancestry' && req.method === 'POST'){
+      if(!isInstanceAdmin(actor)) return sendJSON(res, 403, { error: 'Instance admin only' });
+      const allUnits = new Set();
+      for(const org of await store.listOrganizations()){
+        for(const uid of await unitIdsUnder(store, 'org', org.id)) allUnits.add(uid);
+      }
+      const restamped = await restampUnits(store, allUnits);
+      return sendJSON(res, 200, { restamped });
+    }
     // fall through: unmatched /api/admin/* paths continue to the routes below
   }
 

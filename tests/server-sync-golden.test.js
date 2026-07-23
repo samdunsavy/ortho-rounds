@@ -106,3 +106,57 @@ describe('flag OFF — new hierarchy routes do not exist', () => {
     assert.equal(res.status, 404);
   });
 });
+
+/* Flag-OFF guard for the structural-ops routes added in Structural Operations
+   Tasks 3-7 (rename/delete/move a node, bulk patient re-home, bulk user
+   assign, and the ancestry repair sweep). With MULTI_TENANT unset these must
+   all 404 — any regression that makes one reachable flag-off is a real
+   multi-tenant data leak, not a nit. */
+describe('flag OFF — new structural-ops routes do not exist', () => {
+  let srv, token;
+  before(async () => {
+    srv = await startServer({ multiTenant: false });
+    const l = await login(srv.baseUrl);
+    assert.equal(l.status, 200);
+    token = l.json.token;
+  });
+  after(async () => { await srv.stop(); });
+
+  async function req(path, method, body){
+    return fetch(`${srv.baseUrl}${path}`, {
+      method,
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: body === undefined ? undefined : JSON.stringify(body)
+    });
+  }
+
+  test('PATCH /api/admin/nodes/unit/x is 404', async () => {
+    const res = await req('/api/admin/nodes/unit/x', 'PATCH', { name: 'X' });
+    assert.equal(res.status, 404);
+  });
+
+  test('DELETE /api/admin/nodes/unit/x is 404', async () => {
+    const res = await req('/api/admin/nodes/unit/x', 'DELETE');
+    assert.equal(res.status, 404);
+  });
+
+  test('POST /api/admin/nodes/unit/x/move is 404', async () => {
+    const res = await req('/api/admin/nodes/unit/x/move', 'POST', { newParentId: 'y' });
+    assert.equal(res.status, 404);
+  });
+
+  test('POST /api/admin/patients/rehome is 404', async () => {
+    const res = await req('/api/admin/patients/rehome', 'POST', { patientIds: ['p1'], unitId: 'u1' });
+    assert.equal(res.status, 404);
+  });
+
+  test('POST /api/admin/users/assign-bulk is 404', async () => {
+    const res = await req('/api/admin/users/assign-bulk', 'POST', { userIds: ['u1'], nodeType: 'department', nodeId: 'd1' });
+    assert.equal(res.status, 404);
+  });
+
+  test('POST /api/admin/repair-ancestry is 404', async () => {
+    const res = await req('/api/admin/repair-ancestry', 'POST');
+    assert.equal(res.status, 404);
+  });
+});

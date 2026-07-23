@@ -1,6 +1,7 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { startServer, login, syncPost } from './helpers/server-harness.js';
+import { createStore } from '../storage.js';
 
 async function api(baseUrl, token, path, opts = {}){
   const res = await fetch(`${baseUrl}${path}`, {
@@ -353,6 +354,78 @@ describe('POST /api/admin/users/assign-bulk — bulk user assign (flag on)', () 
     const users = await api(srv.baseUrl, boss, '/api/admin/users', { method: 'GET' });
     const c3 = users.json.users.find(u => u.id === u3.json.id);
     assert.equal(c3.assignmentType ?? null, null, 'user must be unchanged after a validate-all-before-write failure');
+  });
+});
+
+describe('POST /api/admin/repair-ancestry — idempotent safety net (flag on)', () => {
+  let srv, root, boss, orgId, hospitalId, departmentId, wardId, unitId;
+  before(async () => {
+    srv = await startServer({ multiTenant: true, seed: async () => {} });
+    root = (await login(srv.baseUrl)).json.token;
+
+    const org = await api(srv.baseUrl, root, '/api/admin/orgs', { method: 'POST', body: { name: 'Repair Org' } });
+    orgId = org.json.id;
+    const admin = await api(srv.baseUrl, root, `/api/admin/orgs/${orgId}/admin`, { method: 'POST', body: { username: 'repairboss' } });
+    boss = (await login(srv.baseUrl, 'repairboss', admin.json.temporaryPassword)).json.token;
+
+    const h = await api(srv.baseUrl, boss, '/api/admin/hospitals', { method: 'POST', body: { name: 'City Hospital' } });
+    hospitalId = h.json.id;
+    const d = await api(srv.baseUrl, boss, '/api/admin/departments', { method: 'POST', body: { hospitalId, name: 'Ortho' } });
+    departmentId = d.json.id;
+    const w = await api(srv.baseUrl, boss, '/api/admin/wards', { method: 'POST', body: { departmentId, name: 'Ward A' } });
+    wardId = w.json.id;
+    const u = await api(srv.baseUrl, boss, '/api/admin/units', { method: 'POST', body: { wardId, name: 'Bay 1' } });
+    unitId = u.json.id;
+  });
+  after(async () => { await srv.stop(); });
+
+  test('instance admin repairs corrupted ancestry → 200, restamped >= 1, patient corrected', async () => {
+    const push = await syncPost(srv.baseUrl, root, {
+      since: 0,
+      changes: [{ id: 'rap1', name: 'Repair Patient', status: 'postop', unitId, updatedAt: Date.now() }]
+    });
+    assert.equal(push.status, 200);
+    const correct = push.json.patients.find(p => p.id === 'rap1');
+    assert.ok(correct, 'patient must round-trip on push');
+    assert.equal(correct.orgId, orgId);
+
+    // Corrupt the stored ancestry directly on disk: unitId stays the real
+    // unit, but orgId/labels are wrong, simulating drift the repair route
+    // must self-heal (the unitId is the single source of truth).
+    const store2 = await createStore({ dataDir: srv.dataDir });
+    await store2.init();
+    try{
+      const raw = await store2.getPatientRaw('rap1');
+      assert.ok(raw, 'patient must be persisted before corruption');
+      const o = JSON.parse(raw.data);
+      assert.equal(o.unitId, unitId);
+      o.orgId = 'wrong-org';
+      o.hospitalId = 'wrong-hospital';
+      o.departmentId = 'wrong-department';
+      o.wardId = 'wrong-ward';
+      o.ward = 'Wrong Ward Label';
+      o.unit = 'Wrong Unit Label';
+      await store2.upsertPatient('rap1', Date.now(), 0, JSON.stringify(o));
+    } finally { await store2.close(); }
+
+    const repair = await api(srv.baseUrl, root, '/api/admin/repair-ancestry', { method: 'POST' });
+    assert.equal(repair.status, 200);
+    assert.ok(repair.json.restamped >= 1, 'at least the corrupted patient must be re-stamped');
+
+    const pull = await syncPost(srv.baseUrl, root, { since: 0, changes: [] });
+    const fixed = pull.json.patients.find(p => p.id === 'rap1');
+    assert.ok(fixed, 'patient must still exist after repair');
+    assert.equal(fixed.orgId, orgId, 'orgId must be corrected back to the real org');
+    assert.equal(fixed.hospitalId, hospitalId, 'hospitalId must be corrected');
+    assert.equal(fixed.departmentId, departmentId, 'departmentId must be corrected');
+    assert.equal(fixed.wardId, wardId, 'wardId must be corrected');
+    assert.equal(fixed.ward, 'Ward A', 'ward label must be corrected');
+    assert.equal(fixed.unit, 'Bay 1', 'unit label must be corrected');
+  });
+
+  test('non-instance admin calling repair-ancestry → 403', async () => {
+    const attempt = await api(srv.baseUrl, boss, '/api/admin/repair-ancestry', { method: 'POST' });
+    assert.equal(attempt.status, 403);
   });
 });
 
