@@ -256,6 +256,30 @@ describe('SQLite storage — multi-tenant hierarchy (roadmap Phase 1, unused unt
     assert.deepEqual((await store.listWardsByDepartment('d1')).map(w => w.id), ['wa']);
     assert.deepEqual((await store.listUnitsByWard('wa')).map(u => u.id), ['un']);
   });
+
+  test('node update + delete', async () => {
+    await store.createOrganization({ id: 'o9', name: 'O9', plan: 'free' });
+    await store.createHospital({ id: 'h9', orgId: 'o9', name: 'H9' });
+    await store.createDepartment({ id: 'd9', hospitalId: 'h9', name: 'D9' });
+    await store.createWard({ id: 'w9', departmentId: 'd9', name: 'W9' });
+    await store.createUnit({ id: 'un9', wardId: 'w9', name: 'U9' });
+
+    await store.updateUnit('un9', { name: 'U9b', wardId: 'w9' });
+    assert.equal((await store.getUnit('un9')).name, 'U9b');
+    await store.updateWard('w9', { name: 'W9b' });
+    assert.equal((await store.getWard('w9')).name, 'W9b');
+    await store.updateDepartment('d9', { name: 'D9b', specialty: 'trauma' });
+    assert.equal((await store.getDepartment('d9')).specialty, 'trauma');
+    await store.updateHospital('h9', { name: 'H9b' });
+    assert.equal((await store.getHospital('h9')).name, 'H9b');
+    await store.updateOrganization('o9', { name: 'O9b' });
+    assert.equal((await store.getOrganization('o9')).name, 'O9b');
+
+    await store.deleteUnit('un9');
+    assert.equal(await store.getUnit('un9'), null);
+    await store.deleteWard('w9');
+    assert.equal(await store.getWard('w9'), null);
+  });
 });
 
 describe('SQLite storage — upgrading a pre-multi-tenant database', () => {

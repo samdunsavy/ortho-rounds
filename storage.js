@@ -34,6 +34,19 @@ const MAX_BACKUPS = 7;
 const USER_PATCH_FIELDS = ['passwordHash', 'passwordSalt', 'active', 'role', 'tokenVersion', 'orgId', 'wardId', 'assignmentType', 'assignmentId'];
 const SUBSCRIPTION_PATCH_FIELDS = ['lastDigestAt'];
 
+function updateRow(db, table, id, patch, allowed){
+  const fields = Object.keys(patch || {}).filter(k => allowed.includes(k));
+  if(!fields.length) return;
+  const set = fields.map(f => `${f} = ?`).join(', ');
+  db.prepare(`UPDATE ${table} SET ${set} WHERE id = ?`).run(...fields.map(f => patch[f]), id);
+}
+
+async function mongoUpdate(col, id, patch, allowed){
+  const set = {};
+  for(const k of Object.keys(patch || {})) if(allowed.includes(k)) set[k] = patch[k];
+  if(Object.keys(set).length) await col.updateOne({ _id: id }, { $set: set });
+}
+
 export async function createStore(opts){
   if(opts && opts.mongoUri){
     return await createMongoStore(opts);
@@ -326,6 +339,17 @@ function createSqliteStore({ dataDir }){
       return db.prepare('SELECT * FROM units WHERE wardId = ? ORDER BY createdAt ASC').all(wardId);
     },
 
+    async updateOrganization(id, patch){ updateRow(db, 'organizations', id, patch, ['name','plan']); },
+    async updateHospital(id, patch){ updateRow(db, 'hospitals', id, patch, ['name','orgId']); },
+    async updateDepartment(id, patch){ updateRow(db, 'departments', id, patch, ['name','specialty','hospitalId']); },
+    async updateWard(id, patch){ updateRow(db, 'wards', id, patch, ['name','departmentId']); },
+    async updateUnit(id, patch){ updateRow(db, 'units', id, patch, ['name','wardId']); },
+    async deleteOrganization(id){ db.prepare('DELETE FROM organizations WHERE id = ?').run(id); },
+    async deleteHospital(id){ db.prepare('DELETE FROM hospitals WHERE id = ?').run(id); },
+    async deleteDepartment(id){ db.prepare('DELETE FROM departments WHERE id = ?').run(id); },
+    async deleteWard(id){ db.prepare('DELETE FROM wards WHERE id = ?').run(id); },
+    async deleteUnit(id){ db.prepare('DELETE FROM units WHERE id = ?').run(id); },
+
     async begin(){ db.exec('BEGIN'); },
     async commit(){ db.exec('COMMIT'); },
     async rollback(){ db.exec('ROLLBACK'); },
@@ -612,6 +636,17 @@ async function createMongoStore({ mongoUri }){
       const arr = await units.find({ wardId }).sort({ createdAt: 1 }).toArray();
       return arr.map(d => ({ id: d._id, wardId: d.wardId, name: d.name, createdAt: d.createdAt }));
     },
+
+    async updateOrganization(id, patch){ await mongoUpdate(organizations, id, patch, ['name','plan']); },
+    async updateHospital(id, patch){ await mongoUpdate(hospitals, id, patch, ['name','orgId']); },
+    async updateDepartment(id, patch){ await mongoUpdate(departments, id, patch, ['name','specialty','hospitalId']); },
+    async updateWard(id, patch){ await mongoUpdate(wards, id, patch, ['name','departmentId']); },
+    async updateUnit(id, patch){ await mongoUpdate(units, id, patch, ['name','wardId']); },
+    async deleteOrganization(id){ await organizations.deleteOne({ _id: id }); },
+    async deleteHospital(id){ await hospitals.deleteOne({ _id: id }); },
+    async deleteDepartment(id){ await departments.deleteOne({ _id: id }); },
+    async deleteWard(id){ await wards.deleteOne({ _id: id }); },
+    async deleteUnit(id){ await units.deleteOne({ _id: id }); },
 
     // MongoDB upserts are individually atomic; multi-doc transactions aren't
     // needed for this app's small sync batches, so these are no-ops.
