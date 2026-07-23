@@ -355,6 +355,36 @@ describe('POST /api/admin/users/assign-bulk — bulk user assign (flag on)', () 
     const c3 = users.json.users.find(u => u.id === u3.json.id);
     assert.equal(c3.assignmentType ?? null, null, 'user must be unchanged after a validate-all-before-write failure');
   });
+
+  test('instance admin assign-bulk of an org-A member to org-B\'s unit → 403, member unchanged (cross-org isolation)', async () => {
+    // Org A tree (reuse the describe-level org/hospital/department, add ward+unit).
+    const wA = await api(srv.baseUrl, boss, '/api/admin/wards', { method: 'POST', body: { departmentId, name: 'Ward A' } });
+    const uA = await api(srv.baseUrl, boss, '/api/admin/units', { method: 'POST', body: { wardId: wA.json.id, name: 'Unit A' } });
+
+    // Org B tree, built directly by the instance admin.
+    const orgB = await api(srv.baseUrl, root, '/api/admin/orgs', { method: 'POST', body: { name: 'AssignBulk Org B' } });
+    const hB = await api(srv.baseUrl, root, '/api/admin/hospitals', { method: 'POST', body: { orgId: orgB.json.id, name: 'Org B Hospital' } });
+    const dB = await api(srv.baseUrl, root, '/api/admin/departments', { method: 'POST', body: { hospitalId: hB.json.id, name: 'Org B Dept' } });
+    const wB = await api(srv.baseUrl, root, '/api/admin/wards', { method: 'POST', body: { departmentId: dB.json.id, name: 'Org B Ward' } });
+    const uB = await api(srv.baseUrl, root, '/api/admin/units', { method: 'POST', body: { wardId: wB.json.id, name: 'Org B Unit' } });
+
+    // A member in org A.
+    const memberA = await api(srv.baseUrl, root, '/api/admin/users', { method: 'POST', body: { username: 'crossorgmember', orgId } });
+
+    // Instance admin attempts to bulk-assign the org-A member to org B's unit.
+    const attempt = await api(srv.baseUrl, root, '/api/admin/users/assign-bulk', { method: 'POST', body: { userIds: [memberA.json.id], nodeType: 'unit', nodeId: uB.json.id } });
+    assert.equal(attempt.status, 403);
+
+    const users = await api(srv.baseUrl, root, '/api/admin/users', { method: 'GET' });
+    const after1 = users.json.users.find(u => u.id === memberA.json.id);
+    assert.equal(after1.assignmentType ?? null, null, 'member must be unchanged: node must be tied to the user\'s own org, not the node\'s org');
+    assert.equal(after1.assignmentId ?? null, null);
+
+    // Sanity: assigning that same member to a unit within their own org A still works.
+    const ok = await api(srv.baseUrl, root, '/api/admin/users/assign-bulk', { method: 'POST', body: { userIds: [memberA.json.id], nodeType: 'unit', nodeId: uA.json.id } });
+    assert.equal(ok.status, 200);
+    assert.deepEqual(ok.json, { assigned: 1 });
+  });
 });
 
 describe('POST /api/admin/repair-ancestry — idempotent safety net (flag on)', () => {

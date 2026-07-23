@@ -597,15 +597,16 @@ async function handleApi(req, res, pathname){
       const userIds = Array.isArray(body.userIds) ? body.userIds : [];
       const nodeType = body.nodeId === null || body.nodeId === undefined ? null : String(body.nodeType || '');
       const nodeId = body.nodeId === null || body.nodeId === undefined ? null : String(body.nodeId);
-      if(nodeId !== null){
-        const orgId = isInstanceAdmin(actor) ? await nodeOrgId(store, nodeType, nodeId) : actor.orgId;
-        if(!orgId || !(await nodeInOrg(store, nodeType, nodeId, orgId))) return sendJSON(res, 403, { error: 'Node is not in this organization' });
-      }
+      const nodeOrg = nodeId !== null ? await nodeOrgId(store, nodeType, nodeId) : null;
       const targets = [];
       for(const uid of userIds){
         const u = await store.getUserById(uid);
         if(!u) return sendJSON(res, 404, { error: `User ${uid} not found` });
         if(!isInstanceAdmin(actor) && u.orgId !== actor.orgId) return sendJSON(res, 403, { error: 'A user is not in your organization' });
+        if(nodeId !== null){
+          const requiredOrg = isInstanceAdmin(actor) ? u.orgId : actor.orgId;
+          if(!requiredOrg || nodeOrg !== requiredOrg) return sendJSON(res, 403, { error: 'Target node is not in the user\'s organization' });
+        }
         targets.push(u);
       }
       for(const u of targets) await store.updateUser(u.id, { assignmentType: nodeType, assignmentId: nodeId });

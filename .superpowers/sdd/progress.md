@@ -51,3 +51,11 @@ Task 8: complete (commits a029b85..b9b18a5, review clean). 284/284 green. Note: 
 Task 9: complete (commits b9b18a5..e3837ad, review clean, idempotency verified). 289/289 green. Minor (deferred): dead-code if(row.deleted) after getActive filter (harmless).
 Task 10: complete (commits e3837ad..c009b04, review clean). 292/292 green. All 10 tasks done.
 Final review (opus whole-branch): Ready after fixes. Fixed 1 Important merge-blocker: backfill now assigns existing non-admin users to org root so nobody is stranded on flag flip (commit 9de9736, +no-stranding resolveScope test). Deferred Minors accepted (buildOrgTree N+1; untested instance-admin cross-org assign; async openPatientModal; /api/me/scope duplicates resolveScope node formula — keep in lockstep; dead deleted-guard). 294/294 green. Branch phase2-hierarchy ready to merge.
+Structural ops (Spec 1): BASE 5c620d44c282be5d138831a223b94a42f1bb1b92
+SO Task 1: complete (commits 5c620d4..b20ba79, review clean). 295/295 green.
+SO Task 2: complete (commits b20ba79..f1447a3, review clean). 299/299 green. CARRY TO TASK 6: getPatientRaw returns only {updatedAt,data} (no id/deleted) — rehome must source rows from getActive() so restampPatient gets correct id/deleted and only active patients are rehomed.
+SO Task 3: complete (commits f1447a3..6764d1b, review clean). 307/307 green.
+SO Task 4: complete (commits 6764d1b..93fdb2b, review clean). 312/312 green. Minor (deferred): O(n) active-patient scan per delete (consistent w/ restampUnits).
+SO Task 5: complete (commits 6764d1b..d394efb wait->93fdb2b..d394efb, review clean). 317/317 green. Note: wrong-type parent returns 404 (looked up as expected type) not 400 — ruled sound. Cycles structurally impossible (moves only go up-levels).
+SO Task 6: complete (commits d394efb..29a675a, review clean). 321/321 green. Rehome sourced from getActive() (id/deleted correct, active-only). Minor (deferred): assign-bulk node-not-found returns 403 not 404 (consistent w/ existing /assign).
+SO Task 7: complete (commits 29a675a..c69833b, review clean). 329/329 green. All 7 tasks done.
