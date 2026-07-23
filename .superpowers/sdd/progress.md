@@ -39,3 +39,15 @@ AC Task 6: complete (commits 536b4a3..04fb794, review clean)
   Minor (deferred): adminView.hidden half of flag-off test vacuously true.
 AC Final review: Ready to merge with fixes (opus). Fixed: idempotent bootstrapAdmin self-heal (disabled-admin reactivation, e385e40) + assign-select revert on failure. Verified by controller: 268/268 green.
 Pre-scale notes: buildOrgRollups per-org rescan; unassigned pilot ops via console only.
+Phase 2 hierarchy: BASE 9bf177b726527ce9221f820bc7540d59b1f11b11
+Task 1: complete (commits 9bf177b..9014910, review clean). Follow-up for Task 7: public/app.js add-department POST still hits /api/admin/wards (now /api/admin/departments).
+Task 2: complete (commits 9014910..3b8ece2, review clean). 269/269 green.
+Task 3: complete (commits 3b8ece2..bf0f10c, review clean). 274/274 green.
+Task 4: complete (commits bf0f10c..a18c0ac, review clean). scope.test.js 18/18; full suite intentionally red (11 server sync/scoping failures) until Task 5 updates the server.js call site.
+Task 5: complete (commits a18c0ac..4654430, incl. fix round for 1 Critical [client-overridable ancestry] + 1 Important [weakened test]; re-review clean). 273/273 green. Fix: decideWrite re-stamps server-truth ancestry on edits + server strips client ancestry keys.
+Task 6: complete (commits 4654430..038f730, review clean). 275/275 green. Minor (deferred to final): buildOrgTree sequential await N+1 (pre-existing pattern); instance-admin cross-org assign 403 path sound but untested.
+Task 7: complete (commits 038f730..a029b85, incl. add-department path fix + GET /api/admin/users assignment fields fix; review clean). 276/276 green.
+Task 8: complete (commits a029b85..b9b18a5, review clean). 284/284 green. Note: patient modal rendered from JS templates in app.js (not static index.html); picker landed in app.js. Minor (deferred): openPatientModal now async (harmless); server.js:401 reimplements resolveScope node formula (dup).
+Task 9: complete (commits b9b18a5..e3837ad, review clean, idempotency verified). 289/289 green. Minor (deferred): dead-code if(row.deleted) after getActive filter (harmless).
+Task 10: complete (commits e3837ad..c009b04, review clean). 292/292 green. All 10 tasks done.
+Final review (opus whole-branch): Ready after fixes. Fixed 1 Important merge-blocker: backfill now assigns existing non-admin users to org root so nobody is stranded on flag flip (commit 9de9736, +no-stranding resolveScope test). Deferred Minors accepted (buildOrgTree N+1; untested instance-admin cross-org assign; async openPatientModal; /api/me/scope duplicates resolveScope node formula — keep in lockstep; dead deleted-guard). 294/294 green. Branch phase2-hierarchy ready to merge.

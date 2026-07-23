@@ -10,3 +10,4 @@ node_modules/
 # Patient / ward backup exports (may contain PHI)
 *_backup.json
 *_recovered*.json
+.sdd/
