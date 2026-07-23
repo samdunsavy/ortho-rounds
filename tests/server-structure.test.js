@@ -230,6 +230,132 @@ describe('POST /api/admin/nodes/:type/:id/move — re-parent + subtree re-stamp 
   });
 });
 
+describe('POST /api/admin/patients/rehome — bulk re-home (flag on)', () => {
+  let srv, root, boss, orgId, hospitalId, d1, w1, u1, u2;
+  before(async () => {
+    srv = await startServer({ multiTenant: true, seed: async () => {} });
+    root = (await login(srv.baseUrl)).json.token;
+
+    const org = await api(srv.baseUrl, root, '/api/admin/orgs', { method: 'POST', body: { name: 'Rehome Org' } });
+    orgId = org.json.id;
+    const admin = await api(srv.baseUrl, root, `/api/admin/orgs/${orgId}/admin`, { method: 'POST', body: { username: 'rehomeboss' } });
+    boss = (await login(srv.baseUrl, 'rehomeboss', admin.json.temporaryPassword)).json.token;
+
+    const h = await api(srv.baseUrl, boss, '/api/admin/hospitals', { method: 'POST', body: { name: 'City Hospital' } });
+    hospitalId = h.json.id;
+    const dep = await api(srv.baseUrl, boss, '/api/admin/departments', { method: 'POST', body: { hospitalId, name: 'Ortho' } });
+    d1 = dep.json.id;
+    const w = await api(srv.baseUrl, boss, '/api/admin/wards', { method: 'POST', body: { departmentId: d1, name: 'Ward A' } });
+    w1 = w.json.id;
+    const un1 = await api(srv.baseUrl, boss, '/api/admin/units', { method: 'POST', body: { wardId: w1, name: 'Bay 1' } });
+    u1 = un1.json.id;
+    const un2 = await api(srv.baseUrl, boss, '/api/admin/units', { method: 'POST', body: { wardId: w1, name: 'Bay 2' } });
+    u2 = un2.json.id;
+  });
+  after(async () => { await srv.stop(); });
+
+  test('instance admin re-homes 2 patients to u2 → 200 {moved:2}, both patients unitId===u2', async () => {
+    const push = await syncPost(srv.baseUrl, root, {
+      since: 0,
+      changes: [
+        { id: 'rhp1', name: 'Rehome Patient 1', status: 'postop', unitId: u1, updatedAt: Date.now() },
+        { id: 'rhp2', name: 'Rehome Patient 2', status: 'postop', unitId: u1, updatedAt: Date.now() }
+      ]
+    });
+    assert.equal(push.status, 200);
+
+    const rehome = await api(srv.baseUrl, root, '/api/admin/patients/rehome', { method: 'POST', body: { patientIds: ['rhp1', 'rhp2'], unitId: u2 } });
+    assert.equal(rehome.status, 200);
+    assert.deepEqual(rehome.json, { moved: 2 });
+
+    const pull = await syncPost(srv.baseUrl, root, { since: 0, changes: [] });
+    const p1 = pull.json.patients.find(p => p.id === 'rhp1');
+    const p2 = pull.json.patients.find(p => p.id === 'rhp2');
+    assert.equal(p1.unitId, u2);
+    assert.equal(p2.unitId, u2);
+  });
+
+  test('re-home with a target unit in another org → 403, neither patient changed', async () => {
+    const push = await syncPost(srv.baseUrl, root, {
+      since: 0,
+      changes: [
+        { id: 'rhp3', name: 'Rehome Patient 3', status: 'postop', unitId: u1, updatedAt: Date.now() },
+        { id: 'rhp4', name: 'Rehome Patient 4', status: 'postop', unitId: u1, updatedAt: Date.now() }
+      ]
+    });
+    assert.equal(push.status, 200);
+
+    const org2 = await api(srv.baseUrl, root, '/api/admin/orgs', { method: 'POST', body: { name: 'Other Rehome Org' } });
+    const a2 = await api(srv.baseUrl, root, `/api/admin/orgs/${org2.json.id}/admin`, { method: 'POST', body: { username: 'rehomeboss2' } });
+    const boss2 = (await login(srv.baseUrl, 'rehomeboss2', a2.json.temporaryPassword)).json.token;
+    const h2 = await api(srv.baseUrl, boss2, '/api/admin/hospitals', { method: 'POST', body: { name: 'Other Hospital' } });
+    const dep2 = await api(srv.baseUrl, boss2, '/api/admin/departments', { method: 'POST', body: { hospitalId: h2.json.id, name: 'Other Dept' } });
+    const w2 = await api(srv.baseUrl, boss2, '/api/admin/wards', { method: 'POST', body: { departmentId: dep2.json.id, name: 'Other Ward' } });
+    const otherUnit = await api(srv.baseUrl, boss2, '/api/admin/units', { method: 'POST', body: { wardId: w2.json.id, name: 'Other Bay' } });
+
+    const attempt = await api(srv.baseUrl, boss, '/api/admin/patients/rehome', { method: 'POST', body: { patientIds: ['rhp3', 'rhp4'], unitId: otherUnit.json.id } });
+    assert.equal(attempt.status, 403);
+
+    const pull = await syncPost(srv.baseUrl, root, { since: 0, changes: [] });
+    const p3 = pull.json.patients.find(p => p.id === 'rhp3');
+    const p4 = pull.json.patients.find(p => p.id === 'rhp4');
+    assert.equal(p3.unitId, u1, 'patient must be unchanged after a validate-all-before-write failure');
+    assert.equal(p4.unitId, u1, 'patient must be unchanged after a validate-all-before-write failure');
+  });
+});
+
+describe('POST /api/admin/users/assign-bulk — bulk user assign (flag on)', () => {
+  let srv, root, boss, orgId, hospitalId, departmentId;
+  before(async () => {
+    srv = await startServer({ multiTenant: true, seed: async () => {} });
+    root = (await login(srv.baseUrl)).json.token;
+
+    const org = await api(srv.baseUrl, root, '/api/admin/orgs', { method: 'POST', body: { name: 'AssignBulk Org' } });
+    orgId = org.json.id;
+    const admin = await api(srv.baseUrl, root, `/api/admin/orgs/${orgId}/admin`, { method: 'POST', body: { username: 'assignbulkboss' } });
+    boss = (await login(srv.baseUrl, 'assignbulkboss', admin.json.temporaryPassword)).json.token;
+
+    const h = await api(srv.baseUrl, boss, '/api/admin/hospitals', { method: 'POST', body: { name: 'City Hospital' } });
+    hospitalId = h.json.id;
+    const d = await api(srv.baseUrl, boss, '/api/admin/departments', { method: 'POST', body: { hospitalId, name: 'Ortho' } });
+    departmentId = d.json.id;
+  });
+  after(async () => { await srv.stop(); });
+
+  test('assign-bulk 2 users to a department → 200 {assigned:2}, both users assignmentType===department', async () => {
+    const u1 = await api(srv.baseUrl, boss, '/api/admin/users', { method: 'POST', body: { username: 'bulkuser1' } });
+    const u2 = await api(srv.baseUrl, boss, '/api/admin/users', { method: 'POST', body: { username: 'bulkuser2' } });
+
+    const assign = await api(srv.baseUrl, boss, '/api/admin/users/assign-bulk', { method: 'POST', body: { userIds: [u1.json.id, u2.json.id], nodeType: 'department', nodeId: departmentId } });
+    assert.equal(assign.status, 200);
+    assert.deepEqual(assign.json, { assigned: 2 });
+
+    const users = await api(srv.baseUrl, boss, '/api/admin/users', { method: 'GET' });
+    const a1 = users.json.users.find(u => u.id === u1.json.id);
+    const a2 = users.json.users.find(u => u.id === u2.json.id);
+    assert.equal(a1.assignmentType, 'department');
+    assert.equal(a1.assignmentId, departmentId);
+    assert.equal(a2.assignmentType, 'department');
+    assert.equal(a2.assignmentId, departmentId);
+  });
+
+  test('assign-bulk where one user is in another org → 403, neither user changed', async () => {
+    const u3 = await api(srv.baseUrl, boss, '/api/admin/users', { method: 'POST', body: { username: 'bulkuser3' } });
+
+    const org2 = await api(srv.baseUrl, root, '/api/admin/orgs', { method: 'POST', body: { name: 'Other AssignBulk Org' } });
+    const a2admin = await api(srv.baseUrl, root, `/api/admin/orgs/${org2.json.id}/admin`, { method: 'POST', body: { username: 'assignbulkboss2' } });
+    const boss2 = (await login(srv.baseUrl, 'assignbulkboss2', a2admin.json.temporaryPassword)).json.token;
+    const u4 = await api(srv.baseUrl, boss2, '/api/admin/users', { method: 'POST', body: { username: 'bulkuser4' } });
+
+    const attempt = await api(srv.baseUrl, boss, '/api/admin/users/assign-bulk', { method: 'POST', body: { userIds: [u3.json.id, u4.json.id], nodeType: 'department', nodeId: departmentId } });
+    assert.equal(attempt.status, 403);
+
+    const users = await api(srv.baseUrl, boss, '/api/admin/users', { method: 'GET' });
+    const c3 = users.json.users.find(u => u.id === u3.json.id);
+    assert.equal(c3.assignmentType ?? null, null, 'user must be unchanged after a validate-all-before-write failure');
+  });
+});
+
 describe('POST /api/admin/nodes/:type/:id/move — flag OFF: route does not exist', () => {
   let srv, root;
   before(async () => {

@@ -566,6 +566,51 @@ async function handleApi(req, res, pathname){
       await restampUnits(store, await unitIdsUnder(store, type, id));
       return sendJSON(res, 200, { id, type, newParentId });
     }
+
+    if(pathname === '/api/admin/patients/rehome' && req.method === 'POST'){
+      if(actor.role !== 'admin') return sendJSON(res, 403, { error: 'Admin only' });
+      const body = await readBody(req) || {};
+      const ids = Array.isArray(body.patientIds) ? body.patientIds : [];
+      const unitId = typeof body.unitId === 'string' ? body.unitId : '';
+      const targetOrg = await nodeOrgId(store, 'unit', unitId);
+      if(!targetOrg) return sendJSON(res, 404, { error: 'Target unit not found' });
+      if(!isInstanceAdmin(actor) && targetOrg !== actor.orgId) return sendJSON(res, 403, { error: 'Target unit is not in your organization' });
+      const scope = await resolveScope(actor, store);
+      const active = await store.getActive();
+      const byId = new Map(active.map(r => [r.id, r]));
+      const rows = [];
+      for(const id of ids){
+        const row = byId.get(id);
+        if(!row) return sendJSON(res, 404, { error: `Patient ${id} not found` });
+        let o; try{ o = JSON.parse(row.data); }catch{ o = {}; }
+        if(!canRead(o, scope)) return sendJSON(res, 403, { error: 'A patient is outside your scope' });
+        rows.push(row);
+      }
+      let moved = 0;
+      for(const row of rows){ if(await restampPatient(store, row, unitId)) moved++; }
+      return sendJSON(res, 200, { moved });
+    }
+
+    if(pathname === '/api/admin/users/assign-bulk' && req.method === 'POST'){
+      if(actor.role !== 'admin') return sendJSON(res, 403, { error: 'Admin only' });
+      const body = await readBody(req) || {};
+      const userIds = Array.isArray(body.userIds) ? body.userIds : [];
+      const nodeType = body.nodeId === null || body.nodeId === undefined ? null : String(body.nodeType || '');
+      const nodeId = body.nodeId === null || body.nodeId === undefined ? null : String(body.nodeId);
+      if(nodeId !== null){
+        const orgId = isInstanceAdmin(actor) ? await nodeOrgId(store, nodeType, nodeId) : actor.orgId;
+        if(!orgId || !(await nodeInOrg(store, nodeType, nodeId, orgId))) return sendJSON(res, 403, { error: 'Node is not in this organization' });
+      }
+      const targets = [];
+      for(const uid of userIds){
+        const u = await store.getUserById(uid);
+        if(!u) return sendJSON(res, 404, { error: `User ${uid} not found` });
+        if(!isInstanceAdmin(actor) && u.orgId !== actor.orgId) return sendJSON(res, 403, { error: 'A user is not in your organization' });
+        targets.push(u);
+      }
+      for(const u of targets) await store.updateUser(u.id, { assignmentType: nodeType, assignmentId: nodeId });
+      return sendJSON(res, 200, { assigned: targets.length });
+    }
     // fall through: unmatched /api/admin/* paths continue to the routes below
   }
 
