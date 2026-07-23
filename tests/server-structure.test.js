@@ -94,6 +94,89 @@ describe('PATCH /api/admin/nodes/:type/:id — rename (flag on)', () => {
   });
 });
 
+describe('DELETE /api/admin/nodes/:type/:id — delete-empty-only (flag on)', () => {
+  let srv, root, boss, orgId, hospitalId, departmentId, wardId, unitId;
+  before(async () => {
+    srv = await startServer({ multiTenant: true, seed: async () => {} });
+    root = (await login(srv.baseUrl)).json.token;
+
+    const org = await api(srv.baseUrl, root, '/api/admin/orgs', { method: 'POST', body: { name: 'Delete Org' } });
+    orgId = org.json.id;
+    const admin = await api(srv.baseUrl, root, `/api/admin/orgs/${orgId}/admin`, { method: 'POST', body: { username: 'deleteboss' } });
+    boss = (await login(srv.baseUrl, 'deleteboss', admin.json.temporaryPassword)).json.token;
+
+    const h = await api(srv.baseUrl, boss, '/api/admin/hospitals', { method: 'POST', body: { name: 'City Hospital' } });
+    hospitalId = h.json.id;
+    const d = await api(srv.baseUrl, boss, '/api/admin/departments', { method: 'POST', body: { hospitalId, name: 'Ortho' } });
+    departmentId = d.json.id;
+    const w = await api(srv.baseUrl, boss, '/api/admin/wards', { method: 'POST', body: { departmentId, name: 'Ward A' } });
+    wardId = w.json.id;
+    const u = await api(srv.baseUrl, boss, '/api/admin/units', { method: 'POST', body: { wardId, name: 'Bay 1' } });
+    unitId = u.json.id;
+  });
+  after(async () => { await srv.stop(); });
+
+  test('deleting a ward that still has a unit → 409, blockedBy.children >= 1', async () => {
+    const del = await api(srv.baseUrl, boss, `/api/admin/nodes/ward/${wardId}`, { method: 'DELETE' });
+    assert.equal(del.status, 409);
+    assert.ok(del.json.blockedBy.children >= 1, 'ward has a unit under it, so children must be counted');
+    assert.equal(del.json.blockedBy.users, 0);
+    assert.equal(del.json.blockedBy.patients, 0);
+  });
+
+  test('deleting a unit that has a patient → 409, blockedBy.patients >= 1', async () => {
+    const push = await syncPost(srv.baseUrl, root, {
+      since: 0,
+      changes: [{ id: 'dp1', name: 'Delete Patient', status: 'postop', unitId, updatedAt: Date.now() }]
+    });
+    assert.equal(push.status, 200);
+    assert.ok(push.json.patients.find(p => p.id === 'dp1'), 'patient must round-trip on push');
+
+    const del = await api(srv.baseUrl, boss, `/api/admin/nodes/unit/${unitId}`, { method: 'DELETE' });
+    assert.equal(del.status, 409);
+    assert.equal(del.json.blockedBy.children, 0);
+    assert.equal(del.json.blockedBy.users, 0);
+    assert.ok(del.json.blockedBy.patients >= 1, 'unit has a patient under it, so patients must be counted');
+  });
+
+  test('deleting a truly empty unit → 200, and the node no longer resolves', async () => {
+    const u2 = await api(srv.baseUrl, boss, '/api/admin/units', { method: 'POST', body: { wardId, name: 'Empty Bay' } });
+    const emptyUnitId = u2.json.id;
+
+    const del = await api(srv.baseUrl, boss, `/api/admin/nodes/unit/${emptyUnitId}`, { method: 'DELETE' });
+    assert.equal(del.status, 200);
+    assert.deepEqual(del.json, { deleted: true });
+
+    // getUnit returns null after deletion: PATCH re-resolves the node via getNode/getUnit and should now 404.
+    const after1 = await api(srv.baseUrl, boss, `/api/admin/nodes/unit/${emptyUnitId}`, { method: 'PATCH', body: { name: 'X' } });
+    assert.equal(after1.status, 404);
+  });
+
+  test('org admin deleting a node in another org → 403', async () => {
+    const org2 = await api(srv.baseUrl, root, '/api/admin/orgs', { method: 'POST', body: { name: 'Other Delete Org' } });
+    const a2 = await api(srv.baseUrl, root, `/api/admin/orgs/${org2.json.id}/admin`, { method: 'POST', body: { username: 'deleteboss2' } });
+    const boss2 = (await login(srv.baseUrl, 'deleteboss2', a2.json.temporaryPassword)).json.token;
+
+    const u3 = await api(srv.baseUrl, boss, '/api/admin/units', { method: 'POST', body: { wardId, name: 'Cross Org Bay' } });
+    const attempt = await api(srv.baseUrl, boss2, `/api/admin/nodes/unit/${u3.json.id}`, { method: 'DELETE' });
+    assert.equal(attempt.status, 403);
+  });
+});
+
+describe('DELETE /api/admin/nodes/:type/:id — flag OFF: route does not exist', () => {
+  let srv, root;
+  before(async () => {
+    srv = await startServer({ multiTenant: false });
+    root = (await login(srv.baseUrl)).json.token;
+  });
+  after(async () => { await srv.stop(); });
+
+  test('404 with flag off', async () => {
+    const res = await api(srv.baseUrl, root, '/api/admin/nodes/ward/w1', { method: 'DELETE' });
+    assert.equal(res.status, 404);
+  });
+});
+
 describe('PATCH /api/admin/nodes/:type/:id — flag OFF: route does not exist', () => {
   let srv, root;
   before(async () => {

@@ -527,6 +527,26 @@ async function handleApi(req, res, pathname){
       if(type === 'ward' || type === 'unit') await restampUnits(store, await unitIdsUnder(store, type, id));
       return sendJSON(res, 200, { id, type, name });
     }
+
+    if(nodeMatch && req.method === 'DELETE'){
+      if(actor.role !== 'admin') return sendJSON(res, 403, { error: 'Admin only' });
+      const [ , type, id ] = nodeMatch;
+      const g = await resolveAdminNode(actor, type, id);
+      if(!g.ok) return sendJSON(res, g.status, { error: g.error });
+      const children = (await childrenOf(store, type, id)).length;
+      const users = (await store.getAllUsers()).filter(u => u.assignmentType === type && u.assignmentId === id).length;
+      const unitSet = await unitIdsUnder(store, type, id);
+      let patients = 0;
+      for(const row of await store.getActive()){
+        let o; try{ o = JSON.parse(row.data); }catch{ continue; }
+        if(o.unitId && unitSet.has(o.unitId)) patients++;
+      }
+      if(children || users || patients){
+        return sendJSON(res, 409, { error: 'Node is not empty', blockedBy: { children, users, patients } });
+      }
+      await deleteNode(store, type, id);
+      return sendJSON(res, 200, { deleted: true });
+    }
     // fall through: unmatched /api/admin/* paths continue to the routes below
   }
 
