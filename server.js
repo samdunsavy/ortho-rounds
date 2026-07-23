@@ -66,6 +66,7 @@ import { listFlags, isEnabled } from './flags.js';
 import { resolveScope, canRead, decideWrite } from './scope.js';
 import { recordEvent, getSnapshot, isExportEnabled, startExportLoop } from './telemetry.js';
 import { buildOrgTree, buildOrgRollups, buildScopeTree } from './admin.js';
+import { NODE_TYPES, PARENT_TYPE, getNode, nodeOrgId, childrenOf, unitIdsUnder, restampUnits, restampPatient, updateNode, deleteNode, PARENT_FIELD } from './structure.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -268,6 +269,17 @@ async function nodeInOrg(store, type, id, orgId){
     default:
       return false;
   }
+}
+
+/** Resolve a node for an admin request, enforcing existence + org ownership.
+ *  Returns {ok:true, node, orgId} or {ok:false, status, error}. */
+async function resolveAdminNode(actor, type, id){
+  if(!NODE_TYPES.includes(type)) return { ok: false, status: 400, error: 'Unknown node type' };
+  const node = await getNode(store, type, id);
+  if(!node) return { ok: false, status: 404, error: 'Node not found' };
+  const orgId = await nodeOrgId(store, type, id);
+  if(!isInstanceAdmin(actor) && orgId !== actor.orgId) return { ok: false, status: 403, error: 'Not your organization' };
+  return { ok: true, node, orgId };
 }
 
 async function handleApi(req, res, pathname){
@@ -498,6 +510,22 @@ async function handleApi(req, res, pathname){
       if(!orgId || !(await nodeInOrg(store, nodeType, String(body.nodeId), orgId))) return sendJSON(res, 403, { error: 'Node is not in this organization' });
       await store.updateUser(target.id, { assignmentType: nodeType, assignmentId: String(body.nodeId) });
       return sendJSON(res, 200, { ok: true, assignment: { type: nodeType, id: String(body.nodeId) } });
+    }
+
+    const nodeMatch = pathname.match(/^\/api\/admin\/nodes\/([^/]+)\/([^/]+)$/);
+    if(nodeMatch && req.method === 'PATCH'){
+      if(actor.role !== 'admin') return sendJSON(res, 403, { error: 'Admin only' });
+      const [ , type, id ] = nodeMatch;
+      const g = await resolveAdminNode(actor, type, id);
+      if(!g.ok) return sendJSON(res, g.status, { error: g.error });
+      const body = await readBody(req) || {};
+      const name = cleanName(body.name);
+      if(!name) return sendJSON(res, 400, { error: 'Name required (max 80 chars)' });
+      const patch = { name };
+      if(type === 'department' && typeof body.specialty === 'string') patch.specialty = cleanName(body.specialty, 40) || 'ortho';
+      await updateNode(store, type, id, patch);
+      if(type === 'ward' || type === 'unit') await restampUnits(store, await unitIdsUnder(store, type, id));
+      return sendJSON(res, 200, { id, type, name });
     }
     // fall through: unmatched /api/admin/* paths continue to the routes below
   }
