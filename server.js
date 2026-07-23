@@ -547,6 +547,25 @@ async function handleApi(req, res, pathname){
       await deleteNode(store, type, id);
       return sendJSON(res, 200, { deleted: true });
     }
+
+    const moveMatch = pathname.match(/^\/api\/admin\/nodes\/([^/]+)\/([^/]+)\/move$/);
+    if(moveMatch && req.method === 'POST'){
+      if(actor.role !== 'admin') return sendJSON(res, 403, { error: 'Admin only' });
+      const [ , type, id ] = moveMatch;
+      const parentType = PARENT_TYPE[type];
+      if(!parentType) return sendJSON(res, 400, { error: 'This node type cannot be moved' });
+      const g = await resolveAdminNode(actor, type, id);
+      if(!g.ok) return sendJSON(res, g.status, { error: g.error });
+      const body = await readBody(req) || {};
+      const newParentId = typeof body.newParentId === 'string' ? body.newParentId : '';
+      const parent = newParentId ? await getNode(store, parentType, newParentId) : null;
+      if(!parent) return sendJSON(res, 404, { error: `Parent ${parentType} not found` });
+      const parentOrg = await nodeOrgId(store, parentType, newParentId);
+      if(parentOrg !== g.orgId) return sendJSON(res, 403, { error: 'Parent is in a different organization' });
+      await updateNode(store, type, id, { [PARENT_FIELD[type]]: newParentId });
+      await restampUnits(store, await unitIdsUnder(store, type, id));
+      return sendJSON(res, 200, { id, type, newParentId });
+    }
     // fall through: unmatched /api/admin/* paths continue to the routes below
   }
 

@@ -163,6 +163,87 @@ describe('DELETE /api/admin/nodes/:type/:id — delete-empty-only (flag on)', ()
   });
 });
 
+describe('POST /api/admin/nodes/:type/:id/move — re-parent + subtree re-stamp (flag on)', () => {
+  let srv, root, boss, orgId, hospitalId, d1, d2, w1, u1;
+  before(async () => {
+    srv = await startServer({ multiTenant: true, seed: async () => {} });
+    root = (await login(srv.baseUrl)).json.token;
+
+    const org = await api(srv.baseUrl, root, '/api/admin/orgs', { method: 'POST', body: { name: 'Move Org' } });
+    orgId = org.json.id;
+    const admin = await api(srv.baseUrl, root, `/api/admin/orgs/${orgId}/admin`, { method: 'POST', body: { username: 'moveboss' } });
+    boss = (await login(srv.baseUrl, 'moveboss', admin.json.temporaryPassword)).json.token;
+
+    const h = await api(srv.baseUrl, boss, '/api/admin/hospitals', { method: 'POST', body: { name: 'City Hospital' } });
+    hospitalId = h.json.id;
+    const dep1 = await api(srv.baseUrl, boss, '/api/admin/departments', { method: 'POST', body: { hospitalId, name: 'Ortho' } });
+    d1 = dep1.json.id;
+    const dep2 = await api(srv.baseUrl, boss, '/api/admin/departments', { method: 'POST', body: { hospitalId, name: 'Cardio' } });
+    d2 = dep2.json.id;
+    const w = await api(srv.baseUrl, boss, '/api/admin/wards', { method: 'POST', body: { departmentId: d1, name: 'Ward A' } });
+    w1 = w.json.id;
+    const u = await api(srv.baseUrl, boss, '/api/admin/units', { method: 'POST', body: { wardId: w1, name: 'Bay 1' } });
+    u1 = u.json.id;
+  });
+  after(async () => { await srv.stop(); });
+
+  test('moving ward w1 to department d2 → 200, and the pinned patient re-stamps to d2', async () => {
+    const push = await syncPost(srv.baseUrl, root, {
+      since: 0,
+      changes: [{ id: 'mp1', name: 'Move Patient', status: 'postop', unitId: u1, updatedAt: Date.now() }]
+    });
+    assert.equal(push.status, 200);
+    assert.ok(push.json.patients.find(p => p.id === 'mp1'), 'patient must round-trip on push');
+
+    const move = await api(srv.baseUrl, boss, `/api/admin/nodes/ward/${w1}/move`, { method: 'POST', body: { newParentId: d2 } });
+    assert.equal(move.status, 200);
+    assert.deepEqual(move.json, { id: w1, type: 'ward', newParentId: d2 });
+
+    const pull = await syncPost(srv.baseUrl, root, { since: 0, changes: [] });
+    const after1 = pull.json.patients.find(p => p.id === 'mp1');
+    assert.ok(after1, 'patient must still exist after move');
+    assert.equal(after1.departmentId, d2, 'patient ancestry must be re-stamped to the new department');
+  });
+
+  test('moving a unit to a ward in another org → 403', async () => {
+    const org2 = await api(srv.baseUrl, root, '/api/admin/orgs', { method: 'POST', body: { name: 'Other Move Org' } });
+    const a2 = await api(srv.baseUrl, root, `/api/admin/orgs/${org2.json.id}/admin`, { method: 'POST', body: { username: 'moveboss2' } });
+    const boss2 = (await login(srv.baseUrl, 'moveboss2', a2.json.temporaryPassword)).json.token;
+    const h2 = await api(srv.baseUrl, boss2, '/api/admin/hospitals', { method: 'POST', body: { name: 'Other Hospital' } });
+    const dep2b = await api(srv.baseUrl, boss2, '/api/admin/departments', { method: 'POST', body: { hospitalId: h2.json.id, name: 'Other Dept' } });
+    const w2 = await api(srv.baseUrl, boss2, '/api/admin/wards', { method: 'POST', body: { departmentId: dep2b.json.id, name: 'Other Ward' } });
+
+    const attempt = await api(srv.baseUrl, boss, `/api/admin/nodes/unit/${u1}/move`, { method: 'POST', body: { newParentId: w2.json.id } });
+    assert.equal(attempt.status, 403);
+  });
+
+  test('moving an org → 400', async () => {
+    const attempt = await api(srv.baseUrl, boss, `/api/admin/nodes/org/${orgId}/move`, { method: 'POST', body: { newParentId: 'whatever' } });
+    assert.equal(attempt.status, 400);
+  });
+
+  test('wrong-type parent (ward → a hospital id, not a department) → 404, no silent re-parent', async () => {
+    // A ward's required parent type is 'department'; passing a hospital's id looks up
+    // getNode(store,'department', hospitalId), which never matches a department row.
+    const attempt = await api(srv.baseUrl, boss, `/api/admin/nodes/ward/${w1}/move`, { method: 'POST', body: { newParentId: hospitalId } });
+    assert.equal(attempt.status, 404);
+  });
+});
+
+describe('POST /api/admin/nodes/:type/:id/move — flag OFF: route does not exist', () => {
+  let srv, root;
+  before(async () => {
+    srv = await startServer({ multiTenant: false });
+    root = (await login(srv.baseUrl)).json.token;
+  });
+  after(async () => { await srv.stop(); });
+
+  test('404 with flag off', async () => {
+    const res = await api(srv.baseUrl, root, '/api/admin/nodes/ward/w1/move', { method: 'POST', body: { newParentId: 'x' } });
+    assert.equal(res.status, 404);
+  });
+});
+
 describe('DELETE /api/admin/nodes/:type/:id — flag OFF: route does not exist', () => {
   let srv, root;
   before(async () => {
