@@ -395,6 +395,31 @@ async function handleApi(req, res, pathname){
     return sendJSON(res, 200, { assignment: actor.assignment || null, tree });
   }
 
+  // Member-accessible ward creation: lets a scoped member (PG) add a ward under
+  // a unit already in their scope, straight from the patient form — no admin
+  // console round-trip. Authorization is by unit scope (not org-admin role);
+  // the admin-only POST /api/admin/wards below is unchanged. Ward stays a
+  // structured node so it can become a scoping axis later.
+  if(pathname === '/api/wards' && req.method === 'POST'){
+    if(!isEnabled('MULTI_TENANT')) return sendJSON(res, 404, { error: 'Unknown endpoint' });
+    const body = await readBody(req) || {};
+    const unit = body.unitId ? await store.getUnit(body.unitId) : null;
+    if(!unit) return sendJSON(res, 404, { error: 'Unit not found' });
+    const scope = await resolveScope(actor, store);
+    if(!scope.unrestricted && !scope.unitIds.has(unit.id)){
+      return sendJSON(res, 403, { error: 'Not in your scope' });
+    }
+    const name = cleanName(body.name);
+    if(!name) return sendJSON(res, 400, { error: 'Ward name required (max 80 chars)' });
+    const existing = await store.listWardsByUnit(unit.id);
+    const dup = existing.find(w => String(w.name).trim().toLowerCase() === name.toLowerCase());
+    if(dup) return sendJSON(res, 200, { id: dup.id, unitId: unit.id, name: dup.name });
+    if(existing.length >= 50) return sendJSON(res, 409, { error: 'Ward limit reached for this unit' });
+    const ward = { id: crypto.randomUUID(), unitId: unit.id, name, createdAt: Date.now() };
+    await store.createWard(ward);
+    return sendJSON(res, 200, { id: ward.id, unitId: unit.id, name });
+  }
+
   if(isEnabled('MULTI_TENANT') && pathname.startsWith('/api/admin/')){
     const orgAdminMatch = pathname.match(/^\/api\/admin\/orgs\/([^/]+)\/admin$/);
 
