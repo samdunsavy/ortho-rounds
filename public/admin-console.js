@@ -182,7 +182,42 @@ function renderAdminNodeActionsHTML(state, sel, hit){
     </span>`;
 }
 
-function renderAdminUsersPanelHTML(){ return ''; }  // Task 5 replaces this
+function renderAdminUsersPanelHTML(state){
+  const groups = buildAssignNodeGroups(state.tree, state.orgs);
+  const rows = (state.users || []).map(u => {
+    const selType = u.assignmentType || null, selId = u.assignmentId || null;
+    const prev = selType && selId ? `${selType}:${selId}` : '';
+    return `
+      <tr data-user-row="${escapeHTML(u.id)}" data-username="${escapeHTML((u.username || '').toLowerCase())}">
+        <td><input type="checkbox" data-user-check="${escapeHTML(u.id)}"></td>
+        <td>${escapeHTML(u.username)}</td>
+        <td>${u.role === 'admin' ? '<span class="spec-badge">admin</span>' : 'member'}</td>
+        <td><select data-assign-user="${escapeHTML(u.id)}" data-prev="${escapeHTML(prev)}">${renderAssignSelectOptionsHTML(groups, selType, selId)}</select></td>
+        <td>${u.active ? 'active' : 'disabled'}</td>
+      </tr>`;
+  }).join('');
+  return `
+    <div class="admin-detail-head"><h3>Users</h3></div>
+    <div class="admin-inline-form">
+      <input id="adminUserSearch" placeholder="Search users…">
+    </div>
+    <div id="adminBulkBar" class="admin-bulk-bar" hidden></div>
+    <table class="admin-users-table">
+      <thead><tr><th></th><th>User</th><th>Role</th><th>Assignment</th><th>Status</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+// Delegated at module scope alongside the other adminView listeners — see
+// the note above the `change` listener near the end of this file for why
+// that's safe even though this file doesn't have an init()/bindEvents().
+document.getElementById('adminView')?.addEventListener('input', (e) => {
+  if(e.target.id !== 'adminUserSearch') return;
+  const q = e.target.value.trim().toLowerCase();
+  document.querySelectorAll('[data-user-row]').forEach(tr => {
+    tr.style.display = !q || tr.dataset.username.includes(q) ? '' : 'none';
+  });
+});
 
 document.getElementById('adminView')?.addEventListener('click', (e) => {
   const addBtn = e.target.closest('[data-add-child]');
@@ -259,31 +294,47 @@ function renderAdminStatusBar(byStatus, total){
     seg(byStatus.fordischarge, 'var(--status-fordischarge)')}</div>`;
 }
 
-// Walks the tree into per-level groups so the assignment <select> can render
-// an <optgroup> per node type (hospital/department/unit/ward). Option values
-// encode "type:id" — the change handler below splits on the first ":".
-function buildAssignNodeGroups(tree){
-  const groups = { hospital: [], department: [], unit: [], ward: [] };
-  for(const h of tree.hospitals){
+// Walks the tree (plus the org list) into per-level groups so the assignment
+// <select> can render an <optgroup> per node type (org/hospital/department/
+// unit/ward). Option values encode "type:id" — the change handler below
+// splits on the first ":".
+function buildAssignNodeGroups(tree, orgs){
+  const groups = { org: [], hospital: [], department: [], unit: [], ward: [] };
+  for(const o of orgs || []) groups.org.push({ id: o.id, label: o.name });
+  for(const h of (tree && tree.hospitals) || []){
     groups.hospital.push({ id: h.id, label: h.name });
-    for(const dep of h.departments){
+    for(const dep of h.departments || []){
       groups.department.push({ id: dep.id, label: `${dep.name} (${h.name})` });
-      for(const u of dep.units){
+      for(const u of dep.units || []){
         groups.unit.push({ id: u.id, label: `${u.name} (${dep.name})` });
-        for(const w of u.wards){
-          groups.ward.push({ id: w.id, label: `${w.name} (${u.name})` });
-        }
+        for(const w of u.wards || []) groups.ward.push({ id: w.id, label: `${w.name} (${u.name})` });
       }
     }
   }
   return groups;
 }
 
+// Looks up the display label for a "type:id" assignment against the groups
+// built above. Returns a "Stale (type:id)" placeholder when the node isn't
+// in the current tree/org list — e.g. orphaned units left over from a
+// migration, or a since-deleted org.
+function assignLabelFor(groups, type, id){
+  if(!type || !id) return '';
+  const list = groups[type] || [];
+  const hit = list.find(x => x.id === id);
+  return hit ? hit.label : `Stale (${type}:${id})`;
+}
+
 function renderAssignSelectOptionsHTML(groups, selType, selId){
   const optgroup = (label, type, items) => items.length ? `<optgroup label="${escapeHTML(label)}">${items.map(it =>
-    `<option value="${type}:${escapeHTML(it.id)}" ${type === selType && it.id === selId ? 'selected' : ''}>${escapeHTML(it.label)}</option>`
+    `<option value="${type}:${escapeHTML(it.id)}"${type === selType && it.id === selId ? ' selected' : ''}>${escapeHTML(it.label)}</option>`
   ).join('')}</optgroup>` : '';
-  return `<option value="">— none —</option>` +
+  const known = (groups[selType] || []).some(x => x.id === selId);
+  const stale = selType && selId && !known
+    ? `<option value="${escapeHTML(selType)}:${escapeHTML(selId)}" selected>Stale (${escapeHTML(selType)}:${escapeHTML(selId)})</option>`
+    : '';
+  return `<option value="">— none —</option>` + stale +
+    optgroup('Organizations', 'org', groups.org) +
     optgroup('Hospitals', 'hospital', groups.hospital) +
     optgroup('Departments', 'department', groups.department) +
     optgroup('Units', 'unit', groups.unit) +

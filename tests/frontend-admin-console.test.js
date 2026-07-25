@@ -187,3 +187,35 @@ describe('structural actions', () => {
     assert.deepEqual([...wardParents.map(p => p.id)], ['u2']);
   });
 });
+
+const CC_USERS = [
+  { id: 'usr1', username: 'xavier', role: 'admin', active: true, orgId: null, assignmentType: null, assignmentId: null },
+  { id: 'usr2', username: 'Amit', role: 'member', active: true, orgId: 'bfv2-org', assignmentType: 'org', assignmentId: 'bfv2-org' },
+  { id: 'usr3', username: 'ghost', role: 'member', active: true, orgId: 'bfv2-org', assignmentType: 'unit', assignmentId: 'gone-unit' }
+];
+
+describe('users panel', () => {
+  test('assignment picker includes an Organizations group', () => {
+    const { window } = loadFrontendEnv();
+    const html = window.renderAdminUsersPanelHTML({ tree: TREE, users: CC_USERS, orgs: [{ id: 'bfv2-org', name: 'Default' }], selection: { type: 'users' } });
+    assert.ok(html.includes('<optgroup label="Organizations"'));
+    assert.ok(html.includes('value="org:bfv2-org"'));
+  });
+  test('an org-assigned user is preselected, not shown as none', () => {
+    const { window } = loadFrontendEnv();
+    const html = window.renderAdminUsersPanelHTML({ tree: TREE, users: CC_USERS, orgs: [{ id: 'bfv2-org', name: 'Default' }], selection: { type: 'users' } });
+    assert.match(html, /value="org:bfv2-org"\s+selected/);
+  });
+  test('a stale assignment is shown explicitly', () => {
+    const { window } = loadFrontendEnv();
+    const html = window.renderAdminUsersPanelHTML({ tree: TREE, users: CC_USERS, orgs: [], selection: { type: 'users' } });
+    assert.ok(html.includes('Stale (unit:gone-unit)'));
+  });
+  test('rows carry a search key and a checkbox', () => {
+    const { window } = loadFrontendEnv();
+    const html = window.renderAdminUsersPanelHTML({ tree: TREE, users: CC_USERS, orgs: [], selection: { type: 'users' } });
+    assert.ok(html.includes('data-user-row="usr2"'));
+    assert.ok(html.includes('data-user-check="usr2"'));
+    assert.ok(html.includes('id="adminUserSearch"'));
+  });
+});
