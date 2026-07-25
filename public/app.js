@@ -6161,6 +6161,33 @@ function findSingleUnitChain(tree){
   return count === 1 ? chain : null;
 }
 
+// ---- ward combobox helpers (pure; unit-tested in tests/frontend-ward-create.test.js) ----
+function wardsForUnit(tree, unitId){
+  for(const dep of ((tree && tree.departments) || [])){
+    const unit = (dep.units || []).find(u => u.id === unitId);
+    if(unit) return unit.wards || [];
+  }
+  return [];
+}
+
+function matchWardByName(tree, unitId, typed){
+  const name = String(typed || '').trim().toLowerCase();
+  if(!name) return null;
+  return wardsForUnit(tree, unitId).find(w => String(w.name).trim().toLowerCase() === name) || null;
+}
+
+function injectWardIntoScopeTree(tree, unitId, ward){
+  for(const dep of ((tree && tree.departments) || [])){
+    const unit = (dep.units || []).find(u => u.id === unitId);
+    if(unit){
+      unit.wards = unit.wards || [];
+      if(!unit.wards.some(w => w.id === ward.id)) unit.wards.push({ id: ward.id, name: ward.name });
+      return true;
+    }
+  }
+  return false;
+}
+
 async function populateScopePicker(d){
   const depEl = document.getElementById('f_department');
   const unitEl = document.getElementById('f_unit');
