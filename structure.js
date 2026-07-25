@@ -32,12 +32,16 @@ export async function nodeOrgId(store, type, id){
   }
 }
 
+// NOTE (Ward/Unit Re-model Task 1, step 5): mechanical rename only — case
+// labels/shape unchanged, only the removed method names were swapped for
+// ones that exist post-flip so this module loads. Task 4 owns re-deriving
+// the correct department->unit->ward parent/child shape here.
 export async function childrenOf(store, type, id){
   switch(type){
     case 'org': return await store.listHospitalsByOrg(id);
     case 'hospital': return await store.listDepartmentsByHospital(id);
-    case 'department': return await store.listWardsByDepartment(id);
-    case 'ward': return await store.listUnitsByWard(id);
+    case 'department': return await store.listUnitsByDepartment(id);
+    case 'ward': return await store.listWardsByUnit(id);
     case 'unit': return [];
     default: return [];
   }

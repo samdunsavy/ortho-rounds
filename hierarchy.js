@@ -15,11 +15,15 @@ export async function resolveAncestry(store, unitId){
   return { unitId: unit.id, wardId: ward.id, departmentId: dep.id, hospitalId: hospital.id, orgId: hospital.orgId };
 }
 
+// NOTE (Ward/Unit Re-model Task 1, step 5): mechanical rename only — the
+// tree walk here still assumes the OLD ward-holds-units shape (only the
+// method names were swapped to ones that exist post-flip so this module
+// loads). Task 2 owns rewriting this to unit->department->hospital->org.
 async function unitsUnderWard(store, wardId, out){
-  for(const u of await store.listUnitsByWard(wardId)) out.add(u.id);
+  for(const u of await store.listWardsByUnit(wardId)) out.add(u.id);
 }
 async function unitsUnderDepartment(store, depId, out){
-  for(const w of await store.listWardsByDepartment(depId)) await unitsUnderWard(store, w.id, out);
+  for(const w of await store.listUnitsByDepartment(depId)) await unitsUnderWard(store, w.id, out);
 }
 async function unitsUnderHospital(store, hospitalId, out){
   for(const d of await store.listDepartmentsByHospital(hospitalId)) await unitsUnderDepartment(store, d.id, out);

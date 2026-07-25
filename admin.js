@@ -49,14 +49,14 @@ export async function buildOrgTree(store, orgId){
       const depStats = emptyStats();
       departmentStats.set(dep.id, depStats);
 
-      const wards = await store.listWardsByDepartment(dep.id);
+      const wards = await store.listUnitsByDepartment(dep.id);
       const outWards = [];
       for(const ward of wards){
         wardCount++;
         const wStats = emptyStats();
         wardStats.set(ward.id, wStats);
 
-        const units = await store.listUnitsByWard(ward.id);
+        const units = await store.listWardsByUnit(ward.id);
         const outUnits = [];
         for(const unit of units){
           unitCount++;
@@ -118,14 +118,17 @@ export async function buildOrgTree(store, orgId){
    fetch just their own subtree for the patient-form unit picker, without the
    admin-only /api/admin/org route's org-wide access check. Names + ids only
    — no stats, this isn't the admin console. */
+// NOTE (Ward/Unit Re-model Task 1, step 5): mechanical rename only, shape
+// still assumes the OLD department->ward->unit nesting. Task 5 owns
+// rewriting buildScopeTree/buildOrgTree to department->unit->ward.
 async function wardBranch(store, ward, onlyUnitId){
-  const units = await store.listUnitsByWard(ward.id);
+  const units = await store.listWardsByUnit(ward.id);
   const outUnits = onlyUnitId ? units.filter(u => u.id === onlyUnitId) : units;
   return { id: ward.id, name: ward.name, units: outUnits.map(u => ({ id: u.id, name: u.name })) };
 }
 
 async function departmentBranch(store, dep, onlyWardId, onlyUnitId){
-  const wards = await store.listWardsByDepartment(dep.id);
+  const wards = await store.listUnitsByDepartment(dep.id);
   const outWards = [];
   for(const ward of wards){
     if(onlyWardId && ward.id !== onlyWardId) continue;

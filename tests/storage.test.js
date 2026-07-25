@@ -247,24 +247,29 @@ describe('SQLite storage — multi-tenant hierarchy (roadmap Phase 1, unused unt
     assert.equal(u.wardId, 'ward1');
   });
 
-  test('wards + units CRUD under a department', async () => {
+  test('unit under department, ward under unit', async () => {
+    await store.createOrganization({ id: 'o1', name: 'O', plan: 'free' });
+    await store.createHospital({ id: 'h1', orgId: 'o1', name: 'H' });
     await store.createDepartment({ id: 'd1', hospitalId: 'h1', name: 'Ortho' });
-    await store.createWard({ id: 'wa', departmentId: 'd1', name: '7FOW' });
-    await store.createUnit({ id: 'un', wardId: 'wa', name: 'IV' });
-    assert.equal((await store.getWard('wa')).departmentId, 'd1');
-    assert.equal((await store.getUnit('un')).wardId, 'wa');
-    assert.deepEqual((await store.listWardsByDepartment('d1')).map(w => w.id), ['wa']);
-    assert.deepEqual((await store.listUnitsByWard('wa')).map(u => u.id), ['un']);
+    await store.createUnit({ id: 'u1', departmentId: 'd1', name: 'IV' });
+    await store.createWard({ id: 'w1', unitId: 'u1', name: '7FOW' });
+    assert.equal((await store.getUnit('u1')).departmentId, 'd1');
+    assert.equal((await store.getWard('w1')).unitId, 'u1');
+    assert.deepEqual((await store.listUnitsByDepartment('d1')).map(u => u.id), ['u1']);
+    assert.deepEqual((await store.listWardsByUnit('u1')).map(w => w.id), ['w1']);
+    await store.updateUnit('u1', { name: 'IVb', departmentId: 'd1' });
+    await store.updateWard('w1', { name: '7FOWb', unitId: 'u1' });
+    assert.equal((await store.getUnit('u1')).name, 'IVb');
   });
 
   test('node update + delete', async () => {
     await store.createOrganization({ id: 'o9', name: 'O9', plan: 'free' });
     await store.createHospital({ id: 'h9', orgId: 'o9', name: 'H9' });
     await store.createDepartment({ id: 'd9', hospitalId: 'h9', name: 'D9' });
-    await store.createWard({ id: 'w9', departmentId: 'd9', name: 'W9' });
-    await store.createUnit({ id: 'un9', wardId: 'w9', name: 'U9' });
+    await store.createUnit({ id: 'un9', departmentId: 'd9', name: 'U9' });
+    await store.createWard({ id: 'w9', unitId: 'un9', name: 'W9' });
 
-    await store.updateUnit('un9', { name: 'U9b', wardId: 'w9' });
+    await store.updateUnit('un9', { name: 'U9b', departmentId: 'd9' });
     assert.equal((await store.getUnit('un9')).name, 'U9b');
     await store.updateWard('w9', { name: 'W9b' });
     assert.equal((await store.getWard('w9')).name, 'W9b');

@@ -156,22 +156,27 @@ function createSqliteStore({ dataDir }){
       db.exec('CREATE INDEX IF NOT EXISTS idx_departments_hospitalId ON departments(hospitalId);');
       db.exec(`
         CREATE TABLE IF NOT EXISTS wards (
+          id        TEXT PRIMARY KEY,
+          unitId    TEXT NOT NULL,
+          name      TEXT NOT NULL,
+          createdAt INTEGER NOT NULL
+        );
+      `);
+      db.exec('CREATE INDEX IF NOT EXISTS idx_wards_unitId ON wards(unitId);');
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS units (
           id           TEXT PRIMARY KEY,
           departmentId TEXT NOT NULL,
           name         TEXT NOT NULL,
           createdAt    INTEGER NOT NULL
         );
       `);
-      db.exec('CREATE INDEX IF NOT EXISTS idx_wards_departmentId ON wards(departmentId);');
-      db.exec(`
-        CREATE TABLE IF NOT EXISTS units (
-          id        TEXT PRIMARY KEY,
-          wardId    TEXT NOT NULL,
-          name      TEXT NOT NULL,
-          createdAt INTEGER NOT NULL
-        );
-      `);
-      db.exec('CREATE INDEX IF NOT EXISTS idx_units_wardId ON units(wardId);');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_units_departmentId ON units(departmentId);');
+      // Ward/Unit FK flip (Ward/Unit Re-model, Task 1): units now hang off
+      // departmentId, wards off unitId. Existing DBs from before the flip
+      // won't have these columns yet.
+      addColumnIfMissing(db, 'units', 'departmentId', 'TEXT');
+      addColumnIfMissing(db, 'wards', 'unitId', 'TEXT');
       db.exec(`
         CREATE TABLE IF NOT EXISTS pushSubscriptions (
           id           TEXT PRIMARY KEY,
@@ -323,27 +328,27 @@ function createSqliteStore({ dataDir }){
       return db.prepare('SELECT * FROM departments WHERE hospitalId = ? ORDER BY createdAt ASC').all(hospitalId);
     },
     async createWard(ward){
-      db.prepare(`INSERT INTO wards (id, departmentId, name, createdAt) VALUES (?, ?, ?, ?)`)
-        .run(ward.id, ward.departmentId, ward.name, ward.createdAt || Date.now());
+      db.prepare(`INSERT INTO wards (id, unitId, name, createdAt) VALUES (?, ?, ?, ?)`)
+        .run(ward.id, ward.unitId, ward.name, ward.createdAt || Date.now());
     },
     async getWard(id){ return db.prepare('SELECT * FROM wards WHERE id = ?').get(id) || null; },
-    async listWardsByDepartment(departmentId){
-      return db.prepare('SELECT * FROM wards WHERE departmentId = ? ORDER BY createdAt ASC').all(departmentId);
+    async listWardsByUnit(unitId){
+      return db.prepare('SELECT * FROM wards WHERE unitId = ? ORDER BY createdAt ASC').all(unitId);
     },
     async createUnit(unit){
-      db.prepare(`INSERT INTO units (id, wardId, name, createdAt) VALUES (?, ?, ?, ?)`)
-        .run(unit.id, unit.wardId, unit.name, unit.createdAt || Date.now());
+      db.prepare(`INSERT INTO units (id, departmentId, name, createdAt) VALUES (?, ?, ?, ?)`)
+        .run(unit.id, unit.departmentId, unit.name, unit.createdAt || Date.now());
     },
     async getUnit(id){ return db.prepare('SELECT * FROM units WHERE id = ?').get(id) || null; },
-    async listUnitsByWard(wardId){
-      return db.prepare('SELECT * FROM units WHERE wardId = ? ORDER BY createdAt ASC').all(wardId);
+    async listUnitsByDepartment(departmentId){
+      return db.prepare('SELECT * FROM units WHERE departmentId = ? ORDER BY createdAt ASC').all(departmentId);
     },
 
     async updateOrganization(id, patch){ updateRow(db, 'organizations', id, patch, ['name','plan']); },
     async updateHospital(id, patch){ updateRow(db, 'hospitals', id, patch, ['name','orgId']); },
     async updateDepartment(id, patch){ updateRow(db, 'departments', id, patch, ['name','specialty','hospitalId']); },
-    async updateWard(id, patch){ updateRow(db, 'wards', id, patch, ['name','departmentId']); },
-    async updateUnit(id, patch){ updateRow(db, 'units', id, patch, ['name','wardId']); },
+    async updateWard(id, patch){ updateRow(db, 'wards', id, patch, ['name','unitId']); },
+    async updateUnit(id, patch){ updateRow(db, 'units', id, patch, ['name','departmentId']); },
     async deleteOrganization(id){ db.prepare('DELETE FROM organizations WHERE id = ?').run(id); },
     async deleteHospital(id){ db.prepare('DELETE FROM hospitals WHERE id = ?').run(id); },
     async deleteDepartment(id){ db.prepare('DELETE FROM departments WHERE id = ?').run(id); },
@@ -441,8 +446,8 @@ async function createMongoStore({ mongoUri }){
   await pushSubscriptions.createIndex({ userId: 1 });
   await hospitals.createIndex({ orgId: 1 });
   await departments.createIndex({ hospitalId: 1 });
-  await wards.createIndex({ departmentId: 1 });
-  await units.createIndex({ wardId: 1 });
+  await wards.createIndex({ unitId: 1 });
+  await units.createIndex({ departmentId: 1 });
 
   const freshStart = (await patients.estimatedDocumentCount()) === 0;
   const mapRow = d => d ? { id: d._id, updatedAt: d.updatedAt, deleted: d.deleted ? 1 : 0, data: d.data } : null;
@@ -614,34 +619,18 @@ async function createMongoStore({ mongoUri }){
       const arr = await departments.find({ hospitalId }).sort({ createdAt: 1 }).toArray();
       return arr.map(d => ({ id: d._id, hospitalId: d.hospitalId, name: d.name, specialty: d.specialty, createdAt: d.createdAt }));
     },
-    async createWard(ward){
-      await wards.insertOne({ _id: ward.id, departmentId: ward.departmentId, name: ward.name, createdAt: ward.createdAt || Date.now() });
-    },
-    async getWard(id){
-      const d = await wards.findOne({ _id: id });
-      return d ? { id: d._id, departmentId: d.departmentId, name: d.name, createdAt: d.createdAt } : null;
-    },
-    async listWardsByDepartment(departmentId){
-      const arr = await wards.find({ departmentId }).sort({ createdAt: 1 }).toArray();
-      return arr.map(d => ({ id: d._id, departmentId: d.departmentId, name: d.name, createdAt: d.createdAt }));
-    },
-    async createUnit(unit){
-      await units.insertOne({ _id: unit.id, wardId: unit.wardId, name: unit.name, createdAt: unit.createdAt || Date.now() });
-    },
-    async getUnit(id){
-      const d = await units.findOne({ _id: id });
-      return d ? { id: d._id, wardId: d.wardId, name: d.name, createdAt: d.createdAt } : null;
-    },
-    async listUnitsByWard(wardId){
-      const arr = await units.find({ wardId }).sort({ createdAt: 1 }).toArray();
-      return arr.map(d => ({ id: d._id, wardId: d.wardId, name: d.name, createdAt: d.createdAt }));
-    },
+    async createWard(ward){ await wards.insertOne({ _id: ward.id, unitId: ward.unitId, name: ward.name, createdAt: ward.createdAt || Date.now() }); },
+    async getWard(id){ const d = await wards.findOne({ _id: id }); return d ? { id: d._id, unitId: d.unitId, name: d.name, createdAt: d.createdAt } : null; },
+    async listWardsByUnit(unitId){ const a = await wards.find({ unitId }).sort({ createdAt: 1 }).toArray(); return a.map(d => ({ id: d._id, unitId: d.unitId, name: d.name, createdAt: d.createdAt })); },
+    async createUnit(unit){ await units.insertOne({ _id: unit.id, departmentId: unit.departmentId, name: unit.name, createdAt: unit.createdAt || Date.now() }); },
+    async getUnit(id){ const d = await units.findOne({ _id: id }); return d ? { id: d._id, departmentId: d.departmentId, name: d.name, createdAt: d.createdAt } : null; },
+    async listUnitsByDepartment(departmentId){ const a = await units.find({ departmentId }).sort({ createdAt: 1 }).toArray(); return a.map(d => ({ id: d._id, departmentId: d.departmentId, name: d.name, createdAt: d.createdAt })); },
 
     async updateOrganization(id, patch){ await mongoUpdate(organizations, id, patch, ['name','plan']); },
     async updateHospital(id, patch){ await mongoUpdate(hospitals, id, patch, ['name','orgId']); },
     async updateDepartment(id, patch){ await mongoUpdate(departments, id, patch, ['name','specialty','hospitalId']); },
-    async updateWard(id, patch){ await mongoUpdate(wards, id, patch, ['name','departmentId']); },
-    async updateUnit(id, patch){ await mongoUpdate(units, id, patch, ['name','wardId']); },
+    async updateWard(id, patch){ await mongoUpdate(wards, id, patch, ['name','unitId']); },
+    async updateUnit(id, patch){ await mongoUpdate(units, id, patch, ['name','departmentId']); },
     async deleteOrganization(id){ await organizations.deleteOne({ _id: id }); },
     async deleteHospital(id){ await hospitals.deleteOne({ _id: id }); },
     async deleteDepartment(id){ await departments.deleteOne({ _id: id }); },
