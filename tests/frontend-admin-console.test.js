@@ -147,3 +147,43 @@ describe('detail panel', () => {
     assert.equal(window.childTypeOf('ward'), null);
   });
 });
+
+describe('structural actions', () => {
+  test('unit offers rename, move (to other departments) and delete', () => {
+    const { window } = loadFrontendEnv();
+    const html = window.renderAdminDetailHTML({ tree: TREE, users: [], orgs: [], selection: { type: 'unit', id: 'u1' } });
+    assert.ok(html.includes('data-rename-node="unit:u1"'));
+    assert.ok(html.includes('data-move-node="unit:u1"'));
+    assert.ok(html.includes('data-delete-node="unit:u1"'));
+  });
+  test('hospital has no move control', () => {
+    const { window } = loadFrontendEnv();
+    const html = window.renderAdminDetailHTML({ tree: TREE, users: [], orgs: [], selection: { type: 'hospital', id: 'h1' } });
+    assert.ok(!html.includes('data-move-node='));
+  });
+  test('delete is disabled with a reason when the node is not empty', () => {
+    const { window } = loadFrontendEnv();
+    const html = window.renderAdminDetailHTML({ tree: TREE, users: [], orgs: [], selection: { type: 'unit', id: 'u1' } });
+    assert.match(html, /data-delete-node="unit:u1"[^>]*disabled/);
+    assert.ok(html.includes('4 patients'));
+  });
+  test('delete is enabled for an empty node', () => {
+    const { window } = loadFrontendEnv();
+    const empty = JSON.parse(JSON.stringify(TREE));
+    empty.hospitals[0].departments[0].units[1].stats.livePatients = 0;
+    empty.hospitals[0].departments[0].units[1].stats.users = 0;
+    const html = window.renderAdminDetailHTML({ tree: empty, users: [], orgs: [], selection: { type: 'unit', id: 'u2' } });
+    assert.ok(!/data-delete-node="unit:u2"[^>]*disabled/.test(html));
+  });
+  test('validMoveParents lists same-type-parent nodes excluding the current parent', () => {
+    const { window } = loadFrontendEnv();
+    const parents = window.validMoveParents(TREE, 'unit', 'd1');
+    // Spread into this realm's Array before comparing — values returned
+    // from window.eval'd code live in jsdom's vm realm, and assert's
+    // deepEqual treats same-shaped-but-cross-realm arrays as unequal (see
+    // the identical pattern already used above for buildAssignNodeGroups).
+    assert.deepEqual([...parents.map(p => p.id)], []); // only one department exists
+    const wardParents = window.validMoveParents(TREE, 'ward', 'u1');
+    assert.deepEqual([...wardParents.map(p => p.id)], ['u2']);
+  });
+});

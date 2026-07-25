@@ -126,7 +126,62 @@ function renderAdminDetailHTML(state){
     ${addChild}`;
 }
 
-function renderAdminNodeActionsHTML(){ return ''; } // Task 4 replaces this
+const MOVE_PARENT_TYPE = { department: 'hospital', unit: 'department', ward: 'unit' };
+
+function validMoveParents(tree, type, currentParentId){
+  const parentType = MOVE_PARENT_TYPE[type];
+  if(!parentType) return [];
+  const out = [];
+  for(const h of (tree && tree.hospitals) || []){
+    if(parentType === 'hospital'){ if(h.id !== currentParentId) out.push({ id: h.id, name: h.name }); continue; }
+    for(const dep of h.departments || []){
+      if(parentType === 'department'){ if(dep.id !== currentParentId) out.push({ id: dep.id, name: dep.name }); continue; }
+      for(const u of dep.units || []){
+        if(parentType === 'unit' && u.id !== currentParentId) out.push({ id: u.id, name: u.name });
+      }
+    }
+  }
+  return out;
+}
+
+/** Client-side preview of the server's delete-empty rule. The server is
+    authoritative (409 blockedBy); this just avoids offering a click that
+    can only fail. */
+function deleteBlockedReason(node, type){
+  const bits = [];
+  const kids = childListOf(type, node).length;
+  if(kids) bits.push(`${kids} ${childTypeOf(type)}${kids === 1 ? '' : 's'}`);
+  if(node.stats && node.stats.livePatients) bits.push(`${node.stats.livePatients} patient${node.stats.livePatients === 1 ? '' : 's'}`);
+  if(node.stats && node.stats.users) bits.push(`${node.stats.users} user${node.stats.users === 1 ? '' : 's'}`);
+  return bits.join(', ');
+}
+
+function renderAdminNodeActionsHTML(state, sel, hit){
+  const key = `${sel.type}:${sel.id}`;
+  const blocked = deleteBlockedReason(hit.node, sel.type);
+  const parents = validMoveParents(state.tree, sel.type, hit.parentId);
+  // Rendered whenever the type is movable at all, even with zero valid
+  // targets right now (e.g. only one sibling parent exists) — hiding the
+  // control entirely would make "there's nowhere to move this yet" look
+  // identical to "this type can't be moved", which it isn't.
+  const moveHTML = MOVE_PARENT_TYPE[sel.type] ? `
+    <select data-move-node="${escapeHTML(key)}">
+      <option value="">Move to…</option>
+      ${parents.map(p => `<option value="${escapeHTML(p.id)}">${escapeHTML(p.name)}</option>`).join('')}
+    </select>` : '';
+  // NOTE: the brief's snippet built this label with a single-quoted string
+  // containing `\\'t` — that's an escaped backslash followed by an
+  // unescaped quote, which terminates the string early and is a syntax
+  // error. Using a template literal sidesteps the escaping issue entirely.
+  const deleteLabel = blocked ? `Can't delete — ${escapeHTML(blocked)}` : 'Delete';
+  return `
+    <span class="admin-node-actions">
+      <button class="btn" data-rename-node="${escapeHTML(key)}">Rename</button>
+      ${moveHTML}
+      <button class="btn" data-delete-node="${escapeHTML(key)}"${blocked ? ' disabled' : ''} title="${escapeHTML(deleteLabel)}">${escapeHTML(deleteLabel)}</button>
+    </span>`;
+}
+
 function renderAdminUsersPanelHTML(){ return ''; }  // Task 5 replaces this
 
 document.getElementById('adminView')?.addEventListener('click', (e) => {
@@ -143,6 +198,35 @@ document.getElementById('adminView')?.addEventListener('click', (e) => {
     if(!route) return;
     api(route.path, { method: 'POST', body: JSON.stringify({ [route.parentKey]: parentId, name }) })
       .then(() => loadAdminView())
+      .catch(err => showToast(err.message));
+    return;
+  }
+  const renameBtn = e.target.closest('[data-rename-node]');
+  if(renameBtn){
+    e.stopPropagation();
+    const raw = renameBtn.dataset.renameNode;
+    const i = raw.indexOf(':');
+    const type = raw.slice(0, i), id = raw.slice(i + 1);
+    const hit = findAdminNode(adminState.tree, type, id);
+    const next = window.prompt('New name', hit ? hit.node.name : '');
+    if(next === null) return;
+    const name = next.trim();
+    if(!name || name.length > 80){ showToast('Name required (max 80 chars)'); return; }
+    api(`/api/admin/nodes/${encodeURIComponent(type)}/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ name }) })
+      .then(() => loadAdminView())
+      .catch(err => showToast(err.message));
+    return;
+  }
+  const delBtn = e.target.closest('[data-delete-node]');
+  if(delBtn){
+    e.stopPropagation();
+    if(delBtn.disabled) return;
+    const raw = delBtn.dataset.deleteNode;
+    const i = raw.indexOf(':');
+    const type = raw.slice(0, i), id = raw.slice(i + 1);
+    if(!window.confirm(`Delete this ${type}? This cannot be undone.`)) return;
+    api(`/api/admin/nodes/${encodeURIComponent(type)}/${encodeURIComponent(id)}`, { method: 'DELETE' })
+      .then(() => { adminState.selection = { type: 'users' }; return loadAdminView(); })
       .catch(err => showToast(err.message));
     return;
   }
@@ -275,6 +359,18 @@ function closeAdminView(){
 // is unreachable flag-off anyway (buttons hidden, view `hidden`), so this
 // doesn't need to be gated behind MULTI_TENANT/isAdmin checks either.
 document.getElementById('adminView')?.addEventListener('change', async (e) => {
+  const moveSel = e.target.closest('[data-move-node]');
+  if(moveSel){
+    const newParentId = moveSel.value;
+    if(!newParentId) return;
+    const raw = moveSel.dataset.moveNode;
+    const i = raw.indexOf(':');
+    const type = raw.slice(0, i), id = raw.slice(i + 1);
+    api(`/api/admin/nodes/${encodeURIComponent(type)}/${encodeURIComponent(id)}/move`, { method: 'POST', body: JSON.stringify({ newParentId }) })
+      .then(() => loadAdminView())
+      .catch(err => { showToast(err.message); loadAdminView(); });
+    return;
+  }
   const sel = e.target.closest('[data-assign-user]');
   if(!sel) return;
   const raw = sel.value;
