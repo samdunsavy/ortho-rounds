@@ -64,6 +64,7 @@ import { logError, logWarn } from './logger.js';
 import { runDigestPass } from './notifications.js';
 import { listFlags, isEnabled } from './flags.js';
 import { resolveScope, canRead, decideWrite } from './scope.js';
+import { wardUnitId } from './hierarchy.js';
 import { recordEvent, getSnapshot, isExportEnabled, startExportLoop } from './telemetry.js';
 import { buildOrgTree, buildOrgRollups, buildScopeTree } from './admin.js';
 import { NODE_TYPES, PARENT_TYPE, getNode, nodeOrgId, childrenOf, unitIdsUnder, restampUnits, restampPatient, updateNode, deleteNode, PARENT_FIELD } from './structure.js';
@@ -764,15 +765,19 @@ async function handleApi(req, res, pathname){
             const a = decision.ancestry;
             // Always strip client-merged ancestry keys first so a client-supplied
             // value can never linger when the server is about to re-stamp.
-            delete stored.unitId; delete stored.wardId; delete stored.departmentId;
+            delete stored.unitId; delete stored.departmentId;
             delete stored.hospitalId; delete stored.orgId;
             if(a !== null){
               Object.assign(stored, a);
-              const ward = await store.getWard(a.wardId);
               const unit = await store.getUnit(a.unitId);
-              if(ward) stored.ward = ward.name;
               if(unit) stored.unit = unit.name;
             }
+          }
+          if(scope && stored.wardId){
+            // Optional ward: keep only if it sits under the patient's unit; else clear (server-authoritative).
+            const wUnit = await wardUnitId(store, stored.wardId);
+            if(wUnit !== stored.unitId){ delete stored.wardId; }
+            else { const w = await store.getWard(stored.wardId); if(w) stored.ward = w.name; }
           }
           stored.updatedAt = now;
           await store.upsertPatient(p.id, now, p.deleted ? 1 : 0, JSON.stringify(stored));

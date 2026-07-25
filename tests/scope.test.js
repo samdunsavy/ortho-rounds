@@ -17,22 +17,19 @@ describe('scope (unit-based subtree)', () => {
     dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ortho-scope-'));
     store = await createStore({ dataDir });
     await store.init();
-    // o1 -> h1 -> d1 -> w1 -> u1
-    //                -> w2 -> u2
+    // o1 -> h1 -> d1 -> u1
+    //                -> u2
     await store.createOrganization({ id: 'o1', name: 'Org One', plan: 'free' });
     await store.createHospital({ id: 'h1', orgId: 'o1', name: 'H1' });
     await store.createDepartment({ id: 'd1', hospitalId: 'h1', name: 'Ortho' });
-    await store.createWard({ id: 'w1', departmentId: 'd1', name: 'W1' });
-    await store.createUnit({ id: 'u1', wardId: 'w1', name: 'U1' });
-    await store.createWard({ id: 'w2', departmentId: 'd1', name: 'W2' });
-    await store.createUnit({ id: 'u2', wardId: 'w2', name: 'U2' });
+    await store.createUnit({ id: 'u1', departmentId: 'd1', name: 'U1' });
+    await store.createUnit({ id: 'u2', departmentId: 'd1', name: 'U2' });
 
-    // o2 -> hx -> dx -> wx -> ux (second org, fully isolated)
+    // o2 -> hx -> dx -> ux (second org, fully isolated)
     await store.createOrganization({ id: 'o2', name: 'Org Two', plan: 'free' });
     await store.createHospital({ id: 'hx', orgId: 'o2', name: 'HX' });
     await store.createDepartment({ id: 'dx', hospitalId: 'hx', name: 'Other' });
-    await store.createWard({ id: 'wx', departmentId: 'dx', name: 'WX' });
-    await store.createUnit({ id: 'ux', wardId: 'wx', name: 'UX' });
+    await store.createUnit({ id: 'ux', departmentId: 'dx', name: 'UX' });
   });
   after(async () => { await store.close(); fs.rmSync(dataDir, { recursive: true, force: true }); });
 
@@ -91,6 +88,8 @@ describe('scope (unit-based subtree)', () => {
       assert.equal(d.allow, true);
       assert.equal(d.ancestry.unitId, 'u1');
       assert.equal(d.ancestry.orgId, 'o1');
+      assert.deepEqual(Object.keys(d.ancestry).sort(), ['departmentId', 'hospitalId', 'orgId', 'unitId']);
+      assert.equal('wardId' in d.ancestry, false);
     });
 
     test('decideWrite new patient: member with no assignment is denied', async () => {

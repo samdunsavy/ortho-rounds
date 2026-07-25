@@ -27,9 +27,9 @@ describe('MULTI_TENANT sync scoping (unit-based)', () => {
       multiTenant: true,
       seed: async (store) => {
         // org1: hospital h1 -> departments dep1 (Ortho), dep2 (Surgery)
-        //   dep1 -> ward1 -> unit1
-        //   dep2 -> ward2 -> unit2
-        // org2: hospital hx -> department depx -> wardx -> unitx
+        //   dep1 -> unit1 -> ward1 (optional ward under unit1)
+        //   dep2 -> unit2 -> ward2 (optional ward under unit2)
+        // org2: hospital hx -> department depx -> unitx -> wardx
         await store.createOrganization({ id: 'org1', name: 'Org1', plan: 'free' });
         await store.createOrganization({ id: 'org2', name: 'Org2', plan: 'free' });
         await store.createHospital({ id: 'h1', orgId: 'org1', name: 'H1' });
@@ -37,12 +37,12 @@ describe('MULTI_TENANT sync scoping (unit-based)', () => {
         await store.createDepartment({ id: 'dep1', hospitalId: 'h1', name: 'Ortho' });
         await store.createDepartment({ id: 'dep2', hospitalId: 'h1', name: 'Surgery' });
         await store.createDepartment({ id: 'depx', hospitalId: 'hx', name: 'OtherOrg' });
-        await store.createWard({ id: 'ward1', departmentId: 'dep1', name: 'Ward One' });
-        await store.createWard({ id: 'ward2', departmentId: 'dep2', name: 'Ward Two' });
-        await store.createWard({ id: 'wardx', departmentId: 'depx', name: 'Ward X' });
-        await store.createUnit({ id: 'unit1', wardId: 'ward1', name: 'Unit One' });
-        await store.createUnit({ id: 'unit2', wardId: 'ward2', name: 'Unit Two' });
-        await store.createUnit({ id: 'unitx', wardId: 'wardx', name: 'Unit X' });
+        await store.createUnit({ id: 'unit1', departmentId: 'dep1', name: 'Unit One' });
+        await store.createUnit({ id: 'unit2', departmentId: 'dep2', name: 'Unit Two' });
+        await store.createUnit({ id: 'unitx', departmentId: 'depx', name: 'Unit X' });
+        await store.createWard({ id: 'ward1', unitId: 'unit1', name: 'Ward One' });
+        await store.createWard({ id: 'ward2', unitId: 'unit2', name: 'Ward Two' });
+        await store.createWard({ id: 'wardx', unitId: 'unitx', name: 'Ward X' });
         await seedUser(store, { id: 'u1', username: 'pg1', orgId: 'org1', assignment: { type: 'unit', id: 'unit1' } });
         await seedUser(store, { id: 'u2', username: 'pg2', orgId: 'org1', assignment: { type: 'unit', id: 'unit2' } });
         await seedUser(store, { id: 'u3', username: 'boss1', orgId: 'org1', role: 'admin' });
@@ -78,12 +78,14 @@ describe('MULTI_TENANT sync scoping (unit-based)', () => {
     const r = await syncPost(srv.baseUrl, tokens.root, { since: 0, changes: [] });
     const p = r.json.patients.find(x => x.id === 'pat-w1');
     assert.equal(p.unitId, 'unit1');
-    assert.equal(p.wardId, 'ward1');
     assert.equal(p.departmentId, 'dep1');
     assert.equal(p.hospitalId, 'h1');
     assert.equal(p.orgId, 'org1');
-    assert.equal(p.ward, 'Ward One');
     assert.equal(p.unit, 'Unit One');
+    // No wardId was sent by the client, so the optional ward is never
+    // invented from ancestry — the label only ever comes from the patient's
+    // own wardId (see the ward-validation tests below).
+    assert.equal('wardId' in p, false);
   });
 
   test('member reads only own unit', async () => {
@@ -137,11 +139,9 @@ describe('MULTI_TENANT sync scoping (unit-based)', () => {
     let r = await syncPost(srv.baseUrl, tokens.root, { since: 0, changes: [] });
     let p = r.json.patients.find(x => x.id === 'pat-w1');
     assert.equal(p.unitId, 'unit1');
-    assert.equal(p.wardId, 'ward1');
     assert.equal(p.departmentId, 'dep1');
     assert.equal(p.hospitalId, 'h1');
     assert.equal(p.orgId, 'org1');
-    assert.equal(p.ward, 'Ward One');
     assert.equal(p.unit, 'Unit One');
     assert.equal(p.name, 'Renamed by pg1');
 
@@ -153,7 +153,6 @@ describe('MULTI_TENANT sync scoping (unit-based)', () => {
     p = r.json.patients.find(x => x.id === 'pat-w1');
     assert.equal(p.unitId, 'unit1');
     assert.equal(p.orgId, 'org1');
-    assert.equal(p.ward, 'Ward One');
     assert.equal(p.unit, 'Unit One');
     assert.equal(p.name, 'Renamed again');
   });
@@ -165,10 +164,36 @@ describe('MULTI_TENANT sync scoping (unit-based)', () => {
     const r = await syncPost(srv.baseUrl, tokens.root, { since: 0, changes: [] });
     const p = r.json.patients.find(x => x.id === 'pat-w2');
     assert.equal(p.unitId, 'unit1');
-    assert.equal(p.wardId, 'ward1');
     assert.equal(p.departmentId, 'dep1');
-    assert.equal(p.ward, 'Ward One');
     assert.equal(p.unit, 'Unit One');
+    // Moving units never invents a ward — the optional wardId (unset here)
+    // stays unset.
+    assert.equal('wardId' in p, false);
+  });
+
+  test('sync ward validation: a valid wardId under the patient\'s unit is kept and labeled', async () => {
+    const r = await syncPost(srv.baseUrl, tokens.pg1, {
+      since: 0, changes: [{ id: 'pat-w1', wardId: 'ward1', name: 'Patient of pg1', updatedAt: Date.now() + 20 }]
+    });
+    assert.equal(r.status, 200);
+    const pull = await syncPost(srv.baseUrl, tokens.root, { since: 0, changes: [] });
+    const p = pull.json.patients.find(x => x.id === 'pat-w1');
+    assert.equal(p.unitId, 'unit1');
+    assert.equal(p.wardId, 'ward1');
+    assert.equal(p.ward, 'Ward One');
+  });
+
+  test('sync ward validation: a wardId belonging to a different unit is dropped (unitId still correct)', async () => {
+    // ward2 sits under unit2, not unit1 — pg1's patient (pat-w1) is pinned to
+    // unit1, so the server must clear the mismatched wardId rather than trust it.
+    const r = await syncPost(srv.baseUrl, tokens.pg1, {
+      since: 0, changes: [{ id: 'pat-w1', wardId: 'ward2', name: 'Patient of pg1', updatedAt: Date.now() + 25 }]
+    });
+    assert.equal(r.status, 200);
+    const pull = await syncPost(srv.baseUrl, tokens.root, { since: 0, changes: [] });
+    const p = pull.json.patients.find(x => x.id === 'pat-w1');
+    assert.equal(p.unitId, 'unit1');
+    assert.equal('wardId' in p, false);
   });
 
   test('backup/export/import/diag are instance-admin-only when flag on', async () => {
