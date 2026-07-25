@@ -17,10 +17,10 @@ describe('admin tree/stats builders', () => {
     await store.createHospital({ id: 'h1', orgId: 'o1', name: 'City Hospital' });
     await store.createDepartment({ id: 'w1', hospitalId: 'h1', name: 'Ortho', specialty: 'ortho' });
     await store.createDepartment({ id: 'w2', hospitalId: 'h1', name: 'Surgery', specialty: 'surgery' });
-    await store.createWard({ id: 'wA', departmentId: 'w1', name: 'Ward A' });
-    await store.createWard({ id: 'wB', departmentId: 'w2', name: 'Ward B' });
-    await store.createUnit({ id: 'uA1', wardId: 'wA', name: 'Bay 1' });
-    await store.createUnit({ id: 'uB1', wardId: 'wB', name: 'Bay 2' });
+    await store.createUnit({ id: 'uA1', departmentId: 'w1', name: 'Bay 1' });
+    await store.createUnit({ id: 'uB1', departmentId: 'w2', name: 'Bay 2' });
+    await store.createWard({ id: 'wA', unitId: 'uA1', name: 'Ward A' });
+    await store.createWard({ id: 'wB', unitId: 'uB1', name: 'Ward B' });
     const mkUser = (id, orgId, wardId, role = 'member', active = true) => store.createUser({
       id, username: id, passwordHash: 'h', passwordSalt: 's', role, active,
       tokenVersion: 0, createdAt: Date.now(), orgId, wardId
@@ -29,20 +29,22 @@ describe('admin tree/stats builders', () => {
     await mkUser('u2', 'o1', 'w1', 'member', false);
     await mkUser('u3', 'o1', null, 'admin');
     await mkUser('ux', 'o2', null, 'admin');
-    const put = (id, unitId, status, updatedAt, deleted = 0) => store.upsertPatient(
-      id, updatedAt, deleted, JSON.stringify({ id, unitId, status, updatedAt })
+    const put = (id, unitId, status, updatedAt, opts = {}) => store.upsertPatient(
+      id, updatedAt, opts.deleted || 0,
+      JSON.stringify({ id, unitId, wardId: opts.wardId, status, updatedAt })
     );
-    await put('p1', 'uA1', 'postop', 1000);
-    await put('p2', 'uA1', 'postop', 3000);
+    // p1, p2 carry the optional wardId (wA); p3/p7 are unit-scoped only, no ward.
+    await put('p1', 'uA1', 'postop', 1000, { wardId: 'wA' });
+    await put('p2', 'uA1', 'postop', 3000, { wardId: 'wA' });
     await put('p3', 'uA1', 'preop', 2000);
-    await put('p4', 'uB1', 'conservative', 500);
-    await put('p5', 'uA1', 'postop', 4000, 1);          // deleted — excluded
-    await put('p6', undefined, 'postop', 100);           // unassigned — org counts exclude it
-    await put('p7', 'uA1', 'weird-status', 50);          // counted live, no bucket
+    await put('p4', 'uB1', 'conservative', 500, { wardId: 'wB' });
+    await put('p5', 'uA1', 'postop', 4000, { deleted: 1 });   // deleted — excluded
+    await put('p6', undefined, 'postop', 100);                // unassigned — org counts exclude it
+    await put('p7', 'uA1', 'weird-status', 50);                // counted live, no bucket, no ward
   });
   after(async () => { await store.close(); fs.rmSync(dataDir, { recursive: true, force: true }); });
 
-  test('buildOrgTree computes totals, per-department/ward/unit stats, lastActivity', async () => {
+  test('buildOrgTree computes totals, per-department/unit/ward stats, lastActivity', async () => {
     const tree = await buildOrgTree(store, 'o1');
     assert.deepEqual(tree.totals, {
       hospitals: 1, departments: 2, wards: 2, units: 2, usersActive: 2, usersDisabled: 1, livePatients: 5
@@ -60,27 +62,30 @@ describe('admin tree/stats builders', () => {
     assert.equal(dep2.stats.lastActivity, 500);
     assert.equal(dep2.stats.users, 0);
 
-    const wardA = dep1.wards.find(w => w.id === 'wA');
-    assert.deepEqual(wardA.stats, {
-      livePatients: 4,
-      byStatus: { postop: 2, preop: 1, conservative: 0, fordischarge: 0 },
-      users: 0,
-      lastActivity: 3000
-    });
-    const wardB = dep2.wards.find(w => w.id === 'wB');
-    assert.equal(wardB.stats.livePatients, 1);
-    assert.equal(wardB.stats.lastActivity, 500);
-
-    const unitA1 = wardA.units.find(u => u.id === 'uA1');
+    const unitA1 = dep1.units.find(u => u.id === 'uA1');
     assert.deepEqual(unitA1.stats, {
       livePatients: 4,
       byStatus: { postop: 2, preop: 1, conservative: 0, fordischarge: 0 },
       users: 0,
       lastActivity: 3000
     });
-    const unitB1 = wardB.units.find(u => u.id === 'uB1');
+    const unitB1 = dep2.units.find(u => u.id === 'uB1');
     assert.equal(unitB1.stats.livePatients, 1);
     assert.equal(unitB1.stats.lastActivity, 500);
+
+    // Ward stats only count patients carrying that optional wardId — a
+    // strict subset of the unit's patients (p3/p7 sit under uA1 but have no
+    // wardId, so wA's count is 2, not 4).
+    const wardA = unitA1.wards.find(w => w.id === 'wA');
+    assert.deepEqual(wardA.stats, {
+      livePatients: 2,
+      byStatus: { postop: 2, preop: 0, conservative: 0, fordischarge: 0 },
+      users: 0,
+      lastActivity: 3000
+    });
+    const wardB = unitB1.wards.find(w => w.id === 'wB');
+    assert.equal(wardB.stats.livePatients, 1);
+    assert.equal(wardB.stats.lastActivity, 500);
   });
 
   test('empty org tree is well-formed', async () => {

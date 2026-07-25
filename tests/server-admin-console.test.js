@@ -48,24 +48,24 @@ describe('admin console — end-to-end provisioning flow (flag on)', () => {
     department2Id = w2.json.id;
   });
 
-  test('org admin creates a ward under their department, then a unit under that ward', async () => {
-    const ward = await api(srv.baseUrl, boss, '/api/admin/wards', { method: 'POST', body: { departmentId, name: 'Ward A' } });
-    assert.equal(ward.status, 200);
-    assert.equal(ward.json.departmentId, departmentId);
-    wardId = ward.json.id;
-
-    const unit = await api(srv.baseUrl, boss, '/api/admin/units', { method: 'POST', body: { wardId, name: 'Bay 1' } });
+  test('org admin creates a unit under their department, then a ward under that unit', async () => {
+    const unit = await api(srv.baseUrl, boss, '/api/admin/units', { method: 'POST', body: { departmentId, name: 'Bay 1' } });
     assert.equal(unit.status, 200);
-    assert.equal(unit.json.wardId, wardId);
+    assert.equal(unit.json.departmentId, departmentId);
     unitId = unit.json.id;
+
+    const ward = await api(srv.baseUrl, boss, '/api/admin/wards', { method: 'POST', body: { unitId, name: 'Ward A' } });
+    assert.equal(ward.status, 200);
+    assert.equal(ward.json.unitId, unitId);
+    wardId = ward.json.id;
   });
 
   test('ward/unit validation: bad names, missing parents', async () => {
-    assert.equal((await api(srv.baseUrl, boss, '/api/admin/wards', { method: 'POST', body: { departmentId, name: '' } })).status, 400);
-    assert.equal((await api(srv.baseUrl, boss, '/api/admin/wards', { method: 'POST', body: { departmentId, name: 'x'.repeat(81) } })).status, 400);
-    assert.equal((await api(srv.baseUrl, boss, '/api/admin/wards', { method: 'POST', body: { departmentId: 'nonexistent', name: 'X' } })).status, 404);
-    assert.equal((await api(srv.baseUrl, boss, '/api/admin/units', { method: 'POST', body: { wardId, name: '' } })).status, 400);
-    assert.equal((await api(srv.baseUrl, boss, '/api/admin/units', { method: 'POST', body: { wardId: 'nonexistent', name: 'X' } })).status, 404);
+    assert.equal((await api(srv.baseUrl, boss, '/api/admin/units', { method: 'POST', body: { departmentId, name: '' } })).status, 400);
+    assert.equal((await api(srv.baseUrl, boss, '/api/admin/units', { method: 'POST', body: { departmentId, name: 'x'.repeat(81) } })).status, 400);
+    assert.equal((await api(srv.baseUrl, boss, '/api/admin/units', { method: 'POST', body: { departmentId: 'nonexistent', name: 'X' } })).status, 404);
+    assert.equal((await api(srv.baseUrl, boss, '/api/admin/wards', { method: 'POST', body: { unitId, name: '' } })).status, 400);
+    assert.equal((await api(srv.baseUrl, boss, '/api/admin/wards', { method: 'POST', body: { unitId: 'nonexistent', name: 'X' } })).status, 404);
   });
 
   test('org admin creates a member into a department; member syncs scoped', async () => {
@@ -99,13 +99,14 @@ describe('admin console — end-to-end provisioning flow (flag on)', () => {
     assert.equal(dep.stats.byStatus.postop, 0);
     assert.equal(dep.stats.users, 1); // user counting still keys off the legacy wardId field
     assert.equal(dep.stats.lastActivity, null);
-    const ward = dep.wards.find(w => w.id === wardId);
-    assert.ok(ward, 'ward nested under its department');
-    assert.equal(ward.name, 'Ward A');
-    const unit = ward.units.find(u => u.id === unitId);
-    assert.ok(unit, 'unit nested under its ward');
+    const unit = dep.units.find(u => u.id === unitId);
+    assert.ok(unit, 'unit nested under its department');
     assert.equal(unit.name, 'Bay 1');
     assert.deepEqual(unit.stats.byStatus, { postop: 0, preop: 0, conservative: 0, fordischarge: 0 });
+    const ward = unit.wards.find(w => w.id === wardId);
+    assert.ok(ward, 'ward nested under its unit');
+    assert.equal(ward.name, 'Ward A');
+    assert.deepEqual(ward.stats.byStatus, { postop: 0, preop: 0, conservative: 0, fordischarge: 0 });
   });
 
   test('org-scoped user list; node-based assign takes effect on next request', async () => {
@@ -151,8 +152,8 @@ describe('admin console — end-to-end provisioning flow (flag on)', () => {
     const boss2 = (await login(srv.baseUrl, 'boss2', a2.json.temporaryPassword)).json.token;
 
     assert.equal((await api(srv.baseUrl, boss2, '/api/admin/departments', { method: 'POST', body: { hospitalId, name: 'Sneaky' } })).status, 403);
-    assert.equal((await api(srv.baseUrl, boss2, '/api/admin/wards', { method: 'POST', body: { departmentId, name: 'Sneaky Ward' } })).status, 403);
-    assert.equal((await api(srv.baseUrl, boss2, '/api/admin/units', { method: 'POST', body: { wardId, name: 'Sneaky Unit' } })).status, 403);
+    assert.equal((await api(srv.baseUrl, boss2, '/api/admin/units', { method: 'POST', body: { departmentId, name: 'Sneaky Unit' } })).status, 403);
+    assert.equal((await api(srv.baseUrl, boss2, '/api/admin/wards', { method: 'POST', body: { unitId, name: 'Sneaky Ward' } })).status, 403);
     assert.equal((await api(srv.baseUrl, boss2, `/api/admin/users/${memberId}/assign`, { method: 'POST', body: { nodeId: null } })).status, 403);
     assert.equal((await api(srv.baseUrl, boss2, `/api/admin/users/${memberId}/disable`, { method: 'POST' })).status, 403);
     const list2 = await api(srv.baseUrl, boss2, '/api/admin/users');

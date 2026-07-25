@@ -10,7 +10,7 @@ function parseLivePatients(rows){
   for(const row of rows){
     try{
       const obj = JSON.parse(row.data);
-      out.push({ unitId: obj?.unitId, status: obj?.status, updatedAt: row.updatedAt });
+      out.push({ unitId: obj?.unitId, wardId: obj?.wardId, status: obj?.status, updatedAt: row.updatedAt });
     }catch{ /* malformed row — skip */ }
   }
   return out;
@@ -35,12 +35,11 @@ export async function buildOrgTree(store, orgId){
 
   const outHospitals = [];
   const departmentStats = new Map(); // departmentId -> stats object (shared with output)
-  const wardStats = new Map();       // wardId -> stats object
   const unitStats = new Map();       // unitId -> stats object
-  const unitToWard = new Map();
+  const wardStats = new Map();       // wardId -> stats object
   const unitToDepartment = new Map();
 
-  let wardCount = 0, unitCount = 0;
+  let unitCount = 0, wardCount = 0;
 
   for(const h of hospitals){
     const departments = await store.listDepartmentsByHospital(h.id);
@@ -49,26 +48,25 @@ export async function buildOrgTree(store, orgId){
       const depStats = emptyStats();
       departmentStats.set(dep.id, depStats);
 
-      const wards = await store.listUnitsByDepartment(dep.id);
-      const outWards = [];
-      for(const ward of wards){
-        wardCount++;
-        const wStats = emptyStats();
-        wardStats.set(ward.id, wStats);
+      const units = await store.listUnitsByDepartment(dep.id);
+      const outUnits = [];
+      for(const unit of units){
+        unitCount++;
+        const uStats = emptyStats();
+        unitStats.set(unit.id, uStats);
+        unitToDepartment.set(unit.id, dep.id);
 
-        const units = await store.listWardsByUnit(ward.id);
-        const outUnits = [];
-        for(const unit of units){
-          unitCount++;
-          const uStats = emptyStats();
-          unitStats.set(unit.id, uStats);
-          unitToWard.set(unit.id, ward.id);
-          unitToDepartment.set(unit.id, dep.id);
-          outUnits.push({ id: unit.id, name: unit.name, stats: uStats });
+        const wards = await store.listWardsByUnit(unit.id);
+        const outWards = [];
+        for(const ward of wards){
+          wardCount++;
+          const wStats = emptyStats();
+          wardStats.set(ward.id, wStats);
+          outWards.push({ id: ward.id, name: ward.name, stats: wStats });
         }
-        outWards.push({ id: ward.id, name: ward.name, stats: wStats, units: outUnits });
+        outUnits.push({ id: unit.id, name: unit.name, stats: uStats, wards: outWards });
       }
-      outDepartments.push({ id: dep.id, name: dep.name, specialty: dep.specialty, stats: depStats, wards: outWards });
+      outDepartments.push({ id: dep.id, name: dep.name, specialty: dep.specialty, stats: depStats, units: outUnits });
     }
     outHospitals.push({ id: h.id, name: h.name, departments: outDepartments });
   }
@@ -89,10 +87,12 @@ export async function buildOrgTree(store, orgId){
     if(!uStats) continue; // other orgs' units, or unassigned
     livePatients++;
     addPatientToStats(uStats, p);
-    const wardId = unitToWard.get(p.unitId);
-    if(wardId) addPatientToStats(wardStats.get(wardId), p);
     const depId = unitToDepartment.get(p.unitId);
     if(depId) addPatientToStats(departmentStats.get(depId), p);
+    // Ward is an optional location under the unit — only patients carrying
+    // that specific wardId count at the ward level (a subset of the unit's
+    // patients, not everyone under the unit).
+    if(p.wardId && wardStats.has(p.wardId)) addPatientToStats(wardStats.get(p.wardId), p);
   }
 
   let departments = 0;
@@ -112,50 +112,47 @@ export async function buildOrgTree(store, orgId){
   };
 }
 
-/* Builds a nested department->ward->unit tree scoped to a single node in the
+/* Builds a nested department->unit->ward tree scoped to a single node in the
    hierarchy (as opposed to buildOrgTree, which always returns a whole org).
    Used by GET /api/me/scope so a non-admin member (or a dept/org admin) can
    fetch just their own subtree for the patient-form unit picker, without the
    admin-only /api/admin/org route's org-wide access check. Names + ids only
    — no stats, this isn't the admin console. */
-// NOTE (Ward/Unit Re-model Task 1, step 5): mechanical rename only, shape
-// still assumes the OLD department->ward->unit nesting. Task 5 owns
-// rewriting buildScopeTree/buildOrgTree to department->unit->ward.
-async function wardBranch(store, ward, onlyUnitId){
-  const units = await store.listWardsByUnit(ward.id);
-  const outUnits = onlyUnitId ? units.filter(u => u.id === onlyUnitId) : units;
-  return { id: ward.id, name: ward.name, units: outUnits.map(u => ({ id: u.id, name: u.name })) };
+async function unitBranch(store, unit, onlyWardId){
+  const wards = await store.listWardsByUnit(unit.id);
+  const outWards = onlyWardId ? wards.filter(w => w.id === onlyWardId) : wards;
+  return { id: unit.id, name: unit.name, wards: outWards.map(w => ({ id: w.id, name: w.name })) };
 }
 
-async function departmentBranch(store, dep, onlyWardId, onlyUnitId){
-  const wards = await store.listUnitsByDepartment(dep.id);
-  const outWards = [];
-  for(const ward of wards){
-    if(onlyWardId && ward.id !== onlyWardId) continue;
-    outWards.push(await wardBranch(store, ward, onlyUnitId));
+async function departmentBranch(store, dep, onlyUnitId, onlyWardId){
+  const units = await store.listUnitsByDepartment(dep.id);
+  const outUnits = [];
+  for(const unit of units){
+    if(onlyUnitId && unit.id !== onlyUnitId) continue;
+    outUnits.push(await unitBranch(store, unit, onlyWardId));
   }
-  return { id: dep.id, name: dep.name, wards: outWards };
+  return { id: dep.id, name: dep.name, units: outUnits };
 }
 
 export async function buildScopeTree(store, node){
   const empty = { departments: [] };
   if(!node || !node.id) return empty;
   switch(node.type){
-    case 'unit': {
-      const unit = await store.getUnit(node.id);
-      if(!unit) return empty;
-      const ward = await store.getWard(unit.wardId);
-      if(!ward) return empty;
-      const dep = await store.getDepartment(ward.departmentId);
-      if(!dep) return empty;
-      return { departments: [await departmentBranch(store, dep, ward.id, unit.id)] };
-    }
     case 'ward': {
       const ward = await store.getWard(node.id);
       if(!ward) return empty;
-      const dep = await store.getDepartment(ward.departmentId);
+      const unit = await store.getUnit(ward.unitId);
+      if(!unit) return empty;
+      const dep = await store.getDepartment(unit.departmentId);
       if(!dep) return empty;
-      return { departments: [await departmentBranch(store, dep, ward.id, null)] };
+      return { departments: [await departmentBranch(store, dep, unit.id, ward.id)] };
+    }
+    case 'unit': {
+      const unit = await store.getUnit(node.id);
+      if(!unit) return empty;
+      const dep = await store.getDepartment(unit.departmentId);
+      if(!dep) return empty;
+      return { departments: [await departmentBranch(store, dep, unit.id, null)] };
     }
     case 'department': {
       const dep = await store.getDepartment(node.id);
