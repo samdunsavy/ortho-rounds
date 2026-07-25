@@ -2,11 +2,11 @@
    emptiness checks, and idempotent server-authoritative re-stamping of
    patient ancestry. Pure store-interface consumers.
    See docs/superpowers/specs/2026-07-23-structural-operations-design.md. */
-import { resolveAncestry, listUnitIdsUnder } from './hierarchy.js';
+import { resolveAncestry, listUnitIdsUnder, wardUnitId } from './hierarchy.js';
 
 export const NODE_TYPES = ['org','hospital','department','ward','unit'];
-export const PARENT_TYPE = { department: 'hospital', ward: 'department', unit: 'ward' };
-const PARENT_FIELD = { department: 'hospitalId', ward: 'departmentId', unit: 'wardId' };
+export const PARENT_TYPE = { department: 'hospital', unit: 'department', ward: 'unit' };
+const PARENT_FIELD = { department: 'hospitalId', unit: 'departmentId', ward: 'unitId' };
 
 export async function getNode(store, type, id){
   switch(type){
@@ -26,23 +26,21 @@ export async function nodeOrgId(store, type, id){
     case 'org': return node.id;
     case 'hospital': return node.orgId;
     case 'department': return nodeOrgId(store, 'hospital', node.hospitalId);
-    case 'ward': return nodeOrgId(store, 'department', node.departmentId);
-    case 'unit': return nodeOrgId(store, 'ward', node.wardId);
+    case 'unit': return nodeOrgId(store, 'department', node.departmentId);
+    case 'ward': return nodeOrgId(store, 'unit', node.unitId);
     default: return null;
   }
 }
 
-// NOTE (Ward/Unit Re-model Task 1, step 5): mechanical rename only — case
-// labels/shape unchanged, only the removed method names were swapped for
-// ones that exist post-flip so this module loads. Task 4 owns re-deriving
-// the correct department->unit->ward parent/child shape here.
+// Department -> Unit -> Ward. Unit is the scoping/patient-pinning node;
+// ward is an optional leaf location under a unit (Task 4).
 export async function childrenOf(store, type, id){
   switch(type){
     case 'org': return await store.listHospitalsByOrg(id);
     case 'hospital': return await store.listDepartmentsByHospital(id);
     case 'department': return await store.listUnitsByDepartment(id);
-    case 'ward': return await store.listWardsByUnit(id);
-    case 'unit': return [];
+    case 'unit': return await store.listWardsByUnit(id);
+    case 'ward': return [];
     default: return [];
   }
 }
@@ -52,11 +50,18 @@ export async function unitIdsUnder(store, type, id){
 }
 
 async function labelStamp(store, o, a){
-  Object.assign(o, a);
+  Object.assign(o, a); // sets unitId/departmentId/hospitalId/orgId from the 4-key ancestry; never touches o.wardId
   const unit = await store.getUnit(a.unitId);
-  const ward = await store.getWard(a.wardId);
   if(unit) o.unit = unit.name;
-  if(ward) o.ward = ward.name;
+  // Ward is optional and not part of ancestry: keep the patient's own wardId
+  // only if it still sits under the (possibly new) unit; else drop it.
+  if(o.wardId && (await wardUnitId(store, o.wardId)) === a.unitId){
+    const ward = await store.getWard(o.wardId);
+    if(ward) o.ward = ward.name; else { delete o.wardId; delete o.ward; }
+  } else {
+    delete o.wardId;
+    delete o.ward;
+  }
   return o;
 }
 
