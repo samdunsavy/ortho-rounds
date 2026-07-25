@@ -3613,23 +3613,23 @@ function bindAuthEvents(){
       catch(err){ showToast(err.message); }
       return;
     }
-    const addWard = e.target.closest('[data-add-ward]');
-    if(addWard){
-      const did = addWard.dataset.addWard;
-      const input = document.querySelector(`[data-new-ward-name="${did}"]`);
+    const addUnit = e.target.closest('[data-add-unit]');
+    if(addUnit){
+      const did = addUnit.dataset.addUnit;
+      const input = document.querySelector(`[data-new-unit-name="${did}"]`);
       const name = input?.value.trim();
       if(!name) return;
-      try{ await api('/api/admin/wards', { method: 'POST', body: JSON.stringify({ departmentId: did, name }) }); await loadAdminView(); }
+      try{ await api('/api/admin/units', { method: 'POST', body: JSON.stringify({ departmentId: did, name }) }); await loadAdminView(); }
       catch(err){ showToast(err.message); }
       return;
     }
-    const addUnit = e.target.closest('[data-add-unit]');
-    if(addUnit){
-      const wid = addUnit.dataset.addUnit;
-      const input = document.querySelector(`[data-new-unit-name="${wid}"]`);
+    const addWard = e.target.closest('[data-add-ward]');
+    if(addWard){
+      const uid = addWard.dataset.addWard;
+      const input = document.querySelector(`[data-new-ward-name="${uid}"]`);
       const name = input?.value.trim();
       if(!name) return;
-      try{ await api('/api/admin/units', { method: 'POST', body: JSON.stringify({ wardId: wid, name }) }); await loadAdminView(); }
+      try{ await api('/api/admin/wards', { method: 'POST', body: JSON.stringify({ unitId: uid, name }) }); await loadAdminView(); }
       catch(err){ showToast(err.message); }
       return;
     }
@@ -6240,12 +6240,13 @@ function renderDischarged(){
   });
 }
 
-/* ---------------- patient form: dept/ward/unit picker (MULTI_TENANT) ----------------
+/* ---------------- patient form: dept/unit/ward picker (MULTI_TENANT) ----------------
    Replaces the legacy free-text f_ward/f_unit inputs with three dependent
-   <select>s (f_department/f_ward/f_unit) sourced from the caller's own scope
+   <select>s (f_department/f_unit/f_ward) sourced from the caller's own scope
    subtree (GET /api/me/scope). The server derives ancestry + ward/unit
    labels from the posted unitId (see decideWrite in scope.js) — this picker
-   only ever needs to persist unitId, never trust/write ward/unit strings. */
+   only ever needs to persist unitId (required) and optionally wardId, never
+   trust/write ward/unit strings. */
 
 let cachedScopeTree = null; // { assignment, tree } — fetched once per page session
 
@@ -6271,40 +6272,38 @@ function fillSelect(el, items, placeholder){
   el.innerHTML = opts.join('');
 }
 
-function populateUnitSelect(tree, departmentId, wardId, selectedUnitId){
+function populateUnitSelect(tree, departmentId, selectedUnitId, selectedWardId){
   const unitEl = document.getElementById('f_unit');
   const dep = (tree.departments || []).find(x => x.id === departmentId);
-  const ward = dep ? (dep.wards || []).find(w => w.id === wardId) : null;
-  const units = ward ? (ward.units || []) : [];
+  const units = dep ? (dep.units || []) : [];
   fillSelect(unitEl, units, 'Select unit');
   // Auto-select when there's only one option — genuine choices (2+ units)
   // are left blank for the PG to pick.
   let uid = selectedUnitId || '';
   if(!uid && units.length === 1) uid = units[0].id;
   if(unitEl) unitEl.value = uid;
+  populateWardSelect(tree, departmentId, unitEl ? unitEl.value : '', selectedWardId);
 }
 
-function populateWardSelect(tree, departmentId, selectedWardId, selectedUnitId){
+function populateWardSelect(tree, departmentId, unitId, selectedWardId){
   const wardEl = document.getElementById('f_ward');
   const dep = (tree.departments || []).find(x => x.id === departmentId);
-  const wards = dep ? (dep.wards || []) : [];
-  fillSelect(wardEl, wards, 'Select ward');
-  let wid = selectedWardId || '';
-  if(!wid && wards.length === 1) wid = wards[0].id;
+  const unit = dep ? (dep.units || []).find(u => u.id === unitId) : null;
+  const wards = unit ? (unit.wards || []) : [];
+  fillSelect(wardEl, wards, '— none —');
+  // Ward is always optional — never auto-selected, even when unambiguous.
+  const wid = wards.some(w => w.id === selectedWardId) ? selectedWardId : '';
   if(wardEl) wardEl.value = wid;
-  populateUnitSelect(tree, departmentId, wardEl ? wardEl.value : '', selectedUnitId);
 }
 
-// Returns the {departmentId,wardId,unitId} chain when the scope tree
-// contains exactly one unit total, otherwise null.
+// Returns the {departmentId,unitId} chain when the scope tree contains
+// exactly one unit total, otherwise null.
 function findSingleUnitChain(tree){
   let chain = null, count = 0;
   for(const dep of (tree.departments || [])){
-    for(const ward of (dep.wards || [])){
-      for(const unit of (ward.units || [])){
-        count++;
-        chain = { departmentId: dep.id, wardId: ward.id, unitId: unit.id };
-      }
+    for(const unit of (dep.units || [])){
+      count++;
+      chain = { departmentId: dep.id, unitId: unit.id };
     }
   }
   return count === 1 ? chain : null;
@@ -6312,37 +6311,38 @@ function findSingleUnitChain(tree){
 
 async function populateScopePicker(d){
   const depEl = document.getElementById('f_department');
-  const wardEl = document.getElementById('f_ward');
   const unitEl = document.getElementById('f_unit');
-  if(!depEl || !wardEl || !unitEl) return; // legacy free-text form (flag off) — nothing to wire up
+  const wardEl = document.getElementById('f_ward');
+  if(!depEl || !unitEl || !wardEl) return; // legacy free-text form (flag off) — nothing to wire up
 
   const { tree } = await loadScopeTree();
   fillSelect(depEl, tree.departments, 'Select department');
 
   const single = findSingleUnitChain(tree);
   let selDep = d.departmentId || '';
-  let selWard = d.wardId || '';
   let selUnit = d.unitId || '';
+  const selWard = d.wardId || '';
   if(!selUnit && single){
     selDep = single.departmentId;
-    selWard = single.wardId;
     selUnit = single.unitId;
   }
 
   // Auto-select an unambiguous department even when the unit itself still
-  // needs a manual choice (e.g. one department/one ward but several units).
+  // needs a manual choice (e.g. one department but several units).
   if(!selDep && (tree.departments || []).length === 1) selDep = tree.departments[0].id;
 
   depEl.value = selDep;
-  populateWardSelect(tree, depEl.value, selWard, selUnit);
+  populateUnitSelect(tree, depEl.value, selUnit, selWard);
 
-  depEl.onchange = () => populateWardSelect(tree, depEl.value, '', '');
-  wardEl.onchange = () => populateUnitSelect(tree, depEl.value, wardEl.value, '');
+  depEl.onchange = () => populateUnitSelect(tree, depEl.value, '', '');
+  unitEl.onchange = () => populateWardSelect(tree, depEl.value, unitEl.value, '');
 
   const lock = !!single;
   depEl.disabled = lock;
-  wardEl.disabled = lock;
   unitEl.disabled = lock;
+  // Ward stays optional/unlocked regardless — a single-unit member can still
+  // choose (or skip) a specific ward under that unit.
+  wardEl.disabled = false;
 }
 
 /* ---------------- ADD / EDIT MODAL ---------------- */
@@ -6386,6 +6386,8 @@ function readModalFieldsToObject(){
   d.bed = document.getElementById('f_bed')?.value.trim() || '';
   if(scopePickerActive()){
     d.unitId = document.getElementById('f_unit')?.value || '';
+    const wardVal = document.getElementById('f_ward')?.value || '';
+    if(wardVal) d.wardId = wardVal; else delete d.wardId;
   }else{
     d.ward = document.getElementById('f_ward')?.value.trim() || '';
     d.unit = document.getElementById('f_unit')?.value.trim() || '';
@@ -6520,10 +6522,10 @@ function renderModalForm(d){
     ${scopedPicker ? `
     <div class="form-row two">
       <div><label>Department</label><select id="f_department"></select></div>
-      <div><label>Ward</label><select id="f_ward"></select></div>
+      <div><label>Unit</label><select id="f_unit"></select></div>
     </div>
     <div class="form-row two">
-      <div><label>Unit</label><select id="f_unit"></select></div>
+      <div><label>Ward (optional)</label><select id="f_ward"></select></div>
       <div><label>Assigned PG</label><input id="f_assignedPg" value="${escapeHTML(d.assignedPg||'')}" placeholder="Initials e.g. AK" maxlength="6"></div>
     </div>
     <div class="form-row two">
@@ -7425,6 +7427,8 @@ async function savePatientFromModal(){
       // (see decideWrite in scope.js) — never write ward/unit strings here.
       d.unitId = document.getElementById('f_unit')?.value || '';
       if(!d.unitId){ showToast('Please select a unit'); return; }
+      const wardVal = document.getElementById('f_ward')?.value || '';
+      if(wardVal) d.wardId = wardVal; else delete d.wardId;
     }else{
       d.ward = document.getElementById('f_ward').value.trim();
       d.unit = document.getElementById('f_unit')?.value.trim() || '';
@@ -7744,17 +7748,17 @@ function renderAdminStatusBar(byStatus, total){
     seg(byStatus.fordischarge, 'var(--status-fordischarge)')}</div>`;
 }
 
-function renderAdminWardRowHTML(w){
-  const chips = w.units.map(u => `
-    <span class="admin-unit-chip" data-unit-id="${escapeHTML(u.id)}">${escapeHTML(u.name)} <span class="small-muted">(${u.stats.livePatients})</span></span>`
-  ).join('') || '<span class="small-muted">No units yet</span>';
+function renderAdminUnitRowHTML(u){
+  const chips = u.wards.map(w => `
+    <span class="admin-ward-chip" data-ward-id="${escapeHTML(w.id)}">${escapeHTML(w.name)} <span class="small-muted">(${w.stats.livePatients})</span></span>`
+  ).join('') || '<span class="small-muted">No wards yet</span>';
   return `
-    <div class="admin-ward-row" data-ward-id="${escapeHTML(w.id)}">
-      <div><strong>${escapeHTML(w.name)}</strong> <span class="small-muted">${w.stats.livePatients} live patient${w.stats.livePatients === 1 ? '' : 's'} · ${w.stats.users} user${w.stats.users === 1 ? '' : 's'}</span></div>
-      <div class="admin-unit-chips">${chips}</div>
+    <div class="admin-unit-row" data-unit-id="${escapeHTML(u.id)}">
+      <div><strong>${escapeHTML(u.name)}</strong> <span class="small-muted">${u.stats.livePatients} live patient${u.stats.livePatients === 1 ? '' : 's'} · ${u.stats.users} user${u.stats.users === 1 ? '' : 's'}</span></div>
+      <div class="admin-ward-chips">${chips}</div>
       <div class="admin-inline-form">
-        <input placeholder="New unit name" data-new-unit-name="${escapeHTML(w.id)}">
-        <button class="btn" data-add-unit="${escapeHTML(w.id)}">Add unit</button>
+        <input placeholder="New ward name" data-new-ward-name="${escapeHTML(u.id)}">
+        <button class="btn" data-add-ward="${escapeHTML(u.id)}">Add ward</button>
       </div>
     </div>`;
 }
@@ -7770,12 +7774,12 @@ function renderAdminOrgSectionHTML(tree){
             <div class="small-muted">${dep.stats.livePatients} live patient${dep.stats.livePatients === 1 ? '' : 's'} · ${dep.stats.users} user${dep.stats.users === 1 ? '' : 's'}</div>
             ${renderAdminStatusBar(dep.stats.byStatus, dep.stats.livePatients)}
             <div class="small-muted">${dep.stats.lastActivity ? 'Active ' + formatRelativeTime(dep.stats.lastActivity) : 'No activity yet'}</div>
-            <div class="admin-ward-list">
-              ${dep.wards.map(renderAdminWardRowHTML).join('') || '<div class="small-muted">No wards yet</div>'}
+            <div class="admin-unit-list">
+              ${dep.units.map(renderAdminUnitRowHTML).join('') || '<div class="small-muted">No units yet</div>'}
             </div>
             <div class="admin-inline-form">
-              <input placeholder="New ward name" data-new-ward-name="${escapeHTML(dep.id)}">
-              <button class="btn" data-add-ward="${escapeHTML(dep.id)}">Add ward</button>
+              <input placeholder="New unit name" data-new-unit-name="${escapeHTML(dep.id)}">
+              <button class="btn" data-add-unit="${escapeHTML(dep.id)}">Add unit</button>
             </div>
           </div>`).join('')}
       </div>
@@ -7792,18 +7796,18 @@ function renderAdminOrgSectionHTML(tree){
 }
 
 // Walks the tree into per-level groups so the assignment <select> can render
-// an <optgroup> per node type (hospital/department/ward/unit). Option values
+// an <optgroup> per node type (hospital/department/unit/ward). Option values
 // encode "type:id" — the change handler below splits on the first ":".
 function buildAssignNodeGroups(tree){
-  const groups = { hospital: [], department: [], ward: [], unit: [] };
+  const groups = { hospital: [], department: [], unit: [], ward: [] };
   for(const h of tree.hospitals){
     groups.hospital.push({ id: h.id, label: h.name });
     for(const dep of h.departments){
       groups.department.push({ id: dep.id, label: `${dep.name} (${h.name})` });
-      for(const w of dep.wards){
-        groups.ward.push({ id: w.id, label: `${w.name} (${dep.name})` });
-        for(const u of w.units){
-          groups.unit.push({ id: u.id, label: `${u.name} (${w.name})` });
+      for(const u of dep.units){
+        groups.unit.push({ id: u.id, label: `${u.name} (${dep.name})` });
+        for(const w of u.wards){
+          groups.ward.push({ id: w.id, label: `${w.name} (${u.name})` });
         }
       }
     }
@@ -7818,8 +7822,8 @@ function renderAssignSelectOptionsHTML(groups, selType, selId){
   return `<option value="">— none —</option>` +
     optgroup('Hospitals', 'hospital', groups.hospital) +
     optgroup('Departments', 'department', groups.department) +
-    optgroup('Wards', 'ward', groups.ward) +
-    optgroup('Units', 'unit', groups.unit);
+    optgroup('Units', 'unit', groups.unit) +
+    optgroup('Wards', 'ward', groups.ward);
 }
 
 function renderAdminUsersSectionHTML(tree, users){

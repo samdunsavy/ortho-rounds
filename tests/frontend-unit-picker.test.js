@@ -18,16 +18,17 @@ const MODAL_FLOW_INIT_SCRIPT = [
 const SCOPE_TREE_ONE_UNIT = {
   departments: [{
     id: 'dep1', name: 'Ortho',
-    wards: [{ id: 'ward1', name: 'Ward One', units: [{ id: 'u1', name: 'Unit One' }] }]
+    units: [{ id: 'u1', name: 'Unit One', wards: [{ id: 'ward1', name: 'Ward One' }] }]
   }]
 };
 
 const SCOPE_TREE_TWO_UNITS = {
   departments: [{
     id: 'dep1', name: 'Ortho',
-    wards: [{ id: 'ward1', name: 'Ward One', units: [
-      { id: 'u1', name: 'Unit One' }, { id: 'u2', name: 'Unit Two' }
-    ] }]
+    units: [
+      { id: 'u1', name: 'Unit One', wards: [{ id: 'ward1', name: 'Ward One' }] },
+      { id: 'u2', name: 'Unit Two', wards: [] }
+    ]
   }]
 };
 
@@ -40,8 +41,8 @@ function stubScopeFetch(tree, assignment = null){
   };
 }
 
-describe('patient form dept/ward/unit picker (MULTI_TENANT on)', () => {
-  test('a single-unit scope pre-selects and disables the whole chain; saving persists unitId', async () => {
+describe('patient form dept/unit/ward picker (MULTI_TENANT on)', () => {
+  test('a single-unit scope pre-fills+locks department/unit; ward stays optional and unlocked; saving persists unitId only', async () => {
     const { window, document } = loadFrontendEnv({ initScript: MODAL_FLOW_INIT_SCRIPT });
     window.serverFlags = { MULTI_TENANT: true };
     window.fetch = stubScopeFetch(SCOPE_TREE_ONE_UNIT, { type: 'unit', id: 'u1' });
@@ -51,27 +52,30 @@ describe('patient form dept/ward/unit picker (MULTI_TENANT on)', () => {
     await window.openPatientModal(p);
 
     const depEl = document.getElementById('f_department');
-    const wardEl = document.getElementById('f_ward');
     const unitEl = document.getElementById('f_unit');
-    assert.ok(depEl && wardEl && unitEl, 'department/ward/unit selects must be rendered when MULTI_TENANT is on');
+    const wardEl = document.getElementById('f_ward');
+    assert.ok(depEl && unitEl && wardEl, 'department/unit/ward selects must be rendered when MULTI_TENANT is on');
     assert.equal(depEl.tagName, 'SELECT');
-    assert.equal(wardEl.tagName, 'SELECT');
     assert.equal(unitEl.tagName, 'SELECT');
+    assert.equal(wardEl.tagName, 'SELECT');
 
     assert.equal(depEl.value, 'dep1');
-    assert.equal(wardEl.value, 'ward1');
     assert.equal(unitEl.value, 'u1');
+    assert.equal(wardEl.value, '', 'ward is left blank even in a single-unit scope — it stays optional');
     assert.equal(depEl.disabled, true, 'a single-unit scope locks the department select');
-    assert.equal(wardEl.disabled, true, 'a single-unit scope locks the ward select');
     assert.equal(unitEl.disabled, true, 'a single-unit scope locks the unit select');
+    assert.equal(wardEl.disabled, false, 'ward stays optional/unlocked even when the unit is pre-filled');
+    assert.deepEqual([...wardEl.options].map(o => o.value), ['', 'ward1'], 'ward options are scoped to the chosen unit, plus a blank option');
+    assert.match(wardEl.options[0].textContent, /none/i);
 
     await window.savePatientFromModal();
     const saved = window.patients.find(x => x.name === 'One Unit Patient');
     assert.ok(saved, 'patient must have been saved');
     assert.equal(saved.unitId, 'u1');
+    assert.equal('wardId' in saved, false, 'no ward was chosen — wardId key must be absent, not empty-string');
   });
 
-  test('a multi-unit scope leaves the picker enabled and unselected by default; saving without a choice surfaces the validation toast', async () => {
+  test('a multi-unit scope leaves department/unit enabled and unselected; unit is required to save; a chosen ward persists as wardId', async () => {
     const { window, document } = loadFrontendEnv({ initScript: MODAL_FLOW_INIT_SCRIPT });
     window.serverFlags = { MULTI_TENANT: true };
     window.fetch = stubScopeFetch(SCOPE_TREE_TWO_UNITS, null);
@@ -81,13 +85,13 @@ describe('patient form dept/ward/unit picker (MULTI_TENANT on)', () => {
     await window.openPatientModal(p);
 
     const depEl = document.getElementById('f_department');
-    const wardEl = document.getElementById('f_ward');
     const unitEl = document.getElementById('f_unit');
+    const wardEl = document.getElementById('f_ward');
     assert.equal(depEl.disabled, false);
-    assert.equal(wardEl.disabled, false);
     assert.equal(unitEl.disabled, false);
+    assert.equal(wardEl.disabled, false);
     assert.equal(unitEl.value, '', 'no unit is pre-selected when scope has more than one unit');
-    // Both units must be offered once a ward is picked.
+    // Both units must be offered.
     assert.deepEqual([...unitEl.options].map(o => o.value).filter(Boolean).sort(), ['u1', 'u2']);
 
     let toastMsg = null;
@@ -97,16 +101,21 @@ describe('patient form dept/ward/unit picker (MULTI_TENANT on)', () => {
     assert.match(toastMsg || '', /select a unit/i, 'the existing toast validation path must fire');
     assert.equal(window.patients.find(x => x.name === 'Two Unit Patient'), undefined, 'save must be blocked, not silently persisted without a unit');
 
-    // Now actually choose a unit and confirm save succeeds with the right id.
-    unitEl.value = 'u2';
+    // Now choose a unit — the ward select repopulates to that unit's wards, still optional.
+    unitEl.value = 'u1';
+    unitEl.dispatchEvent(new window.Event('change', { bubbles: true }));
+    assert.deepEqual([...wardEl.options].map(o => o.value), ['', 'ward1']);
+
+    wardEl.value = 'ward1';
     await window.savePatientFromModal();
     const saved = window.patients.find(x => x.name === 'Two Unit Patient');
     assert.ok(saved);
-    assert.equal(saved.unitId, 'u2');
+    assert.equal(saved.unitId, 'u1');
+    assert.equal(saved.wardId, 'ward1');
   });
 });
 
-describe('patient form dept/ward/unit picker (MULTI_TENANT off — legacy behavior unchanged)', () => {
+describe('patient form dept/unit/ward picker (MULTI_TENANT off — legacy behavior unchanged)', () => {
   test('renders the legacy free-text ward/unit inputs, not selects', () => {
     const { window, document } = loadFrontendEnv({ initScript: MODAL_FLOW_INIT_SCRIPT });
     window.serverFlags = { MULTI_TENANT: false };

@@ -7,17 +7,17 @@ const TREE = {
   hospitals: [{ id: 'h1', name: 'City Hospital', departments: [
     { id: 'd1', name: 'Ortho', specialty: 'ortho',
       stats: { livePatients: 5, byStatus: { postop: 3, preop: 1, conservative: 1, fordischarge: 0 }, users: 2, lastActivity: Date.now() - 60000 },
-      wards: [
-        { id: 'w1', name: 'Ward A',
+      units: [
+        { id: 'u1', name: 'Unit 1',
           stats: { livePatients: 5, byStatus: { postop: 3, preop: 1, conservative: 1, fordischarge: 0 }, users: 1, lastActivity: Date.now() - 60000 },
-          units: [
-            { id: 'u1', name: 'Unit 1',
+          wards: [
+            { id: 'w1', name: 'Ward A',
               stats: { livePatients: 5, byStatus: { postop: 3, preop: 1, conservative: 1, fordischarge: 0 }, users: 1, lastActivity: Date.now() - 60000 } }
           ] }
       ] },
     { id: 'd2', name: 'Surgery', specialty: 'surgery',
       stats: { livePatients: 2, byStatus: { postop: 2, preop: 0, conservative: 0, fordischarge: 0 }, users: 1, lastActivity: null },
-      wards: [] }
+      units: [] }
   ]}]
 };
 const USERS = [
@@ -38,7 +38,7 @@ describe('admin view rendering', () => {
     assert.equal(window.adminUiVisible(), false);
   });
 
-  test('renderAdminView paints stat tiles, department cards, ward rows, unit chips, and user rows', () => {
+  test('renderAdminView paints stat tiles, department cards, unit rows, ward chips, and user rows', () => {
     const { window, document } = loadFrontendEnv();
     window.renderAdminView(TREE, USERS);
     const tiles = [...document.querySelectorAll('#adminStatTiles .admin-stat-tile')];
@@ -54,19 +54,19 @@ describe('admin view rendering', () => {
     assert.match(cards[0].textContent, /Ortho/);
     assert.ok(cards[0].querySelector('.admin-status-bar'), 'department card has a status bar');
 
-    // one element per ward
-    const wardRows = document.querySelectorAll('#adminOrgSection .admin-ward-row');
-    assert.equal(wardRows.length, 1);
-    assert.match(wardRows[0].textContent, /Ward A/);
-
     // one element per unit
-    const unitChips = document.querySelectorAll('#adminOrgSection .admin-unit-chip');
-    assert.equal(unitChips.length, 1);
-    assert.match(unitChips[0].textContent, /Unit 1/);
+    const unitRows = document.querySelectorAll('#adminOrgSection .admin-unit-row');
+    assert.equal(unitRows.length, 1);
+    assert.match(unitRows[0].textContent, /Unit 1/);
 
-    // per-department add-ward form, per-ward add-unit form
-    assert.ok(document.querySelector('[data-add-ward="d1"]'), 'department has an add-ward control');
-    assert.ok(document.querySelector('[data-add-unit="w1"]'), 'ward has an add-unit control');
+    // one element per ward
+    const wardChips = document.querySelectorAll('#adminOrgSection .admin-ward-chip');
+    assert.equal(wardChips.length, 1);
+    assert.match(wardChips[0].textContent, /Ward A/);
+
+    // per-department add-unit form, per-unit add-ward form
+    assert.ok(document.querySelector('[data-add-unit="d1"]'), 'department has an add-unit control');
+    assert.ok(document.querySelector('[data-add-ward="u1"]'), 'unit has an add-ward control');
     assert.ok(document.querySelector('[data-add-department="h1"]'), 'hospital has an add-department control');
 
     const rows = document.querySelectorAll('#adminUsersSection tbody tr');
