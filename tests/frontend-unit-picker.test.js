@@ -42,7 +42,7 @@ function stubScopeFetch(tree, assignment = null){
 }
 
 describe('patient form dept/unit/ward picker (MULTI_TENANT on)', () => {
-  test('a single-unit scope pre-fills+locks department/unit; ward stays optional and unlocked; saving persists unitId only', async () => {
+  test('a single-unit scope pre-fills+locks department/unit; ward combobox stays optional and unlocked; saving persists unitId only', async () => {
     const { window, document } = loadFrontendEnv({ initScript: MODAL_FLOW_INIT_SCRIPT });
     window.serverFlags = { MULTI_TENANT: true };
     window.fetch = stubScopeFetch(SCOPE_TREE_ONE_UNIT, { type: 'unit', id: 'u1' });
@@ -53,20 +53,22 @@ describe('patient form dept/unit/ward picker (MULTI_TENANT on)', () => {
 
     const depEl = document.getElementById('f_department');
     const unitEl = document.getElementById('f_unit');
-    const wardEl = document.getElementById('f_ward');
-    assert.ok(depEl && unitEl && wardEl, 'department/unit/ward selects must be rendered when MULTI_TENANT is on');
+    const wardNameEl = document.getElementById('f_ward_name'); // visible combobox
+    const wardIdEl = document.getElementById('f_ward');        // hidden id carrier
+    const wardListEl = document.getElementById('f_ward_list');
+    assert.ok(depEl && unitEl && wardNameEl && wardIdEl, 'department/unit selects + ward combobox must be rendered when MULTI_TENANT is on');
     assert.equal(depEl.tagName, 'SELECT');
     assert.equal(unitEl.tagName, 'SELECT');
-    assert.equal(wardEl.tagName, 'SELECT');
+    assert.equal(wardNameEl.tagName, 'INPUT', 'ward is now a type-to-create combobox, not a select');
 
     assert.equal(depEl.value, 'dep1');
     assert.equal(unitEl.value, 'u1');
-    assert.equal(wardEl.value, '', 'ward is left blank even in a single-unit scope — it stays optional');
+    assert.equal(wardNameEl.value, '', 'ward is left blank even in a single-unit scope — it stays optional');
+    assert.equal(wardIdEl.value, '', 'no ward chosen → hidden wardId is empty');
     assert.equal(depEl.disabled, true, 'a single-unit scope locks the department select');
     assert.equal(unitEl.disabled, true, 'a single-unit scope locks the unit select');
-    assert.equal(wardEl.disabled, false, 'ward stays optional/unlocked even when the unit is pre-filled');
-    assert.deepEqual([...wardEl.options].map(o => o.value), ['', 'ward1'], 'ward options are scoped to the chosen unit, plus a blank option');
-    assert.match(wardEl.options[0].textContent, /none/i);
+    assert.equal(wardNameEl.disabled, false, 'ward stays optional/unlocked even when the unit is pre-filled');
+    assert.deepEqual([...wardListEl.querySelectorAll('option')].map(o => o.value), ['Ward One'], 'datalist is scoped to the chosen unit\'s wards');
 
     await window.savePatientFromModal();
     const saved = window.patients.find(x => x.name === 'One Unit Patient');
@@ -86,10 +88,12 @@ describe('patient form dept/unit/ward picker (MULTI_TENANT on)', () => {
 
     const depEl = document.getElementById('f_department');
     const unitEl = document.getElementById('f_unit');
-    const wardEl = document.getElementById('f_ward');
+    const wardNameEl = document.getElementById('f_ward_name');
+    const wardIdEl = document.getElementById('f_ward');
+    const wardListEl = document.getElementById('f_ward_list');
     assert.equal(depEl.disabled, false);
     assert.equal(unitEl.disabled, false);
-    assert.equal(wardEl.disabled, false);
+    assert.equal(wardNameEl.disabled, false);
     assert.equal(unitEl.value, '', 'no unit is pre-selected when scope has more than one unit');
     // Both units must be offered.
     assert.deepEqual([...unitEl.options].map(o => o.value).filter(Boolean).sort(), ['u1', 'u2']);
@@ -101,12 +105,16 @@ describe('patient form dept/unit/ward picker (MULTI_TENANT on)', () => {
     assert.match(toastMsg || '', /select a unit/i, 'the existing toast validation path must fire');
     assert.equal(window.patients.find(x => x.name === 'Two Unit Patient'), undefined, 'save must be blocked, not silently persisted without a unit');
 
-    // Now choose a unit — the ward select repopulates to that unit's wards, still optional.
+    // Now choose a unit — the ward datalist repopulates to that unit's wards, still optional.
     unitEl.value = 'u1';
     unitEl.dispatchEvent(new window.Event('change', { bubbles: true }));
-    assert.deepEqual([...wardEl.options].map(o => o.value), ['', 'ward1']);
+    assert.deepEqual([...wardListEl.querySelectorAll('option')].map(o => o.value), ['Ward One']);
 
-    wardEl.value = 'ward1';
+    // Pick an existing ward by typing its name — the input handler pins its id.
+    wardNameEl.value = 'Ward One';
+    wardNameEl.dispatchEvent(new window.Event('input', { bubbles: true }));
+    assert.equal(wardIdEl.value, 'ward1', 'typing a matching ward name pins its wardId');
+
     await window.savePatientFromModal();
     const saved = window.patients.find(x => x.name === 'Two Unit Patient');
     assert.ok(saved);
