@@ -3581,15 +3581,6 @@ function bindAuthEvents(){
   document.getElementById('adminView')?.addEventListener('click', async (e) => {
     const tab = e.target.closest('[data-admin-tab]');
     if(tab){ switchAdminTab(tab.dataset.adminTab); return; }
-    const addHosp = e.target.closest('#adminAddHospitalBtn');
-    if(addHosp){
-      const name = document.getElementById('adminNewHospitalName')?.value.trim();
-      if(!name) return;
-      const body = isInstanceAdminUser() && adminViewOrgId ? { name, orgId: adminViewOrgId } : { name };
-      try{ await api('/api/admin/hospitals', { method: 'POST', body: JSON.stringify(body) }); await loadAdminView(); }
-      catch(err){ showToast(err.message); }
-      return;
-    }
     const addOrg = e.target.closest('#adminAddOrgBtn');
     if(addOrg){
       const name = document.getElementById('adminNewOrgName')?.value.trim();

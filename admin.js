@@ -29,6 +29,7 @@ function addPatientToStats(stats, p){
 }
 
 export async function buildOrgTree(store, orgId){
+  const org = await store.getOrganization(orgId);
   const hospitals = await store.listHospitalsByOrg(orgId);
   const users = await store.listUsersByOrg(orgId);
   const patients = parseLivePatients(await store.getActive());
@@ -99,6 +100,7 @@ export async function buildOrgTree(store, orgId){
   for(const h of outHospitals) departments += h.departments.length;
 
   return {
+    org: org ? { id: org.id, name: org.name } : null,
     totals: {
       hospitals: outHospitals.length,
       departments,

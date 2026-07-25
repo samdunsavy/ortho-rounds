@@ -40,6 +40,9 @@ function renderAdminTreeHTML(tree, selection){
     out += `<button type="button" data-depth="0" data-node="orgs" class="admin-cc-row${orgsSel}">Organizations</button>`;
   }
   out += '<div class="admin-cc-sep"></div>';
+  if(tree && tree.org){
+    out += ccRowHTML('org', tree.org.id, tree.org.name || 'Organization', null, 0, selection);
+  }
   for(const h of (tree && tree.hospitals) || []){
     out += ccRowHTML('hospital', h.id, h.name, null, 0, selection);
     for(const dep of h.departments || []){
@@ -57,6 +60,10 @@ function renderAdminTreeHTML(tree, selection){
 
 function selectAdminNode(type, id){
   adminState.selection = id ? { type, id } : { type };
+  // The Organizations row isn't part of the org tree/detail pane — selecting
+  // it navigates to the separate all-orgs tab instead of rendering a detail
+  // panel for a "node" that doesn't exist in the tree.
+  if(type === 'orgs') switchAdminTab('orgs');
   renderAdminCommandCenter();
 }
 
@@ -68,11 +75,15 @@ function renderAdminCommandCenter(){
 }
 
 function childTypeOf(type){
-  return { hospital: 'department', department: 'unit', unit: 'ward' }[type] || null;
+  return { org: 'hospital', hospital: 'department', department: 'unit', unit: 'ward' }[type] || null;
 }
 
 function addChildRouteFor(type){
   return {
+    // Org has no parent key: POST /api/admin/hospitals infers the org from
+    // the actor for an org admin, and an instance admin drilled into a
+    // specific org's tree is a narrower case this pass doesn't cover.
+    org: { path: '/api/admin/hospitals', parentKey: null },
     hospital: { path: '/api/admin/departments', parentKey: 'hospitalId' },
     department: { path: '/api/admin/units', parentKey: 'departmentId' },
     unit: { path: '/api/admin/wards', parentKey: 'unitId' }
@@ -80,6 +91,7 @@ function addChildRouteFor(type){
 }
 
 function childListOf(type, node){
+  if(type === 'org') return node.hospitals || [];
   if(type === 'hospital') return node.departments || [];
   if(type === 'department') return node.units || [];
   if(type === 'unit') return node.wards || [];
@@ -100,15 +112,26 @@ function renderAdminDetailHTML(state){
   const sel = state.selection;
   if(!sel) return '';
   if(sel.type === 'users') return renderAdminUsersPanelHTML(state);
+  // The Organizations row navigates to a separate tab (see selectAdminNode)
+  // rather than rendering into this pane.
   if(sel.type === 'orgs') return '';
-  const hit = findAdminNode(state.tree, sel.type, sel.id);
-  if(!hit) return `<div class="small-muted">That item no longer exists — reloading.</div>`;
+  let hit;
+  if(sel.type === 'org'){
+    // Org isn't part of the hospital/department/unit/ward tree findAdminNode
+    // walks — its identity + hospital list come straight off the tree
+    // payload (see buildOrgTree's `org` field).
+    if(!state.tree || !state.tree.org) return `<div class="small-muted">That item no longer exists.</div>`;
+    hit = { node: { id: state.tree.org.id, name: state.tree.org.name || 'Organization', hospitals: state.tree.hospitals || [] }, parentType: null, parentId: null };
+  } else {
+    hit = findAdminNode(state.tree, sel.type, sel.id);
+    if(!hit) return `<div class="small-muted">That item no longer exists.</div>`;
+  }
   const { node } = hit;
   const kids = childListOf(sel.type, node);
   const childType = childTypeOf(sel.type);
   const kidsHTML = kids.length
     ? kids.map(k => `<button type="button" class="admin-cc-row" data-node="${escapeHTML(childType)}:${escapeHTML(k.id)}">${escapeHTML(k.name)}<span class="cc-count">${k.stats ? k.stats.livePatients : ''}</span></button>`).join('')
-    : `<div class="small-muted">No ${childType || 'children'}s yet.</div>`;
+    : (childType ? `<div class="small-muted">No ${childType}s yet.</div>` : `<div class="small-muted">No contents.</div>`);
   const addChild = (childType && !adminIsNarrow()) ? `
     <div class="admin-inline-form">
       <input placeholder="New ${escapeHTML(childType)} name" data-new-child-name="${escapeHTML(sel.type)}:${escapeHTML(sel.id)}">
@@ -163,6 +186,12 @@ function adminIsNarrow(){
 function renderAdminNodeActionsHTML(state, sel, hit){
   if(adminIsNarrow()) return '<span class="small-muted">Open on a larger screen to edit</span>';
   const key = `${sel.type}:${sel.id}`;
+  // Org sits above the movable/deletable hierarchy (no sibling parent to
+  // move it under, and deleting it is an instance-admin-only operation
+  // outside this console) — rename only.
+  if(sel.type === 'org'){
+    return `<span class="admin-node-actions"><button class="btn" data-rename-node="${escapeHTML(key)}">Rename</button></span>`;
+  }
   const blocked = deleteBlockedReason(hit.node, sel.type);
   const parents = validMoveParents(state.tree, sel.type, hit.parentId);
   // Rendered whenever the type is movable at all, even with zero valid
@@ -282,7 +311,8 @@ document.getElementById('adminView')?.addEventListener('click', (e) => {
     if(!name){ showToast('Enter a name'); return; }
     const route = addChildRouteFor(parentType);
     if(!route) return;
-    api(route.path, { method: 'POST', body: JSON.stringify({ [route.parentKey]: parentId, name }) })
+    const body = route.parentKey ? { [route.parentKey]: parentId, name } : { name };
+    api(route.path, { method: 'POST', body: JSON.stringify(body) })
       .then(() => loadAdminView())
       .catch(err => showToast(err.message));
     return;
@@ -467,6 +497,12 @@ async function loadAdminView(){
   }
   const [tree, usersRes] = await Promise.all([api('/api/admin/org' + qs), api('/api/admin/users')]);
   adminState.tree = tree;
+  // Org admins (and an instance admin drilled into one org) have exactly one
+  // org in scope: the one buildOrgTree just resolved. Without this, the
+  // assignment picker's Organizations optgroup is always empty for them —
+  // GET /api/admin/orgs is instance-admin-only, so there's no other client
+  // source for this org's identity.
+  adminState.orgs = tree.org ? [tree.org] : [];
   adminState.users = isInstanceAdminUser() && adminViewOrgId
     ? usersRes.users.filter(u => u.orgId === adminViewOrgId)
     : usersRes.users;
@@ -484,6 +520,14 @@ function switchAdminTab(tab){
   document.getElementById('adminOrgPane').style.display = tab === 'org' ? '' : 'none';
   document.getElementById('adminOrgsTab').style.display = tab === 'orgs' ? '' : 'none';
   document.querySelectorAll('.admin-tab').forEach(b => b.classList.toggle('active', b.dataset.adminTab === tab));
+  // The stat tiles are only ever painted by the 'org' branch of
+  // loadAdminView(); leaving them showing a stale "Loading…" (or a stale
+  // prior org's numbers) once the view has navigated away from that tab
+  // would be misleading, so clear them whenever 'org' isn't the active tab.
+  if(tab !== 'org'){
+    const tiles = document.getElementById('adminStatTiles');
+    if(tiles) tiles.innerHTML = '';
+  }
 }
 
 function openAdminView(){

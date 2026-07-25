@@ -220,23 +220,127 @@ describe('users panel', () => {
   });
 });
 
+// Shared by every test below that exercises a click handler which ends in
+// `.then(() => loadAdminView())` — without a tree/users shape loadAdminView
+// can render, that follow-up call would throw (e.g. tree.hospitals.flatMap
+// on undefined) and the assertions after the awaited tick would never run.
+function mockAdminApi(calls, overrides){
+  return async (path, opts) => {
+    calls.push({ path, opts });
+    if(path.startsWith('/api/admin/org')) return { totals: { departments: 0, usersActive: 0, livePatients: 0 }, hospitals: [] };
+    if(path === '/api/admin/users') return { users: [] };
+    return (overrides && overrides(path, opts)) || {};
+  };
+}
+
 describe('bulk assign', () => {
   test('checking rows reveals the bulk bar and posts assign-bulk', async () => {
-    const { window } = loadFrontendEnv();
+    const { window, document } = loadFrontendEnv();
     const calls = [];
-    window.fetch = async (url, opts) => { calls.push({ url, opts }); return { ok: true, status: 200, json: async () => ({ ok: true }) }; };
-    const pane = window.document.getElementById('adminDetailPane');
-    pane.innerHTML = window.renderAdminUsersPanelHTML({ tree: TREE, users: CC_USERS, orgs: [{ id: 'bfv2-org', name: 'Default' }], selection: { type: 'users' } });
-    const cb = window.document.querySelector('[data-user-check="usr2"]');
+    // refreshAdminBulkBar reads the module-scoped adminState (not any state
+    // object a test passes into render*HTML directly), so its <select>'s
+    // option list — the thing that makes `unit:u1` a settable value below —
+    // only contains 'unit:u1' if adminState.tree was actually populated via
+    // loadAdminView(). Route through the real load so the whole state (and
+    // the DOM it paints) reflects TREE/CC_USERS.
+    window.api = async (path, opts) => {
+      calls.push({ path, opts });
+      if(path.startsWith('/api/admin/org')) return TREE;
+      if(path === '/api/admin/users') return { users: CC_USERS };
+      return { ok: true };
+    };
+    await window.loadAdminView();
+    const cb = document.querySelector('[data-user-check="usr2"]');
     cb.checked = true;
     cb.dispatchEvent(new window.Event('change', { bubbles: true }));
-    const bar = window.document.getElementById('adminBulkBar');
+    const bar = document.getElementById('adminBulkBar');
     assert.equal(bar.hasAttribute('hidden'), false);
     assert.ok(bar.innerHTML.includes('1 selected'));
     // Spread into this realm's Array before comparing — see the identical
     // note above validMoveParents' test for why (cross-realm array from
     // window.eval'd code isn't reference-equal to a same-shaped literal).
     assert.deepEqual([...window.selectedAdminUserIds()], ['usr2']);
+
+    document.getElementById('adminBulkNode').value = 'unit:u1';
+    document.getElementById('adminBulkApply').dispatchEvent(new window.Event('click', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 0));
+
+    const assignCall = calls.find(c => c.path === '/api/admin/users/assign-bulk');
+    assert.ok(assignCall, 'expected a POST to /api/admin/users/assign-bulk');
+    assert.equal(assignCall.opts.method, 'POST');
+    assert.deepEqual(JSON.parse(assignCall.opts.body), { userIds: ['usr2'], nodeType: 'unit', nodeId: 'u1' });
+  });
+});
+
+describe('request-level coverage: structural actions (wrong parentKey corrupts data)', () => {
+  test('add-child posts to the correct route with the correct parentKey, per level', async () => {
+    const { window, document } = loadFrontendEnv();
+    const calls = [];
+    window.api = mockAdminApi(calls);
+    const cases = [
+      { selType: 'hospital', selId: 'h1', expectPath: '/api/admin/departments', expectBody: { hospitalId: 'h1', name: 'New Department' } },
+      { selType: 'department', selId: 'd1', expectPath: '/api/admin/units', expectBody: { departmentId: 'd1', name: 'New Unit' } },
+      { selType: 'unit', selId: 'u1', expectPath: '/api/admin/wards', expectBody: { unitId: 'u1', name: 'New Ward' } }
+    ];
+    for(const c of cases){
+      document.getElementById('adminDetailPane').innerHTML =
+        window.renderAdminDetailHTML({ tree: TREE, users: [], orgs: [], selection: { type: c.selType, id: c.selId } });
+      document.querySelector(`[data-new-child-name="${c.selType}:${c.selId}"]`).value = c.expectBody.name;
+      document.querySelector(`[data-add-child="${c.selType}:${c.selId}"]`).dispatchEvent(new window.Event('click', { bubbles: true }));
+      await new Promise(r => setTimeout(r, 0));
+      const call = calls.find(x => x.path === c.expectPath && JSON.parse(x.opts.body).name === c.expectBody.name);
+      assert.ok(call, `expected a POST to ${c.expectPath} for ${c.selType}:${c.selId}`);
+      assert.equal(call.opts.method, 'POST');
+      assert.deepEqual(JSON.parse(call.opts.body), c.expectBody);
+    }
+  });
+
+  test('org add-child (add hospital) posts {name} only — no parent key', async () => {
+    const { window, document } = loadFrontendEnv();
+    const calls = [];
+    window.api = mockAdminApi(calls);
+    const orgTree = Object.assign({}, TREE, { org: { id: 'bfv2-org', name: 'Default' } });
+    document.getElementById('adminDetailPane').innerHTML =
+      window.renderAdminDetailHTML({ tree: orgTree, users: [], orgs: [], selection: { type: 'org', id: 'bfv2-org' } });
+    document.querySelector('[data-new-child-name="org:bfv2-org"]').value = 'New Hospital';
+    document.querySelector('[data-add-child="org:bfv2-org"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 0));
+    const call = calls.find(c => c.path === '/api/admin/hospitals');
+    assert.ok(call, 'expected a POST to /api/admin/hospitals');
+    assert.equal(call.opts.method, 'POST');
+    assert.deepEqual(JSON.parse(call.opts.body), { name: 'New Hospital' });
+  });
+
+  test('rename posts PATCH with {name}', async () => {
+    const { window, document } = loadFrontendEnv();
+    const calls = [];
+    window.api = mockAdminApi(calls);
+    window.prompt = () => 'Renamed Unit';
+    document.getElementById('adminDetailPane').innerHTML =
+      window.renderAdminDetailHTML({ tree: TREE, users: [], orgs: [], selection: { type: 'unit', id: 'u1' } });
+    document.querySelector('[data-rename-node="unit:u1"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 0));
+    const call = calls.find(c => c.path === '/api/admin/nodes/unit/u1');
+    assert.ok(call, 'expected a PATCH to /api/admin/nodes/unit/u1');
+    assert.equal(call.opts.method, 'PATCH');
+    assert.deepEqual(JSON.parse(call.opts.body), { name: 'Renamed Unit' });
+  });
+
+  test('delete posts DELETE to the node route', async () => {
+    const { window, document } = loadFrontendEnv();
+    const calls = [];
+    window.api = mockAdminApi(calls);
+    window.confirm = () => true;
+    const empty = JSON.parse(JSON.stringify(TREE));
+    empty.hospitals[0].departments[0].units[1].stats.livePatients = 0;
+    empty.hospitals[0].departments[0].units[1].stats.users = 0;
+    document.getElementById('adminDetailPane').innerHTML =
+      window.renderAdminDetailHTML({ tree: empty, users: [], orgs: [], selection: { type: 'unit', id: 'u2' } });
+    document.querySelector('[data-delete-node="unit:u2"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 0));
+    const call = calls.find(c => c.path === '/api/admin/nodes/unit/u2');
+    assert.ok(call, 'expected a DELETE to /api/admin/nodes/unit/u2');
+    assert.equal(call.opts.method, 'DELETE');
   });
 });
 
@@ -305,5 +409,99 @@ describe('mobile read-only', () => {
     const html = window.renderAdminUsersPanelHTML({ tree: TREE, users: CC_USERS, orgs: [{ id: 'bfv2-org', name: 'Default' }], selection: { type: 'users' } });
     assert.ok(html.includes('data-assign-user="usr2"'));
     assert.ok(html.includes('data-user-check="usr2"'));
+  });
+});
+
+// Finding 1: org-level assignment was dead for org admins because
+// adminState.orgs was only ever populated on the instance-admin early-return
+// path. An org-admin-shaped load (no localStorage role set -> isAdmin()
+// false -> isInstanceAdminUser() false -> loadAdminView's else branch, same
+// branch an org admin actually takes) must now populate adminState.orgs
+// from the tree's `org` field.
+describe('org-level assignment for org admins (Finding 1 fix)', () => {
+  test('an org-admin-shaped load path yields an Organizations optgroup and preselects an org-assigned user (not Stale)', async () => {
+    const { window, document } = loadFrontendEnv();
+    const orgTree = {
+      org: { id: 'bfv2-org', name: 'Default' },
+      totals: { departments: 0, usersActive: 1, livePatients: 0 },
+      hospitals: []
+    };
+    window.api = async (path) => {
+      if(path.startsWith('/api/admin/org')) return orgTree;
+      if(path === '/api/admin/users') return { users: [
+        { id: 'usr2', username: 'Amit', role: 'member', active: true, orgId: 'bfv2-org', assignmentType: 'org', assignmentId: 'bfv2-org' }
+      ] };
+      return {};
+    };
+    await window.loadAdminView();
+    const html = document.getElementById('adminDetailPane').innerHTML;
+    assert.ok(html.includes('<optgroup label="Organizations"'));
+    assert.match(html, /value="org:bfv2-org"\s+selected/);
+    assert.ok(!html.includes('Stale (org:bfv2-org)'));
+  });
+});
+
+// Finding 2: the rail had no Org root row and childTypeOf had no 'org'
+// entry, so an org with zero hospitals could never be fixed from the UI.
+describe('org root row (Finding 2 fix)', () => {
+  const ORG_TREE = Object.assign({}, TREE, { org: { id: 'bfv2-org', name: 'Default' } });
+
+  test('the tree contains an org root row', () => {
+    const { window } = loadFrontendEnv();
+    const html = window.renderAdminTreeHTML(ORG_TREE, null);
+    assert.ok(html.includes('data-node="org:bfv2-org"'));
+  });
+
+  test('org detail panel lists hospitals and offers add-child', () => {
+    const { window } = loadFrontendEnv();
+    const html = window.renderAdminDetailHTML({ tree: ORG_TREE, users: [], orgs: [], selection: { type: 'org', id: 'bfv2-org' } });
+    assert.ok(html.includes('City Hospital'));
+    assert.ok(html.includes('data-add-child="org:bfv2-org"'));
+  });
+
+  test('org has no move or delete control', () => {
+    const { window } = loadFrontendEnv();
+    const html = window.renderAdminDetailHTML({ tree: ORG_TREE, users: [], orgs: [], selection: { type: 'org', id: 'bfv2-org' } });
+    assert.ok(!html.includes('data-move-node='));
+    assert.ok(!html.includes('data-delete-node='));
+  });
+});
+
+// Finding 3: instance admins landed on a permanent "Loading…" stat-tile box
+// because the instance-admin branch of loadAdminView returns early without
+// ever painting tiles.
+describe('instance-admin orgs path leaves no stale stat tiles (Finding 3 fix)', () => {
+  test('#adminStatTiles is empty after the instance-admin orgs path renders', async () => {
+    const { window, document } = loadFrontendEnv();
+    window.localStorage.setItem('ortho_role', 'admin');
+    document.getElementById('adminStatTiles').innerHTML = '<div class="small-muted">Loading…</div>';
+    window.api = async (path) => {
+      if(path === '/api/admin/orgs') return { orgs: [] };
+      return {};
+    };
+    await window.loadAdminView();
+    assert.equal(document.getElementById('adminStatTiles').innerHTML, '');
+  });
+});
+
+// Finding 4: renderAdminDetailHTML returned '' for the Organizations row, so
+// clicking it yielded a blank panel with no tab switch.
+describe('Organizations row navigates (Finding 4 fix)', () => {
+  test('selecting the orgs row switches the active tab to orgs', () => {
+    const { window, document } = loadFrontendEnv();
+    window.selectAdminNode('orgs', null);
+    assert.equal(document.getElementById('adminOrgPane').style.display, 'none');
+    assert.equal(document.getElementById('adminOrgsTab').style.display, '');
+    assert.ok(document.querySelector('.admin-tab[data-admin-tab="orgs"]').classList.contains('active'));
+  });
+});
+
+// Finding 6a: a ward's empty-children message read "No childrens yet."
+// (childType null -> 'children' + 's').
+describe('ward empty-state label (Finding 6a fix)', () => {
+  test('ward detail does not say "No childrens yet."', () => {
+    const { window } = loadFrontendEnv();
+    const html = window.renderAdminDetailHTML({ tree: TREE, users: [], orgs: [], selection: { type: 'ward', id: 'w1' } });
+    assert.ok(!html.toLowerCase().includes('childrens'));
   });
 });

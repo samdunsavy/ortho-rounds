@@ -46,6 +46,7 @@ describe('admin tree/stats builders', () => {
 
   test('buildOrgTree computes totals, per-department/unit/ward stats, lastActivity', async () => {
     const tree = await buildOrgTree(store, 'o1');
+    assert.deepEqual(tree.org, { id: 'o1', name: 'Org One' });
     assert.deepEqual(tree.totals, {
       hospitals: 1, departments: 2, wards: 2, units: 2, usersActive: 2, usersDisabled: 1, livePatients: 5
     });
@@ -91,6 +92,7 @@ describe('admin tree/stats builders', () => {
   test('empty org tree is well-formed', async () => {
     await store.createOrganization({ id: 'o3', name: 'Empty', plan: 'free' });
     const tree = await buildOrgTree(store, 'o3');
+    assert.deepEqual(tree.org, { id: 'o3', name: 'Empty' });
     assert.deepEqual(tree.totals, { hospitals: 0, departments: 0, wards: 0, units: 0, usersActive: 0, usersDisabled: 0, livePatients: 0 });
     assert.deepEqual(tree.hospitals, []);
   });
