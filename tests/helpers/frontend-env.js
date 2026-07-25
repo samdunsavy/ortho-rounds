@@ -73,7 +73,9 @@ export function loadFrontendEnv(options){
 
   const appJs = readFileSync(path.join(PUBLIC_DIR, 'app.js'), 'utf8');
   const milestonesJs = readFileSync(path.join(PUBLIC_DIR, 'milestones.js'), 'utf8');
+  const adminConsoleJs = readFileSync(path.join(PUBLIC_DIR, 'admin-console.js'), 'utf8');
   window.eval(milestonesJs);
+  window.eval(adminConsoleJs);
   window.eval(initScript ? `${appJs}\n${initScript}` : appJs);
 
   return { dom, window, document: window.document };
