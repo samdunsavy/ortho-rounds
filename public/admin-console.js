@@ -193,13 +193,21 @@ function renderAdminUsersPanelHTML(state){
         <td>${escapeHTML(u.username)}</td>
         <td>${u.role === 'admin' ? '<span class="spec-badge">admin</span>' : 'member'}</td>
         <td><select data-assign-user="${escapeHTML(u.id)}" data-prev="${escapeHTML(prev)}">${renderAssignSelectOptionsHTML(groups, selType, selId)}</select></td>
-        <td>${u.active ? 'active' : 'disabled'}</td>
+        <td>${u.active ? 'active' : 'disabled'}
+          <button class="btn" data-user-toggle="${escapeHTML(u.id)}">${u.active ? 'Disable' : 'Enable'}</button>
+          <button class="btn" data-user-reset="${escapeHTML(u.id)}">Reset password</button>
+        </td>
       </tr>`;
   }).join('');
   return `
     <div class="admin-detail-head"><h3>Users</h3></div>
     <div class="admin-inline-form">
       <input id="adminUserSearch" placeholder="Search users…">
+    </div>
+    <div class="admin-inline-form">
+      <input id="adminNewUsername" placeholder="New username">
+      <label class="scribe-check"><input type="checkbox" id="adminNewUserAdmin"> Admin</label>
+      <button class="btn" id="adminCreateUser">Create user</button>
     </div>
     <div id="adminBulkBar" class="admin-bulk-bar" hidden></div>
     <table class="admin-users-table">
@@ -292,6 +300,38 @@ document.getElementById('adminView')?.addEventListener('click', (e) => {
     const nodeId = i === -1 ? null : raw.slice(i + 1);
     api('/api/admin/users/assign-bulk', { method: 'POST', body: JSON.stringify({ userIds: ids, nodeType, nodeId }) })
       .then(() => { showToast(`Assigned ${ids.length} user${ids.length === 1 ? '' : 's'}`); return loadAdminView(); })
+      .catch(err => showToast(err.message));
+    return;
+  }
+  const toggleBtn = e.target.closest('[data-user-toggle]');
+  if(toggleBtn){
+    e.stopPropagation();
+    const id = toggleBtn.dataset.userToggle;
+    const user = (adminState.users || []).find(u => u.id === id);
+    const path = user && user.active ? 'disable' : 'enable';
+    if(path === 'disable' && !window.confirm('Disable this user? They will be signed out.')) return;
+    api(`/api/admin/users/${encodeURIComponent(id)}/${path}`, { method: 'POST' })
+      .then(() => loadAdminView())
+      .catch(err => showToast(err.message));
+    return;
+  }
+  const resetBtn = e.target.closest('[data-user-reset]');
+  if(resetBtn){
+    e.stopPropagation();
+    const id = resetBtn.dataset.userReset;
+    api(`/api/admin/users/${encodeURIComponent(id)}/reset-password`, { method: 'POST' })
+      .then(res => { window.alert(`Temporary password (shown once): ${res.temporaryPassword}`); })
+      .catch(err => showToast(err.message));
+    return;
+  }
+  if(e.target.id === 'adminCreateUser'){
+    e.stopPropagation();
+    const nameEl = document.getElementById('adminNewUsername');
+    const username = (nameEl.value || '').trim();
+    if(!username){ showToast('Enter a username'); return; }
+    const role = document.getElementById('adminNewUserAdmin').checked ? 'admin' : 'member';
+    api('/api/admin/users', { method: 'POST', body: JSON.stringify({ username, role }) })
+      .then(res => { window.alert(`User created. Temporary password (shown once): ${res.temporaryPassword}`); nameEl.value = ''; return loadAdminView(); })
       .catch(err => showToast(err.message));
     return;
   }

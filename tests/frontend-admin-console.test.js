@@ -239,3 +239,20 @@ describe('bulk assign', () => {
     assert.deepEqual([...window.selectedAdminUserIds()], ['usr2']);
   });
 });
+
+describe('user lifecycle', () => {
+  test('rows expose toggle and reset controls; create form present', () => {
+    const { window } = loadFrontendEnv();
+    const html = window.renderAdminUsersPanelHTML({ tree: TREE, users: CC_USERS, orgs: [], selection: { type: 'users' } });
+    assert.ok(html.includes('data-user-toggle="usr2"'));
+    assert.ok(html.includes('data-user-reset="usr2"'));
+    assert.ok(html.includes('id="adminCreateUser"'));
+    assert.ok(html.includes('id="adminNewUsername"'));
+  });
+  test('a disabled user offers Enable', () => {
+    const { window } = loadFrontendEnv();
+    const users = [{ id: 'u9', username: 'off', role: 'member', active: false, orgId: null, assignmentType: null, assignmentId: null }];
+    const html = window.renderAdminUsersPanelHTML({ tree: TREE, users, orgs: [], selection: { type: 'users' } });
+    assert.match(html, /data-user-toggle="u9"[^>]*>Enable</);
+  });
+});

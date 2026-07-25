@@ -3564,10 +3564,6 @@ function bindAuthEvents(){
     closeSheet('moreSheetOverlay');
     void togglePushReminders();
   });
-  document.getElementById('accountModalClose')?.addEventListener('click', closeAccountModal);
-  document.getElementById('accountModalCloseBtn')?.addEventListener('click', closeAccountModal);
-  document.getElementById('createUserBtn')?.addEventListener('click', ()=> void createUserFromModal());
-  document.getElementById('revokeSessionsBtn')?.addEventListener('click', ()=> void revokeSessionsEverywhere());
   document.getElementById('changePasswordClose')?.addEventListener('click', closeChangePasswordModal);
   document.getElementById('changePasswordCancelBtn')?.addEventListener('click', closeChangePasswordModal);
   document.getElementById('changePasswordSaveBtn')?.addEventListener('click', ()=> void submitChangePassword());
@@ -3576,15 +3572,6 @@ function bindAuthEvents(){
     document.getElementById('moreMenuPanel')?.classList.remove('open');
     openChangePasswordModal();
   });
-  document.getElementById('accountUsersList')?.addEventListener('click', (e)=>{
-    const disableBtn = e.target.closest('[data-disable-user]');
-    if(disableBtn){ void disableUser(disableBtn.dataset.disableUser); return; }
-    const enableBtn = e.target.closest('[data-enable-user]');
-    if(enableBtn){ void enableUser(enableBtn.dataset.enableUser); return; }
-    const resetBtn = e.target.closest('[data-reset-user]');
-    if(resetBtn){ void resetUserPassword(resetBtn.dataset.resetUser); return; }
-  });
-
   document.getElementById('adminViewClose')?.addEventListener('click', closeAdminView);
   document.getElementById('moreAdminBtn')?.addEventListener('click', ()=>{
     closeSheet('moreSheetOverlay');
@@ -3642,8 +3629,6 @@ function updateAccountUI(){
   if(label) label.textContent = username;
   const roleEl = document.getElementById('moreAccountRole');
   if(roleEl) roleEl.textContent = roleTag;
-  const manageBtn = document.getElementById('moreManageUsersBtn');
-  if(manageBtn) manageBtn.style.display = admin ? '' : 'none';
   const adminBtn = document.getElementById('moreAdminBtn');
   if(adminBtn) adminBtn.style.display = adminUiVisible() ? '' : 'none';
 
@@ -3651,8 +3636,6 @@ function updateAccountUI(){
   if(dLabel) dLabel.textContent = username;
   const dRoleEl = document.getElementById('desktopAccountRole');
   if(dRoleEl) dRoleEl.textContent = roleTag;
-  const dManageBtn = document.getElementById('desktopManageUsersBtn');
-  if(dManageBtn) dManageBtn.style.display = admin ? '' : 'none';
   const dAdminBtn = document.getElementById('desktopAdminBtn');
   if(dAdminBtn) dAdminBtn.style.display = adminUiVisible() ? '' : 'none';
 }
@@ -3732,92 +3715,6 @@ async function togglePushReminders(){
   await updatePushToggleUI();
 }
 
-async function openAccountModal(){
-  if(!isAdmin()) return;
-  document.getElementById('accountModal').classList.add('active');
-  document.getElementById('accountModalResult').textContent = '';
-  await refreshAccountUsersList();
-}
-
-function closeAccountModal(){
-  document.getElementById('accountModal').classList.remove('active');
-}
-
-async function refreshAccountUsersList(){
-  const listEl = document.getElementById('accountUsersList');
-  listEl.textContent = 'Loading…';
-  try{
-    const { users } = await api('/api/admin/users');
-    const me = localStorage.getItem(LS_USERNAME);
-    listEl.innerHTML = users.map(u => `
-      <div class="account-user-row">
-        <div>
-          <div class="u-name">${escapeHTML(u.username)}${u.username === me ? ' (you)' : ''}</div>
-          <div class="u-meta">${escapeHTML(u.role)}${u.active ? '' : ' · disabled'}</div>
-        </div>
-        <div class="account-user-actions">
-          ${u.active
-            ? (u.username === me ? '' : `<button type="button" class="btn btn-sm" data-disable-user="${escapeHTML(u.id)}">Disable</button>`)
-            : `<button type="button" class="btn btn-sm" data-enable-user="${escapeHTML(u.id)}">Enable</button>`}
-          <button type="button" class="btn btn-sm" data-reset-user="${escapeHTML(u.id)}">Reset password</button>
-        </div>
-      </div>
-    `).join('') || '<div class="scribe-empty">No users yet.</div>';
-  }catch(err){
-    listEl.textContent = 'Could not load users — ' + (err.message || 'error');
-  }
-}
-
-async function createUserFromModal(){
-  const username = document.getElementById('newUserUsername').value.trim();
-  const password = document.getElementById('newUserPassword').value;
-  const isAdminUser = document.getElementById('newUserIsAdmin').checked;
-  const resultEl = document.getElementById('accountModalResult');
-  if(!username){ resultEl.textContent = 'Enter a username'; return; }
-  try{
-    const res = await api('/api/admin/users', {
-      method: 'POST',
-      body: JSON.stringify({ username, password, role: isAdminUser ? 'admin' : 'member' })
-    });
-    document.getElementById('newUserUsername').value = '';
-    document.getElementById('newUserPassword').value = '';
-    document.getElementById('newUserIsAdmin').checked = false;
-    resultEl.textContent = `Created "${res.username}" — password: ${res.temporaryPassword} (shown once, share it securely)`;
-    await refreshAccountUsersList();
-  }catch(err){
-    resultEl.textContent = 'Could not create user — ' + (err.message || 'error');
-  }
-}
-
-async function disableUser(id){
-  if(!confirm('Disable this user? They will be logged out everywhere immediately.')) return;
-  try{
-    await api(`/api/admin/users/${id}/disable`, { method: 'POST' });
-    await refreshAccountUsersList();
-  }catch(err){
-    showToast('Could not disable user — ' + (err.message || 'error'));
-  }
-}
-
-async function enableUser(id){
-  try{
-    await api(`/api/admin/users/${id}/enable`, { method: 'POST' });
-    showToast('User re-enabled', { success: true });
-    await refreshAccountUsersList();
-  }catch(err){
-    showToast('Could not enable user — ' + (err.message || 'error'));
-  }
-}
-
-async function resetUserPassword(id){
-  try{
-    const res = await api(`/api/admin/users/${id}/reset-password`, { method: 'POST' });
-    document.getElementById('accountModalResult').textContent = `New password: ${res.temporaryPassword} (shown once, share it securely)`;
-  }catch(err){
-    showToast('Could not reset password — ' + (err.message || 'error'));
-  }
-}
-
 function openChangePasswordModal(){
   document.getElementById('changePasswordCurrent').value = '';
   document.getElementById('changePasswordNew').value = '';
@@ -3870,7 +3767,6 @@ async function revokeSessionsEverywhere(){
   try{
     await api('/api/account/revoke-sessions', { method: 'POST' });
   }catch{ /* token is about to be discarded regardless */ }
-  closeAccountModal();
   closeChangePasswordModal();
   logout();
 }
@@ -3917,10 +3813,6 @@ function bindEvents(){
   document.getElementById('desktopLogoutBtn')?.addEventListener('click', ()=>{
     document.getElementById('moreMenuPanel')?.classList.remove('open');
     logout();
-  });
-  document.getElementById('desktopManageUsersBtn')?.addEventListener('click', ()=>{
-    document.getElementById('moreMenuPanel')?.classList.remove('open');
-    void openAccountModal();
   });
   document.getElementById('desktopPushToggleBtn')?.addEventListener('click', ()=>{
     document.getElementById('moreMenuPanel')?.classList.remove('open');
@@ -4350,8 +4242,7 @@ function bindSheets(){
     btn.addEventListener('click', ()=>{
       closeSheet('moreSheetOverlay');
       const a = btn.dataset.moreAction;
-      if(a === 'account') void openAccountModal();
-      else if(a === 'changepassword') openChangePasswordModal();
+      if(a === 'changepassword') openChangePasswordModal();
       else if(a === 'otlist') switchView('otlist');
       else if(a === 'present') openPresentationMode();
       else if(a === 'export') exportData();
