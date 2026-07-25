@@ -6138,14 +6138,74 @@ function populateUnitSelect(tree, departmentId, selectedUnitId, selectedWardId){
 }
 
 function populateWardSelect(tree, departmentId, unitId, selectedWardId){
-  const wardEl = document.getElementById('f_ward');
-  const dep = (tree.departments || []).find(x => x.id === departmentId);
-  const unit = dep ? (dep.units || []).find(u => u.id === unitId) : null;
-  const wards = unit ? (unit.wards || []) : [];
-  fillSelect(wardEl, wards, '— none —');
+  const listEl = document.getElementById('f_ward_list');
+  const nameEl = document.getElementById('f_ward_name');
+  const idEl = document.getElementById('f_ward');
+  if(!listEl || !nameEl || !idEl) return;
+  const wards = wardsForUnit(tree, unitId);
+  listEl.innerHTML = wards.map(w => `<option value="${escapeHTML(w.name)}"></option>`).join('');
   // Ward is always optional — never auto-selected, even when unambiguous.
-  const wid = wards.some(w => w.id === selectedWardId) ? selectedWardId : '';
-  if(wardEl) wardEl.value = wid;
+  const selected = wards.find(w => w.id === selectedWardId) || null;
+  idEl.value = selected ? selected.id : '';
+  nameEl.value = selected ? selected.name : '';
+  nameEl.dataset.unitId = unitId || '';
+  updateWardCreateAffordance(tree);
+}
+
+// Reconcile the visible ward name against the scope tree: an existing match
+// pins its wardId in the hidden field; a novel non-empty name reveals the
+// "Create" button; empty clears both.
+function updateWardCreateAffordance(tree){
+  const nameEl = document.getElementById('f_ward_name');
+  const idEl = document.getElementById('f_ward');
+  const btn = document.getElementById('f_ward_create');
+  const msg = document.getElementById('f_ward_msg');
+  if(!nameEl || !idEl || !btn) return;
+  const unitId = nameEl.dataset.unitId || '';
+  const typed = nameEl.value.trim();
+  const match = matchWardByName(tree, unitId, typed);
+  if(match){
+    idEl.value = match.id;
+    btn.style.display = 'none';
+  }else{
+    idEl.value = '';
+    if(unitId && typed){
+      btn.textContent = `Create “${typed}”`;
+      btn.style.display = 'inline-block';
+    }else{
+      btn.style.display = 'none';
+    }
+  }
+  if(msg) msg.style.display = 'none';
+}
+
+async function createWardFromInput(tree){
+  const nameEl = document.getElementById('f_ward_name');
+  const idEl = document.getElementById('f_ward');
+  const btn = document.getElementById('f_ward_create');
+  const msg = document.getElementById('f_ward_msg');
+  if(!nameEl || !idEl) return;
+  const unitId = nameEl.dataset.unitId || '';
+  const name = nameEl.value.trim();
+  if(!unitId || !name) return;
+  if(btn) btn.disabled = true;
+  try{
+    const ward = await api('/api/wards', { method: 'POST', body: JSON.stringify({ unitId, name }) });
+    injectWardIntoScopeTree(tree, unitId, ward);
+    const listEl = document.getElementById('f_ward_list');
+    if(listEl){
+      listEl.innerHTML = wardsForUnit(tree, unitId)
+        .map(w => `<option value="${escapeHTML(w.name)}"></option>`).join('');
+    }
+    idEl.value = ward.id;
+    nameEl.value = ward.name;
+    if(btn) btn.style.display = 'none';
+    if(msg) msg.style.display = 'none';
+  }catch(err){
+    if(msg){ msg.textContent = (err && err.message) || 'Could not create ward'; msg.style.display = 'block'; }
+  }finally{
+    if(btn) btn.disabled = false;
+  }
 }
 
 // Returns the {departmentId,unitId} chain when the scope tree contains
@@ -6216,12 +6276,17 @@ async function populateScopePicker(d){
   depEl.onchange = () => populateUnitSelect(tree, depEl.value, '', '');
   unitEl.onchange = () => populateWardSelect(tree, depEl.value, unitEl.value, '');
 
+  const wardNameEl = document.getElementById('f_ward_name');
+  const wardCreateEl = document.getElementById('f_ward_create');
+  if(wardNameEl) wardNameEl.oninput = () => updateWardCreateAffordance(tree);
+  if(wardCreateEl) wardCreateEl.onclick = () => createWardFromInput(tree);
+
   const lock = !!single;
   depEl.disabled = lock;
   unitEl.disabled = lock;
   // Ward stays optional/unlocked regardless — a single-unit member can still
-  // choose (or skip) a specific ward under that unit.
-  wardEl.disabled = false;
+  // choose, type, or create a ward under that unit.
+  if(wardNameEl) wardNameEl.disabled = false;
 }
 
 /* ---------------- ADD / EDIT MODAL ---------------- */
@@ -6404,7 +6469,13 @@ function renderModalForm(d){
       <div><label>Unit</label><select id="f_unit"></select></div>
     </div>
     <div class="form-row two">
-      <div><label>Ward (optional)</label><select id="f_ward"></select></div>
+      <div><label>Ward (optional)</label>
+        <input id="f_ward_name" list="f_ward_list" placeholder="Select or type a new ward" autocomplete="off">
+        <datalist id="f_ward_list"></datalist>
+        <input type="hidden" id="f_ward">
+        <button type="button" id="f_ward_create" class="btn" style="display:none; margin-top:6px;"></button>
+        <div id="f_ward_msg" class="form-hint" style="display:none; margin-top:4px;"></div>
+      </div>
       <div><label>Assigned PG</label><input id="f_assignedPg" value="${escapeHTML(d.assignedPg||'')}" placeholder="Initials e.g. AK" maxlength="6"></div>
     </div>
     <div class="form-row two">
