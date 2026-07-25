@@ -1,0 +1,114 @@
+import { test, describe } from 'node:test';
+import assert from 'node:assert/strict';
+import { loadFrontendEnv } from './helpers/frontend-env.js';
+
+export const TREE = {
+  totals: { hospitals: 1, departments: 1, units: 2, wards: 1, usersActive: 2, usersDisabled: 0, livePatients: 5 },
+  hospitals: [{ id: 'h1', name: 'City Hospital', departments: [
+    { id: 'd1', name: 'Ortho', specialty: 'ortho',
+      stats: { livePatients: 5, byStatus: { postop: 3, preop: 1, conservative: 1, fordischarge: 0 }, users: 2, lastActivity: Date.now() - 60000 },
+      units: [
+        { id: 'u1', name: 'IV',
+          stats: { livePatients: 4, byStatus: { postop: 3, preop: 1, conservative: 0, fordischarge: 0 }, users: 1, lastActivity: Date.now() - 60000 },
+          wards: [{ id: 'w1', name: '7MOW', stats: { livePatients: 4, byStatus: { postop: 3, preop: 1, conservative: 0, fordischarge: 0 }, users: 0, lastActivity: null } }] },
+        { id: 'u2', name: 'General',
+          stats: { livePatients: 1, byStatus: { postop: 0, preop: 0, conservative: 1, fordischarge: 0 }, users: 1, lastActivity: null },
+          wards: [] }
+      ] }
+  ]}]
+};
+
+describe('command center tree', () => {
+  test('renders a row per node with live counts', () => {
+    const { window } = loadFrontendEnv();
+    const html = window.renderAdminTreeHTML(TREE, null);
+    assert.ok(html.includes('data-node="hospital:h1"'));
+    assert.ok(html.includes('data-node="department:d1"'));
+    assert.ok(html.includes('data-node="unit:u1"'));
+    assert.ok(html.includes('data-node="ward:w1"'));
+    assert.ok(html.includes('data-node="users"'));
+  });
+  test('marks the selected node', () => {
+    const { window } = loadFrontendEnv();
+    const html = window.renderAdminTreeHTML(TREE, { type: 'unit', id: 'u1' });
+    assert.match(html, /data-node="unit:u1"[^>]*class="[^"]*is-selected/);
+  });
+  test('findAdminNode locates a node and its parent', () => {
+    const { window } = loadFrontendEnv();
+    const hit = window.findAdminNode(TREE, 'ward', 'w1');
+    assert.equal(hit.node.name, '7MOW');
+    assert.equal(hit.parentType, 'unit');
+    assert.equal(hit.parentId, 'u1');
+    assert.equal(window.findAdminNode(TREE, 'unit', 'nope'), null);
+  });
+});
+
+// Ported from tests/frontend-admin-view.test.js (renderAdminView is gone —
+// see that file's header note for why).
+describe('stat tiles', () => {
+  test('renderAdminStatTilesInto paints stat tiles into #adminStatTiles', () => {
+    const { window, document } = loadFrontendEnv();
+    window.renderAdminStatTilesInto(TREE);
+    const tiles = [...document.querySelectorAll('#adminStatTiles .admin-stat-tile')];
+    assert.equal(tiles.length, 4);
+    const tileText = tiles.map(t => t.textContent).join(' ');
+    assert.match(tileText, /1/); // departments
+    assert.match(tileText, /2/); // active users
+    assert.match(tileText, /5/); // live patients
+    assert.match(tileText, /3/); // post-op
+  });
+});
+
+describe('assign-select grouping (still used, now feeds Task 5\'s users panel)', () => {
+  test('buildAssignNodeGroups groups nodes by level with hospital/department-qualified labels', () => {
+    const { window } = loadFrontendEnv();
+    const groups = window.buildAssignNodeGroups(TREE);
+    assert.deepEqual([...groups.hospital.map(g => g.id)], ['h1']);
+    assert.deepEqual([...groups.department.map(g => g.id)], ['d1']);
+    assert.deepEqual([...groups.unit.map(g => g.id)], ['u1', 'u2']);
+    assert.deepEqual([...groups.ward.map(g => g.id)], ['w1']);
+    assert.equal(groups.unit[0].label, 'IV (Ortho)');
+  });
+
+  test('renderAssignSelectOptionsHTML marks the selected node and encodes type:id in option values', () => {
+    const { window } = loadFrontendEnv();
+    const groups = window.buildAssignNodeGroups(TREE);
+    const html = window.renderAssignSelectOptionsHTML(groups, 'unit', 'u1');
+    assert.ok(html.includes('<option value="">— none —</option>'));
+    assert.match(html, /<option value="unit:u1" selected>/);
+    assert.ok(html.includes('<optgroup label="Wards">'));
+  });
+});
+
+describe('delegated assign-select change handler', () => {
+  test('fires the assign endpoint with {nodeType, nodeId}', async () => {
+    const { window, document } = loadFrontendEnv();
+    const calls = [];
+    window.api = async (path, opts) => { calls.push({ path, opts }); return { ok: true }; };
+    document.getElementById('adminDetailPane').innerHTML =
+      '<select data-assign-user="usr2" data-prev="ward:w1"><option value="">— none —</option><option value="unit:u1">IV (Ortho)</option></select>';
+    const sel = document.querySelector('select[data-assign-user="usr2"]');
+    sel.value = 'unit:u1';
+    sel.dispatchEvent(new window.Event('change', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 0));
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].path, '/api/admin/users/usr2/assign');
+    assert.equal(calls[0].opts.method, 'POST');
+    assert.deepEqual(JSON.parse(calls[0].opts.body), { nodeType: 'unit', nodeId: 'u1' });
+  });
+
+  test('blank option unassigns with nodeId:null', async () => {
+    const { window, document } = loadFrontendEnv();
+    const calls = [];
+    window.api = async (path, opts) => { calls.push({ path, opts }); return { ok: true }; };
+    document.getElementById('adminDetailPane').innerHTML =
+      '<select data-assign-user="usr2" data-prev="ward:w1"><option value="">— none —</option><option value="unit:u1">IV (Ortho)</option></select>';
+    const sel = document.querySelector('select[data-assign-user="usr2"]');
+    sel.value = '';
+    sel.dispatchEvent(new window.Event('change', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 0));
+    assert.equal(calls.length, 1);
+    const body = JSON.parse(calls[0].opts.body);
+    assert.equal(body.nodeId, null);
+  });
+});

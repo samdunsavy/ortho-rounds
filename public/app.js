@@ -3603,36 +3603,6 @@ function bindAuthEvents(){
       catch(err){ showToast(err.message); }
       return;
     }
-    const addDept = e.target.closest('[data-add-department]');
-    if(addDept){
-      const hid = addDept.dataset.addDepartment;
-      const input = document.querySelector(`[data-new-department-name="${hid}"]`);
-      const name = input?.value.trim();
-      if(!name) return;
-      try{ await api('/api/admin/departments', { method: 'POST', body: JSON.stringify({ hospitalId: hid, name }) }); await loadAdminView(); }
-      catch(err){ showToast(err.message); }
-      return;
-    }
-    const addUnit = e.target.closest('[data-add-unit]');
-    if(addUnit){
-      const did = addUnit.dataset.addUnit;
-      const input = document.querySelector(`[data-new-unit-name="${did}"]`);
-      const name = input?.value.trim();
-      if(!name) return;
-      try{ await api('/api/admin/units', { method: 'POST', body: JSON.stringify({ departmentId: did, name }) }); await loadAdminView(); }
-      catch(err){ showToast(err.message); }
-      return;
-    }
-    const addWard = e.target.closest('[data-add-ward]');
-    if(addWard){
-      const uid = addWard.dataset.addWard;
-      const input = document.querySelector(`[data-new-ward-name="${uid}"]`);
-      const name = input?.value.trim();
-      if(!name) return;
-      try{ await api('/api/admin/wards', { method: 'POST', body: JSON.stringify({ unitId: uid, name }) }); await loadAdminView(); }
-      catch(err){ showToast(err.message); }
-      return;
-    }
     const addOrg = e.target.closest('#adminAddOrgBtn');
     if(addOrg){
       const name = document.getElementById('adminNewOrgName')?.value.trim();
