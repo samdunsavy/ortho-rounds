@@ -109,7 +109,7 @@ function renderAdminDetailHTML(state){
   const kidsHTML = kids.length
     ? kids.map(k => `<button type="button" class="admin-cc-row" data-node="${escapeHTML(childType)}:${escapeHTML(k.id)}">${escapeHTML(k.name)}<span class="cc-count">${k.stats ? k.stats.livePatients : ''}</span></button>`).join('')
     : `<div class="small-muted">No ${childType || 'children'}s yet.</div>`;
-  const addChild = childType ? `
+  const addChild = (childType && !adminIsNarrow()) ? `
     <div class="admin-inline-form">
       <input placeholder="New ${escapeHTML(childType)} name" data-new-child-name="${escapeHTML(sel.type)}:${escapeHTML(sel.id)}">
       <button class="btn" data-add-child="${escapeHTML(sel.type)}:${escapeHTML(sel.id)}">Add ${escapeHTML(childType)}</button>
@@ -156,7 +156,12 @@ function deleteBlockedReason(node, type){
   return bits.join(', ');
 }
 
+function adminIsNarrow(){
+  return typeof window !== 'undefined' && window.innerWidth < 900;
+}
+
 function renderAdminNodeActionsHTML(state, sel, hit){
+  if(adminIsNarrow()) return '<span class="small-muted">Open on a larger screen to edit</span>';
   const key = `${sel.type}:${sel.id}`;
   const blocked = deleteBlockedReason(hit.node, sel.type);
   const parents = validMoveParents(state.tree, sel.type, hit.parentId);
@@ -183,32 +188,38 @@ function renderAdminNodeActionsHTML(state, sel, hit){
 }
 
 function renderAdminUsersPanelHTML(state){
+  const narrow = adminIsNarrow();
   const groups = buildAssignNodeGroups(state.tree, state.orgs);
   const rows = (state.users || []).map(u => {
     const selType = u.assignmentType || null, selId = u.assignmentId || null;
     const prev = selType && selId ? `${selType}:${selId}` : '';
+    const actions = narrow ? '' : `
+          <button class="btn" data-user-toggle="${escapeHTML(u.id)}">${u.active ? 'Disable' : 'Enable'}</button>
+          <button class="btn" data-user-reset="${escapeHTML(u.id)}">Reset password</button>`;
     return `
       <tr data-user-row="${escapeHTML(u.id)}" data-username="${escapeHTML((u.username || '').toLowerCase())}">
         <td><input type="checkbox" data-user-check="${escapeHTML(u.id)}"></td>
         <td>${escapeHTML(u.username)}</td>
         <td>${u.role === 'admin' ? '<span class="spec-badge">admin</span>' : 'member'}</td>
         <td><select data-assign-user="${escapeHTML(u.id)}" data-prev="${escapeHTML(prev)}">${renderAssignSelectOptionsHTML(groups, selType, selId)}</select></td>
-        <td>${u.active ? 'active' : 'disabled'}
-          <button class="btn" data-user-toggle="${escapeHTML(u.id)}">${u.active ? 'Disable' : 'Enable'}</button>
-          <button class="btn" data-user-reset="${escapeHTML(u.id)}">Reset password</button>
+        <td>${u.active ? 'active' : 'disabled'}${actions}
         </td>
       </tr>`;
   }).join('');
+  const narrowNote = narrow ? '<div class="small-muted">Open on a larger screen to edit</div>' : '';
+  const createUserForm = narrow ? '' : `
+    <div class="admin-inline-form">
+      <input id="adminNewUsername" placeholder="New username">
+      <label class="scribe-check"><input type="checkbox" id="adminNewUserAdmin"> Admin</label>
+      <button class="btn" id="adminCreateUser">Create user</button>
+    </div>`;
   return `
     <div class="admin-detail-head"><h3>Users</h3></div>
     <div class="admin-inline-form">
       <input id="adminUserSearch" placeholder="Search users…">
     </div>
-    <div class="admin-inline-form">
-      <input id="adminNewUsername" placeholder="New username">
-      <label class="scribe-check"><input type="checkbox" id="adminNewUserAdmin"> Admin</label>
-      <button class="btn" id="adminCreateUser">Create user</button>
-    </div>
+    ${narrowNote}
+    ${createUserForm}
     <div id="adminBulkBar" class="admin-bulk-bar" hidden></div>
     <table class="admin-users-table">
       <thead><tr><th></th><th>User</th><th>Role</th><th>Assignment</th><th>Status</th></tr></thead>

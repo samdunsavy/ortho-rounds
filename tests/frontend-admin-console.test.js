@@ -256,3 +256,20 @@ describe('user lifecycle', () => {
     assert.match(html, /data-user-toggle="u9"[^>]*>Enable</);
   });
 });
+
+describe('mobile read-only', () => {
+  test('narrow viewport hides editing controls and shows a note', () => {
+    const { window } = loadFrontendEnv();
+    Object.defineProperty(window, 'innerWidth', { value: 500, configurable: true });
+    const html = window.renderAdminDetailHTML({ tree: TREE, users: [], orgs: [], selection: { type: 'unit', id: 'u1' } });
+    assert.ok(!html.includes('data-rename-node='));
+    assert.ok(!html.includes('data-add-child='));
+    assert.ok(html.includes('larger screen'));
+  });
+  test('wide viewport keeps the controls', () => {
+    const { window } = loadFrontendEnv();
+    Object.defineProperty(window, 'innerWidth', { value: 1200, configurable: true });
+    const html = window.renderAdminDetailHTML({ tree: TREE, users: [], orgs: [], selection: { type: 'unit', id: 'u1' } });
+    assert.ok(html.includes('data-rename-node='));
+  });
+});
