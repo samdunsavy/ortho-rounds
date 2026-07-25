@@ -196,12 +196,21 @@ function renderAdminUsersPanelHTML(state){
     const actions = narrow ? '' : `
           <button class="btn" data-user-toggle="${escapeHTML(u.id)}">${u.active ? 'Disable' : 'Enable'}</button>
           <button class="btn" data-user-reset="${escapeHTML(u.id)}">Reset password</button>`;
+    // Narrow (mobile read-only): no checkbox, no live <select> — both are
+    // write paths (bulk-assign selection state, per-row assign POST) that
+    // the mobile read-only constraint forbids. Escaping the whole label
+    // (rather than patching assignLabelFor itself) covers its unescaped
+    // "Stale (type:id)" fallback too, since type/id are user-influenced.
+    const checkCell = narrow ? '<td></td>' : `<td><input type="checkbox" data-user-check="${escapeHTML(u.id)}"></td>`;
+    const assignCell = narrow
+      ? `<td>${escapeHTML(assignLabelFor(groups, selType, selId) || '—')}</td>`
+      : `<td><select data-assign-user="${escapeHTML(u.id)}" data-prev="${escapeHTML(prev)}">${renderAssignSelectOptionsHTML(groups, selType, selId)}</select></td>`;
     return `
       <tr data-user-row="${escapeHTML(u.id)}" data-username="${escapeHTML((u.username || '').toLowerCase())}">
-        <td><input type="checkbox" data-user-check="${escapeHTML(u.id)}"></td>
+        ${checkCell}
         <td>${escapeHTML(u.username)}</td>
         <td>${u.role === 'admin' ? '<span class="spec-badge">admin</span>' : 'member'}</td>
-        <td><select data-assign-user="${escapeHTML(u.id)}" data-prev="${escapeHTML(prev)}">${renderAssignSelectOptionsHTML(groups, selType, selId)}</select></td>
+        ${assignCell}
         <td>${u.active ? 'active' : 'disabled'}${actions}
         </td>
       </tr>`;
@@ -236,6 +245,11 @@ function selectedAdminUserIds(){
 function refreshAdminBulkBar(){
   const bar = document.getElementById('adminBulkBar');
   if(!bar) return;
+  // Defence in depth: narrow never renders data-user-check, so this should
+  // never fire with a checked box in practice — but if stale/injected
+  // checkbox state somehow reaches here, keep the bulk-assign bar (a live
+  // write path) from ever appearing on a read-only viewport.
+  if(adminIsNarrow()){ bar.hidden = true; bar.innerHTML = ''; return; }
   const ids = selectedAdminUserIds();
   if(!ids.length){ bar.hidden = true; bar.innerHTML = ''; return; }
   const groups = buildAssignNodeGroups(adminState.tree, adminState.orgs);

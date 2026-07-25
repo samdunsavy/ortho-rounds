@@ -272,4 +272,38 @@ describe('mobile read-only', () => {
     const html = window.renderAdminDetailHTML({ tree: TREE, users: [], orgs: [], selection: { type: 'unit', id: 'u1' } });
     assert.ok(html.includes('data-rename-node='));
   });
+
+  test('narrow users panel has no live write path: no checkbox, no assign select, but still shows username and assignment as text', () => {
+    const { window } = loadFrontendEnv();
+    Object.defineProperty(window, 'innerWidth', { value: 500, configurable: true });
+    const html = window.renderAdminUsersPanelHTML({ tree: TREE, users: CC_USERS, orgs: [{ id: 'bfv2-org', name: 'Default' }], selection: { type: 'users' } });
+    assert.ok(!html.includes('data-assign-user'));
+    assert.ok(!html.includes('data-user-check'));
+    assert.ok(html.includes('xavier'));
+    assert.ok(html.includes('Amit'));
+    assert.ok(html.includes('Default')); // usr2's org assignment label, rendered as text
+    assert.ok(html.includes('Stale (unit:gone-unit)')); // usr3's stale assignment, still shown, escaped
+    assert.ok(html.includes('—')); // usr1 has no assignment
+  });
+
+  test('narrow: refreshAdminBulkBar leaves the bulk bar hidden even if a checkbox is injected and checked', () => {
+    const { window, document } = loadFrontendEnv();
+    Object.defineProperty(window, 'innerWidth', { value: 500, configurable: true });
+    const pane = document.getElementById('adminDetailPane');
+    pane.innerHTML = '<div id="adminBulkBar" hidden></div><input type="checkbox" data-user-check="usr2">';
+    const cb = pane.querySelector('[data-user-check="usr2"]');
+    cb.checked = true;
+    window.refreshAdminBulkBar();
+    const bar = document.getElementById('adminBulkBar');
+    assert.equal(bar.hasAttribute('hidden'), true);
+    assert.equal(bar.innerHTML, '');
+  });
+
+  test('wide users panel still renders the live assign select and checkbox (regression guard)', () => {
+    const { window } = loadFrontendEnv();
+    Object.defineProperty(window, 'innerWidth', { value: 1200, configurable: true });
+    const html = window.renderAdminUsersPanelHTML({ tree: TREE, users: CC_USERS, orgs: [{ id: 'bfv2-org', name: 'Default' }], selection: { type: 'users' } });
+    assert.ok(html.includes('data-assign-user="usr2"'));
+    assert.ok(html.includes('data-user-check="usr2"'));
+  });
 });
