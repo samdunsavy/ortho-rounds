@@ -208,6 +208,24 @@ function renderAdminUsersPanelHTML(state){
     </table>`;
 }
 
+function selectedAdminUserIds(){
+  return Array.from(document.querySelectorAll('[data-user-check]'))
+    .filter(cb => cb.checked)
+    .map(cb => cb.dataset.userCheck);
+}
+
+function refreshAdminBulkBar(){
+  const bar = document.getElementById('adminBulkBar');
+  if(!bar) return;
+  const ids = selectedAdminUserIds();
+  if(!ids.length){ bar.hidden = true; bar.innerHTML = ''; return; }
+  const groups = buildAssignNodeGroups(adminState.tree, adminState.orgs);
+  bar.hidden = false;
+  bar.innerHTML = `<strong>${ids.length} selected</strong>
+    <select id="adminBulkNode">${renderAssignSelectOptionsHTML(groups, null, null)}</select>
+    <button class="btn" id="adminBulkApply">Assign</button>`;
+}
+
 // Delegated at module scope alongside the other adminView listeners — see
 // the note above the `change` listener near the end of this file for why
 // that's safe even though this file doesn't have an init()/bindEvents().
@@ -262,6 +280,18 @@ document.getElementById('adminView')?.addEventListener('click', (e) => {
     if(!window.confirm(`Delete this ${type}? This cannot be undone.`)) return;
     api(`/api/admin/nodes/${encodeURIComponent(type)}/${encodeURIComponent(id)}`, { method: 'DELETE' })
       .then(() => { adminState.selection = { type: 'users' }; return loadAdminView(); })
+      .catch(err => showToast(err.message));
+    return;
+  }
+  if(e.target.id === 'adminBulkApply'){
+    e.stopPropagation();
+    const ids = selectedAdminUserIds();
+    const raw = document.getElementById('adminBulkNode').value;
+    const i = raw.indexOf(':');
+    const nodeType = i === -1 ? null : raw.slice(0, i);
+    const nodeId = i === -1 ? null : raw.slice(i + 1);
+    api('/api/admin/users/assign-bulk', { method: 'POST', body: JSON.stringify({ userIds: ids, nodeType, nodeId }) })
+      .then(() => { showToast(`Assigned ${ids.length} user${ids.length === 1 ? '' : 's'}`); return loadAdminView(); })
       .catch(err => showToast(err.message));
     return;
   }
@@ -422,6 +452,7 @@ document.getElementById('adminView')?.addEventListener('change', async (e) => {
       .catch(err => { showToast(err.message); loadAdminView(); });
     return;
   }
+  if(e.target.matches('[data-user-check]')){ refreshAdminBulkBar(); return; }
   const sel = e.target.closest('[data-assign-user]');
   if(!sel) return;
   const raw = sel.value;

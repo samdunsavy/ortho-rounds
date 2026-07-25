@@ -219,3 +219,23 @@ describe('users panel', () => {
     assert.ok(html.includes('id="adminUserSearch"'));
   });
 });
+
+describe('bulk assign', () => {
+  test('checking rows reveals the bulk bar and posts assign-bulk', async () => {
+    const { window } = loadFrontendEnv();
+    const calls = [];
+    window.fetch = async (url, opts) => { calls.push({ url, opts }); return { ok: true, status: 200, json: async () => ({ ok: true }) }; };
+    const pane = window.document.getElementById('adminDetailPane');
+    pane.innerHTML = window.renderAdminUsersPanelHTML({ tree: TREE, users: CC_USERS, orgs: [{ id: 'bfv2-org', name: 'Default' }], selection: { type: 'users' } });
+    const cb = window.document.querySelector('[data-user-check="usr2"]');
+    cb.checked = true;
+    cb.dispatchEvent(new window.Event('change', { bubbles: true }));
+    const bar = window.document.getElementById('adminBulkBar');
+    assert.equal(bar.hasAttribute('hidden'), false);
+    assert.ok(bar.innerHTML.includes('1 selected'));
+    // Spread into this realm's Array before comparing — see the identical
+    // note above validMoveParents' test for why (cross-realm array from
+    // window.eval'd code isn't reference-equal to a same-shaped literal).
+    assert.deepEqual([...window.selectedAdminUserIds()], ['usr2']);
+  });
+});
