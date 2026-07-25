@@ -6,6 +6,7 @@ import path from 'node:path';
 import { createStore } from '../storage.js';
 import { backfillV2 } from '../scripts/backfill-hierarchy-v2.js';
 import { resolveScope } from '../scope.js';
+import { nodeOrgId } from '../structure.js';
 
 describe('backfill-hierarchy-v2', () => {
   let dataDir;
@@ -179,5 +180,121 @@ describe('backfill-hierarchy-v2', () => {
     assert.equal(p3.unitId, p4.unitId);
     assert.equal(p1.unit, 'General');
     assert.equal('wardId' in p1, false);
+  });
+});
+
+// FINDING 1 regression: a user assigned {assignmentType:'org', assignmentId:
+// 'backfill-org'} (the v1 sentinel) must not be skipped just because
+// 'backfill-org' still exists. Its subtree yields zero units after the FK
+// flip, so mere existence is not enough — the assignment must resolve AND
+// live under the org this run just (re)built (bfv2-org).
+describe('Finding 1 regression: dead v1 org sentinel does not strand users', () => {
+  let dataDir;
+  let store;
+
+  before(async () => {
+    dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ortho-test-v2-orgaware-'));
+    store = await createStore({ dataDir });
+    await store.init();
+
+    // A v1-shaped org that still exists (so a pure existence check would
+    // pass) but is otherwise dead: v2 builds a completely separate
+    // 'bfv2-org' tree and never touches this one.
+    await store.createOrganization({ id: 'backfill-org', name: 'V1 Legacy Org', plan: 'free', createdAt: Date.now() });
+
+    await store.upsertPatient('op1', 100, 0, JSON.stringify({ name: 'Orgtest Patient', unit: 'IV', ward: '' }));
+
+    await store.createUser({
+      id: 'v1user', username: 'v1user', passwordHash: 'h', passwordSalt: 's',
+      role: 'member', orgId: null, active: true, tokenVersion: 0, createdAt: Date.now(),
+      assignmentType: 'org', assignmentId: 'backfill-org'
+    });
+  });
+
+  after(async () => {
+    await store.close();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  test('the user is re-pointed into the bfv2-org tree, and resolveScope yields a non-empty unit set', async () => {
+    const result = await backfillV2(store);
+
+    const user = await store.getUserById('v1user');
+    assert.notEqual(user.assignmentId, 'backfill-org', 'must be moved off the dead v1 org sentinel');
+
+    const resolvedOrgId = await nodeOrgId(store, user.assignmentType, user.assignmentId);
+    assert.equal(resolvedOrgId, result.orgId, 'must be re-pointed under the NEW bfv2-org tree');
+
+    const actor = {
+      id: user.id,
+      role: 'member',
+      orgId: user.orgId,
+      assignment: { type: user.assignmentType, id: user.assignmentId }
+    };
+    const scope = await resolveScope(actor, store);
+    assert.equal(scope.unrestricted, false);
+    assert.ok(scope.unitIds.size > 0, 'user must not be stranded with an empty unit set');
+
+    const op1 = JSON.parse((await store.getPatientRaw('op1')).data);
+    assert.ok(scope.unitIds.has(op1.unitId), 'scope must include the unit the backfill just created');
+  });
+});
+
+// FINDING 5(a)/(b) hardening: the single-org abort guard and the malformed-
+// patient-row skip.
+describe('Finding 5: single-org guard and malformed-row skip', () => {
+  test('refuses to run when a patient carries a foreign orgId, unless --force', async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ortho-test-v2-guard-patient-'));
+    const store = await createStore({ dataDir });
+    await store.init();
+    try {
+      await store.upsertPatient('gp1', 100, 0, JSON.stringify({ name: 'Guard Patient', unit: 'IV', orgId: 'some-other-org' }));
+
+      await assert.rejects(() => backfillV2(store), /refused to run/);
+
+      const result = await backfillV2(store, { force: true });
+      assert.ok(result.orgId);
+      assert.equal(result.stamped, 1);
+    } finally {
+      await store.close();
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test('refuses to run when a second organization row already exists, unless --force', async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ortho-test-v2-guard-org-'));
+    const store = await createStore({ dataDir });
+    await store.init();
+    try {
+      await store.createOrganization({ id: 'another-org', name: 'Another Org', plan: 'free', createdAt: Date.now() });
+
+      await assert.rejects(() => backfillV2(store), /refused to run/);
+
+      const result = await backfillV2(store, { force: true });
+      assert.ok(result.orgId);
+    } finally {
+      await store.close();
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test('a malformed patient row is skipped (not fatal) and counted in the summary', async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ortho-test-v2-malformed-'));
+    const store = await createStore({ dataDir });
+    await store.init();
+    try {
+      await store.upsertPatient('good1', 100, 0, JSON.stringify({ name: 'Good Patient', unit: 'IV' }));
+      await store.upsertPatient('bad1', 200, 0, '{not valid json');
+
+      const result = await backfillV2(store);
+      assert.equal(result.stamped, 1);
+      assert.equal(result.skipped, 1);
+
+      const good = JSON.parse((await store.getPatientRaw('good1')).data);
+      assert.ok(good.unitId, 'the well-formed row must still be stamped');
+    } finally {
+      await store.close();
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
   });
 });

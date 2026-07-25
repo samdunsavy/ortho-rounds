@@ -43,7 +43,7 @@ SQLite: adjust the `CREATE TABLE`/index definitions and add `addColumnIfMissing`
 ### 3. `scope.js`
 
 - `resolveScope` unchanged in shape: resolves the assignment node to a `unitIds` set via `listUnitIdsUnder`. `canRead(patient, scope)` unchanged (`patient.unitId ∈ scope.unitIds`, unassigned → instance-admin-only).
-- `decideWrite` unchanged in stamping logic (ancestry from `unitId`), but `resolveAncestry` now returns the 4-key ancestry. **New:** after deciding the unit, validate the incoming optional `wardId` — allow only if the ward's `unitId` equals the resolved unit; a mismatched ward → reject the write (400, see §5), not silently coerced. Clearing ward (`wardId` absent/null) is always allowed.
+- `decideWrite` unchanged in stamping logic (ancestry from `unitId`), but `resolveAncestry` now returns the 4-key ancestry. **New:** after deciding the unit, validate the incoming optional `wardId` against the resolved unit. The two write paths are deliberately asymmetric (see §5): the **sync** path (`/api/sync`) server-clears a mismatched `wardId` and keeps going — a 400 there would fail the whole batch, including every other patient in it, which is worse than silently dropping one stale optional field. The **explicit rehome route** (`/api/admin/patients/rehome`), by contrast, validates before any write and returns 400 on a mismatch, since it's a single targeted operation where surfacing the error immediately is strictly better than a silent no-op. Clearing ward (`wardId` absent/null) is always allowed on both paths.
 
 ### 4. Structural operations (`structure.js` + routes)
 
@@ -56,7 +56,9 @@ Carry over unchanged in behavior; only the parent maps flip:
 
 ### 5. Error handling
 
-- Optional `wardId` not under the patient's unit → `400 {error:'Ward is not under this unit'}` on the patient write / re-home; the operation is rejected (validate-before-write), not silently coerced.
+- Optional `wardId` not under the patient's unit is handled differently depending on the write path, by design:
+  - **`/api/admin/patients/rehome`** (explicit, targeted, admin-only): validates all patients up front and returns `400 {error:'Ward is not under this unit'}` — the operation is rejected (validate-before-write), nothing is coerced or partially applied.
+  - **`/api/sync`** (batched, client-originated, can carry stale/attacker-adjacent data from any actor): a mismatched `wardId` is server-clamped — cleared non-fatally so the rest of the batch still commits — rather than coerced to a different value or trusted as-is. This is intentional, not a gap: a 400 on one bad `wardId` inside a multi-patient sync payload would otherwise fail unrelated patients in the same batch.
 - All existing 400/403/404/409 semantics from the structural-ops layer carry over.
 - Names trimmed/required/≤80.
 

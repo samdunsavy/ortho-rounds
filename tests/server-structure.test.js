@@ -164,6 +164,33 @@ describe('DELETE /api/admin/nodes/:type/:id — delete-empty-only (flag on)', ()
     const attempt = await api(srv.baseUrl, boss2, `/api/admin/nodes/unit/${u3.json.id}`, { method: 'DELETE' });
     assert.equal(attempt.status, 403);
   });
+
+  test('deleting a ward: emptiness is judged by patients pinned to THAT ward, not its parent unit', async () => {
+    const u = await api(srv.baseUrl, boss, '/api/admin/units', { method: 'POST', body: { departmentId, name: 'Two-ward Bay' } });
+    const unitId = u.json.id;
+    const w1r = await api(srv.baseUrl, boss, '/api/admin/wards', { method: 'POST', body: { unitId, name: 'Ward One' } });
+    const w2r = await api(srv.baseUrl, boss, '/api/admin/wards', { method: 'POST', body: { unitId, name: 'Ward Two' } });
+    const ward1 = w1r.json.id;
+    const ward2 = w2r.json.id;
+
+    const push = await syncPost(srv.baseUrl, root, {
+      since: 0,
+      changes: [{ id: 'wdp1', name: 'Ward Delete Patient', status: 'postop', unitId, wardId: ward1, updatedAt: Date.now() }]
+    });
+    assert.equal(push.status, 200);
+    assert.ok(push.json.patients.find(p => p.id === 'wdp1'), 'patient must round-trip on push');
+
+    // ward2 has no patients of its own — a sibling ward (ward1) in the same
+    // unit having a patient must NOT block ward2's deletion.
+    const delWard2 = await api(srv.baseUrl, boss, `/api/admin/nodes/ward/${ward2}`, { method: 'DELETE' });
+    assert.equal(delWard2.status, 200);
+    assert.deepEqual(delWard2.json, { deleted: true });
+
+    // ward1 does have a patient pinned to it — must be blocked.
+    const delWard1 = await api(srv.baseUrl, boss, `/api/admin/nodes/ward/${ward1}`, { method: 'DELETE' });
+    assert.equal(delWard1.status, 409);
+    assert.ok(delWard1.json.blockedBy.patients >= 1, 'ward1 has a patient pinned to it, so patients must be counted');
+  });
 });
 
 describe('POST /api/admin/nodes/:type/:id/move — re-parent + subtree re-stamp (flag on)', () => {
@@ -229,6 +256,31 @@ describe('POST /api/admin/nodes/:type/:id/move — re-parent + subtree re-stamp 
     // getNode(store,'unit', departmentId), which never matches a unit row.
     const attempt = await api(srv.baseUrl, boss, `/api/admin/nodes/ward/${w1}/move`, { method: 'POST', body: { newParentId: d1 } });
     assert.equal(attempt.status, 404);
+  });
+
+  test('moving a ward to a different unit drops the stale wardId on patients left behind in the old unit', async () => {
+    // A second unit to move w1 into. w1's original parent is u1.
+    const u2r = await api(srv.baseUrl, boss, '/api/admin/units', { method: 'POST', body: { departmentId: d1, name: 'Bay 2' } });
+    const u2 = u2r.json.id;
+
+    // Patient stays pinned to u1 but carries wardId w1 (currently under u1).
+    const push = await syncPost(srv.baseUrl, root, {
+      since: 0,
+      changes: [{ id: 'wmp1', name: 'Ward Move Patient', status: 'postop', unitId: u1, wardId: w1, updatedAt: Date.now() }]
+    });
+    assert.equal(push.status, 200);
+    const before1 = push.json.patients.find(p => p.id === 'wmp1');
+    assert.ok(before1, 'patient must round-trip on push');
+    assert.equal(before1.wardId, w1);
+
+    const move = await api(srv.baseUrl, boss, `/api/admin/nodes/ward/${w1}/move`, { method: 'POST', body: { newParentId: u2 } });
+    assert.equal(move.status, 200);
+
+    const pull = await syncPost(srv.baseUrl, root, { since: 0, changes: [] });
+    const after1 = pull.json.patients.find(p => p.id === 'wmp1');
+    assert.ok(after1, 'patient must still exist after the ward move');
+    assert.equal(after1.unitId, u1, 'patient stays pinned to its original unit (unaffected by the ward move)');
+    assert.equal('wardId' in after1, false, 'the ward is now under a different unit, so the stale wardId must be dropped');
   });
 });
 

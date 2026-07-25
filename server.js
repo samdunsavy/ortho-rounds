@@ -536,11 +536,22 @@ async function handleApi(req, res, pathname){
       if(!g.ok) return sendJSON(res, g.status, { error: g.error });
       const children = (await childrenOf(store, type, id)).length;
       const users = (await store.getAllUsers()).filter(u => u.assignmentType === type && u.assignmentId === id).length;
-      const unitSet = await unitIdsUnder(store, type, id);
       let patients = 0;
-      for(const row of await store.getActive()){
-        let o; try{ o = JSON.parse(row.data); }catch{ continue; }
-        if(o.unitId && unitSet.has(o.unitId)) patients++;
+      if(type === 'ward'){
+        // unitIdsUnder('ward', id) resolves to the ward's PARENT unit, whose
+        // patient count includes every patient in that unit — not just this
+        // ward's. A ward's emptiness must be judged by patients actually
+        // pinned to it (o.wardId === id), not by its parent unit's occupancy.
+        for(const row of await store.getActive()){
+          let o; try{ o = JSON.parse(row.data); }catch{ continue; }
+          if(o.wardId === id) patients++;
+        }
+      } else {
+        const unitSet = await unitIdsUnder(store, type, id);
+        for(const row of await store.getActive()){
+          let o; try{ o = JSON.parse(row.data); }catch{ continue; }
+          if(o.unitId && unitSet.has(o.unitId)) patients++;
+        }
       }
       if(children || users || patients){
         return sendJSON(res, 409, { error: 'Node is not empty', blockedBy: { children, users, patients } });
@@ -563,8 +574,17 @@ async function handleApi(req, res, pathname){
       if(!parent) return sendJSON(res, 404, { error: `Parent ${parentType} not found` });
       const parentOrg = await nodeOrgId(store, parentType, newParentId);
       if(parentOrg !== g.orgId) return sendJSON(res, 403, { error: 'Parent is in a different organization' });
+      // Capture the OLD parent before re-parenting: unitIdsUnder(type,id) after
+      // the move only resolves the node's NEW unit, so a moved ward's patients
+      // still sitting in the OLD unit would otherwise keep a now-out-of-unit
+      // wardId. Restamp both the new subtree and (for a ward move) the old
+      // parent unit so labelStamp drops the stale wardId there.
+      const before = await getNode(store, type, id);
+      const oldParentId = before ? before[PARENT_FIELD[type]] : null;
       await updateNode(store, type, id, { [PARENT_FIELD[type]]: newParentId });
-      await restampUnits(store, await unitIdsUnder(store, type, id));
+      const set = await unitIdsUnder(store, type, id);
+      if(type === 'ward' && oldParentId) set.add(oldParentId);
+      await restampUnits(store, set);
       return sendJSON(res, 200, { id, type, newParentId });
     }
 

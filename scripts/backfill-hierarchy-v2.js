@@ -18,7 +18,12 @@
    patients identically.
 
    Usage:
-     node scripts/backfill-hierarchy-v2.js [--single-bucket]
+     node scripts/backfill-hierarchy-v2.js [--single-bucket] [--force]
+
+   --force skips the single-org safety guard (see assertSingleOrgSafe below),
+   which otherwise refuses to run if it finds any active patient's orgId, or
+   any organization row, other than the target org — re-homing ALL active
+   patients into one org tree is only safe for a single-org install.
 
    Env (mirrors how server.js builds its store):
      MONGODB_URI     — when set, uses the Mongo backend.
@@ -29,10 +34,19 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createStore } from '../storage.js';
 import { resolveAncestry } from '../hierarchy.js';
+import { nodeOrgId } from '../structure.js';
 
 const DEFAULT_ORG_ID = 'bfv2-org';
 const DEFAULT_HOSPITAL_ID = 'bfv2-hosp';
 const DEFAULT_DEPARTMENT_ID = 'bfv2-dep';
+
+// The v1 backfill (scripts/backfill-hierarchy.js, superseded) minted its own
+// org sentinel under this id. It's a known, expected leftover on any install
+// that's cutting over from v1 to v2 (see Finding 1: users still pointing at
+// it get re-pointed below) — its mere presence must not trip the multi-org
+// abort guard in assertSingleOrgSafe.
+const LEGACY_V1_ORG_ID = 'backfill-org';
+const KNOWN_SENTINEL_ORG_IDS = new Set([DEFAULT_ORG_ID, LEGACY_V1_ORG_ID]);
 
 function norm(s){
   return String(s || '').trim().toLowerCase().replace(/\s+/g, '');
@@ -130,8 +144,39 @@ async function labelForStaleAssignment(store, type, id){
   return node && node.name ? norm(node.name) : null;
 }
 
-export async function backfillV2(store, { singleBucket = false } = {}){
+// This migration re-homes EVERY active patient into the single target org
+// (orgId). That's correct for a single-org install, but silently wrong on a
+// multi-org one — it would merge unrelated organizations' patients into one
+// tree. Refuse to run when there's evidence of a second organization, unless
+// the caller explicitly overrides with --force / { force: true }.
+async function assertSingleOrgSafe(store, orgId, force){
+  if(force) return;
+
+  const offendingPatientOrgIds = new Set();
+  for(const row of await store.getActive()){
+    if(row.deleted) continue;
+    let data;
+    try{ data = JSON.parse(row.data); }catch{ continue; }
+    if(data.orgId && !KNOWN_SENTINEL_ORG_IDS.has(data.orgId)) offendingPatientOrgIds.add(data.orgId);
+  }
+
+  const orgs = await store.listOrganizations();
+  const otherOrgIds = orgs.map(o => o.id).filter(id => !KNOWN_SENTINEL_ORG_IDS.has(id));
+
+  const offending = [...new Set([...offendingPatientOrgIds, ...otherOrgIds])];
+  if(offending.length > 0){
+    throw new Error(
+      `backfillV2 refused to run: found organization id(s) other than the ` +
+      `target "${orgId}": ${offending.join(', ')}. This migration re-homes ` +
+      `ALL active patients into "${orgId}" and is only safe for a single-org ` +
+      `install. Re-run with --force (or { force: true }) to override.`
+    );
+  }
+}
+
+export async function backfillV2(store, { singleBucket = false, force = false } = {}){
   const { orgId, departmentId, created } = await ensureDefaultTree(store);
+  await assertSingleOrgSafe(store, orgId, force);
 
   // unitKey -> { unit, wardCache: Map(wardKey -> ward) }, so re-runs and
   // repeated labels within a single run only look up / create once.
@@ -163,10 +208,12 @@ export async function backfillV2(store, { singleBucket = false } = {}){
 
   const patients = await store.getActive();
   let stamped = 0;
+  let skipped = 0;
 
   for(const row of patients){
     if(row.deleted) continue; // getActive() already filters, but be defensive.
-    const data = JSON.parse(row.data);
+    let data;
+    try{ data = JSON.parse(row.data); }catch{ skipped++; continue; } // malformed row: skip, don't abort the migration
 
     const rawUnit = singleBucket ? '' : data.unit;
     const rawWard = singleBucket ? '' : data.ward;
@@ -205,7 +252,15 @@ export async function backfillV2(store, { singleBucket = false } = {}){
     if(isInstanceAdmin) continue;
 
     const hasAssignment = !!(user.assignmentType && user.assignmentId);
-    if(hasAssignment && await assignmentResolves(store, user.assignmentType, user.assignmentId)) continue;
+    // Existence alone isn't enough: a stale assignment can still resolve if
+    // the old (pre-migration) node happens to still exist, but under a org
+    // whose subtree yields zero units after the FK flip (e.g. the v1
+    // "backfill-org" sentinel). Require the assignment to resolve AND live
+    // under the org this run just (re)built.
+    const inNewTree = hasAssignment
+      && await assignmentResolves(store, user.assignmentType, user.assignmentId)
+      && (await nodeOrgId(store, user.assignmentType, user.assignmentId)) === orgId;
+    if(inNewTree) continue;
 
     let targetType = 'org';
     let targetId = orgId;
@@ -229,6 +284,7 @@ export async function backfillV2(store, { singleBucket = false } = {}){
     orgId,
     created,
     stamped,
+    skipped,
     assignedUsers
   };
 }
@@ -249,11 +305,12 @@ if(isMain){
     : path.join(__dirname, '..', 'data');
   const MONGODB_URI = process.env.MONGODB_URI || '';
   const singleBucket = process.argv.includes('--single-bucket');
+  const force = process.argv.includes('--force');
 
   const store = await createStore({ dataDir: DATA_DIR, mongoUri: MONGODB_URI });
   await store.init();
   try {
-    const result = await backfillV2(store, { singleBucket });
+    const result = await backfillV2(store, { singleBucket, force });
     console.log(JSON.stringify(result, null, 2));
   } finally {
     await store.close();

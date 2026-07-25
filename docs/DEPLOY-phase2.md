@@ -220,8 +220,20 @@ flip the flag back ON.
    v1 script did), with wards optionally nested under their unit. It stamps
    `unitId`/`departmentId`/`hospitalId`/`orgId` (and `wardId` when a ward
    label was present) onto every active patient, and re-points any user
-   whose assignment doesn't resolve under the new tree so nobody is
-   stranded. It's idempotent — safe to re-run.
+   whose assignment doesn't resolve **under the newly-built org tree** so
+   nobody is stranded. It's idempotent — safe to re-run.
+
+   The script refuses to run (non-zero exit, no writes to patients/users) if
+   it finds evidence of more than one organization — any active patient
+   carrying an `orgId` other than the target org, or a second organization
+   row already in the store. The known v1 sentinel org (`backfill-org`) is
+   whitelisted and does not trip this guard on its own — its presence is the
+   expected, tolerated leftover this whole cutover exists to clean up (see
+   Finding 1 in the re-model fix pass). This install is single-org
+   (Section 0), so the guard should pass silently. If it fires on some OTHER
+   org id, STOP and investigate before considering `--force` (which skips
+   the guard entirely and re-homes every active patient into the target org
+   regardless — only correct for a genuinely single-org install).
 
 5. **Verify** with the inspector before touching the flag:
 
@@ -237,9 +249,16 @@ flip the flag back ON.
    - **Units are consolidated** — no per-ward duplicate Units (i.e. the unit
      count roughly matches the number of distinct unit labels seen in the
      old data, not the number of distinct ward labels).
-   - Every **user has a resolvable assignment** (org/hospital/department/
-     unit/ward id that still exists in the new tree), except the instance
-     admin, who is intentionally unassigned.
+   - Every **user's assignment resolves to at least one unit under the NEW
+     `bfv2-org` tree.** Existence of the assigned node alone is **not**
+     sufficient — a stale assignment can point at a node that still exists
+     (e.g. the old `backfill-org` v1 sentinel) but whose subtree yields zero
+     units after the FK flip, silently stranding that user with an empty
+     worklist even though their assignment "resolves." Check both: the node
+     exists, and `nodeOrgId(store, assignmentType, assignmentId) === bfv2-org`
+     (or, equivalently, the user's `GET /api/me/scope` unit set is non-empty
+     post-cutover). The instance admin is the sole exception — intentionally
+     unassigned.
 
    If any of these fail, DO NOT proceed to step 6 — investigate and re-run
    the (idempotent) backfill until clean.
