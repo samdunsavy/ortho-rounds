@@ -100,7 +100,7 @@ Run the **tested, idempotent** backfill against production Mongo. It reconstruct
 1. Run it (from local checkout or the Render shell, with the prod URI):
 
    ```
-   MONGODB_URI="<prod uri>" node scripts/backfill-hierarchy.js
+   MONGODB_URI="<prod uri>" node scripts/backfill-hierarchy-v2.js
    ```
 
    It prints a summary: `{ orgId, created:{hospitals,departments,wards,units}, stamped, assignedUsers }`. Expect `stamped: 33` and `assignedUsers: 4` (the 3 members + `xavier1`).
@@ -174,3 +174,88 @@ Optional cleanup (safe, do after Phase 6 if desired): set the 3 members' `orgId`
 - The backfill is idempotent — re-running is safe and is the correct response to a partial result.
 - Do not delete the old test org / `wards` docs until after Phase 7 passes and the owner approves (Phase 5 option).
 - Do not proceed past any GATE that fails. When in doubt, flag OFF and stop.
+
+---
+
+## Re-model cutover (Department → Unit → Ward)
+
+**Applies when moving a production install already on the Phase-2 shape above
+(`Department → Ward → Unit`, `wardId` scoping) to the re-modeled shape
+(`Department → Unit → Ward`, `unitId` required + optional `wardId`).** The
+old per-ward Units built by `scripts/backfill-hierarchy.js` (superseded, no
+longer present in this checkout) get consolidated into one Unit per clinical
+team, with wards nested underneath as an optional location. Same safety
+posture as Phase 2 above: cut over with the flag OFF, migrate, verify, then
+flip the flag back ON.
+
+1. **Back up.** With the flag still ON (or OFF — either is fine, this step
+   only reads data), download a full export as the instance admin:
+
+   ```bash
+   curl -H "Authorization: Bearer <XAVIER_TOKEN>" https://<app>.onrender.com/api/export -o remodel-preflight-backup.json
+   ```
+
+   Confirm it's non-empty, valid JSON. This is the rollback path if the
+   migration produces anything unexpected.
+
+2. **Flip the flag OFF.** Render → service → Environment → set
+   `ORTHO_FLAG_MULTI_TENANT` = `0`. Save (triggers redeploy). Verify with
+   `curl https://<app>.onrender.com/api/health` — expect `MULTI_TENANT:false`.
+
+3. **Deploy the re-model build.** Push the branch with the new hierarchy
+   shape to `main`/`origin` and trigger (or wait for) the Render deploy.
+   Flag-off behavior is byte-identical to before (see the golden guards in
+   `tests/server-sync-golden.test.js`), so this is a safe code swap with no
+   scoping change yet. Wait for the deploy to report healthy.
+
+4. **Run the v2 backfill** against production Mongo:
+
+   ```bash
+   MONGODB_URI="<prod uri>" node scripts/backfill-hierarchy-v2.js
+   ```
+
+   This re-derives the tree in the new shape from each active patient's
+   free-text `unit`/`ward` labels — one consolidated Unit per distinct unit
+   label under the department (not one Unit per ward, which is what the old
+   v1 script did), with wards optionally nested under their unit. It stamps
+   `unitId`/`departmentId`/`hospitalId`/`orgId` (and `wardId` when a ward
+   label was present) onto every active patient, and re-points any user
+   whose assignment doesn't resolve under the new tree so nobody is
+   stranded. It's idempotent — safe to re-run.
+
+5. **Verify** with the inspector before touching the flag:
+
+   ```bash
+   MONGODB_URI="<prod uri>" node scripts/inspect-prod.js | tee remodel-inspect-after.txt
+   ```
+
+   Required, all hard gates:
+   - Every **active patient has a `unitId`** — zero stranded patients.
+   - Every patient with a non-null `wardId` has that ward's `unitId` equal to
+     the patient's own `unitId` (ward sits under the patient's unit, not a
+     different one).
+   - **Units are consolidated** — no per-ward duplicate Units (i.e. the unit
+     count roughly matches the number of distinct unit labels seen in the
+     old data, not the number of distinct ward labels).
+   - Every **user has a resolvable assignment** (org/hospital/department/
+     unit/ward id that still exists in the new tree), except the instance
+     admin, who is intentionally unassigned.
+
+   If any of these fail, DO NOT proceed to step 6 — investigate and re-run
+   the (idempotent) backfill until clean.
+
+6. **Flip the flag ON.** Render → Environment → set
+   `ORTHO_FLAG_MULTI_TENANT` = `1`. Save (redeploy). Verify
+   `MULTI_TENANT:true` via `/api/health`.
+
+7. **Confirm clinicians see their patients.** Log in as a regular member
+   (not the instance admin) and confirm their worklist is non-empty and
+   matches their unit's (and, if applicable, ward's) patients; confirm
+   `GET /api/me/scope` returns the expected node. If any clinician sees an
+   empty list, treat it exactly like GATE 7 above.
+
+**Rollback at any step:** set `ORTHO_FLAG_MULTI_TENANT=0` and redeploy if
+needed. The flag is a reversible visibility gate, not a data mutation — the
+migration only adds `unitId`/`wardId`/ancestry and re-points stale user
+assignments, so flag-off is always safe to fall back to, and re-running the
+migration later is safe.

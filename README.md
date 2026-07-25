@@ -181,7 +181,7 @@ an install that already has patient data:
 2. **Run the backfill with the flag still off.** From the server host, against
    the same Mongo/SQLite instance the app points at:
    ```bash
-   node scripts/backfill-hierarchy.js
+   node scripts/backfill-hierarchy-v2.js
    ```
    This reconstructs a hierarchy from each patient's existing free-text
    `ward`/`unit` fields and stamps `orgId`/`hospitalId`/`departmentId`/

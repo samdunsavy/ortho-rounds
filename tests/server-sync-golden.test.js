@@ -85,7 +85,7 @@ describe('flag OFF — new hierarchy routes do not exist', () => {
     const res = await fetch(`${srv.baseUrl}/api/admin/wards`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ departmentId: 'd1', name: 'Ward X' })
+      body: JSON.stringify({ unitId: 'u1', name: 'Ward X' })
     });
     assert.equal(res.status, 404);
   });
@@ -94,7 +94,7 @@ describe('flag OFF — new hierarchy routes do not exist', () => {
     const res = await fetch(`${srv.baseUrl}/api/admin/units`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ wardId: 'w1', name: 'Unit X' })
+      body: JSON.stringify({ departmentId: 'd1', name: 'Unit X' })
     });
     assert.equal(res.status, 404);
   });
