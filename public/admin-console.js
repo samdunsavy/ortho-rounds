@@ -67,12 +67,85 @@ function renderAdminCommandCenter(){
   if(detail) detail.innerHTML = renderAdminDetailHTML(adminState);
 }
 
-function renderAdminDetailHTML(state){
-  if(!state.selection) return '';
-  return `<div class="small-muted">${escapeHTML(state.selection.type)}</div>`;
+function childTypeOf(type){
+  return { hospital: 'department', department: 'unit', unit: 'ward' }[type] || null;
 }
 
+function addChildRouteFor(type){
+  return {
+    hospital: { path: '/api/admin/departments', parentKey: 'hospitalId' },
+    department: { path: '/api/admin/units', parentKey: 'departmentId' },
+    unit: { path: '/api/admin/wards', parentKey: 'unitId' }
+  }[type] || null;
+}
+
+function childListOf(type, node){
+  if(type === 'hospital') return node.departments || [];
+  if(type === 'department') return node.units || [];
+  if(type === 'unit') return node.wards || [];
+  return [];
+}
+
+function nodeStatsHTML(node){
+  const s = node.stats;
+  if(!s) return '';
+  const plural = s.livePatients === 1 ? '' : 's';
+  return `
+    <div class="small-muted">${s.livePatients} live patient${plural} · ${s.users} user${s.users === 1 ? '' : 's'}</div>
+    ${renderAdminStatusBar(s.byStatus, s.livePatients)}
+    <div class="small-muted">${s.lastActivity ? 'Active ' + formatRelativeTime(s.lastActivity) : 'No activity yet'}</div>`;
+}
+
+function renderAdminDetailHTML(state){
+  const sel = state.selection;
+  if(!sel) return '';
+  if(sel.type === 'users') return renderAdminUsersPanelHTML(state);
+  if(sel.type === 'orgs') return '';
+  const hit = findAdminNode(state.tree, sel.type, sel.id);
+  if(!hit) return `<div class="small-muted">That item no longer exists — reloading.</div>`;
+  const { node } = hit;
+  const kids = childListOf(sel.type, node);
+  const childType = childTypeOf(sel.type);
+  const kidsHTML = kids.length
+    ? kids.map(k => `<button type="button" class="admin-cc-row" data-node="${escapeHTML(childType)}:${escapeHTML(k.id)}">${escapeHTML(k.name)}<span class="cc-count">${k.stats ? k.stats.livePatients : ''}</span></button>`).join('')
+    : `<div class="small-muted">No ${childType || 'children'}s yet.</div>`;
+  const addChild = childType ? `
+    <div class="admin-inline-form">
+      <input placeholder="New ${escapeHTML(childType)} name" data-new-child-name="${escapeHTML(sel.type)}:${escapeHTML(sel.id)}">
+      <button class="btn" data-add-child="${escapeHTML(sel.type)}:${escapeHTML(sel.id)}">Add ${escapeHTML(childType)}</button>
+    </div>` : '';
+  return `
+    <div class="admin-detail-head">
+      <h3>${escapeHTML(node.name)}</h3>
+      <span class="spec-badge">${escapeHTML(sel.type)}</span>
+      ${renderAdminNodeActionsHTML(state, sel, hit)}
+    </div>
+    ${nodeStatsHTML(node)}
+    <h4>${childType ? childType[0].toUpperCase() + childType.slice(1) + 's' : 'Contents'}</h4>
+    <div class="admin-cc-children">${kidsHTML}</div>
+    ${addChild}`;
+}
+
+function renderAdminNodeActionsHTML(){ return ''; } // Task 4 replaces this
+function renderAdminUsersPanelHTML(){ return ''; }  // Task 5 replaces this
+
 document.getElementById('adminView')?.addEventListener('click', (e) => {
+  const addBtn = e.target.closest('[data-add-child]');
+  if(addBtn){
+    e.stopPropagation();
+    const raw = addBtn.dataset.addChild;
+    const i = raw.indexOf(':');
+    const parentType = raw.slice(0, i), parentId = raw.slice(i + 1);
+    const input = document.querySelector(`[data-new-child-name="${raw}"]`);
+    const name = (input && input.value || '').trim();
+    if(!name){ showToast('Enter a name'); return; }
+    const route = addChildRouteFor(parentType);
+    if(!route) return;
+    api(route.path, { method: 'POST', body: JSON.stringify({ [route.parentKey]: parentId, name }) })
+      .then(() => loadAdminView())
+      .catch(err => showToast(err.message));
+    return;
+  }
   const row = e.target.closest('[data-node]');
   if(!row) return;
   const raw = row.dataset.node;

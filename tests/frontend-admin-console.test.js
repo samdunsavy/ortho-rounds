@@ -112,3 +112,38 @@ describe('delegated assign-select change handler', () => {
     assert.equal(body.nodeId, null);
   });
 });
+
+describe('detail panel', () => {
+  test('unit detail shows name, stats and its wards', () => {
+    const { window } = loadFrontendEnv();
+    const html = window.renderAdminDetailHTML({ tree: TREE, users: [], orgs: [], selection: { type: 'unit', id: 'u1' } });
+    assert.ok(html.includes('IV'));
+    assert.ok(html.includes('4 live patient'));
+    assert.ok(html.includes('7MOW'));
+    assert.ok(html.includes('data-add-child="unit:u1"'));
+  });
+  test('department detail lists its units and offers add-unit', () => {
+    const { window } = loadFrontendEnv();
+    const html = window.renderAdminDetailHTML({ tree: TREE, users: [], orgs: [], selection: { type: 'department', id: 'd1' } });
+    assert.ok(html.includes('IV'));
+    assert.ok(html.includes('General'));
+    assert.ok(html.includes('data-add-child="department:d1"'));
+  });
+  test('department detail includes the status bar', () => {
+    const { window } = loadFrontendEnv();
+    const html = window.renderAdminDetailHTML({ tree: TREE, users: [], orgs: [], selection: { type: 'department', id: 'd1' } });
+    assert.ok(html.includes('admin-status-bar'));
+  });
+  test('ward detail has no add-child control', () => {
+    const { window } = loadFrontendEnv();
+    const html = window.renderAdminDetailHTML({ tree: TREE, users: [], orgs: [], selection: { type: 'ward', id: 'w1' } });
+    assert.ok(!html.includes('data-add-child='));
+  });
+  test('childTypeOf maps the hierarchy', () => {
+    const { window } = loadFrontendEnv();
+    assert.equal(window.childTypeOf('hospital'), 'department');
+    assert.equal(window.childTypeOf('department'), 'unit');
+    assert.equal(window.childTypeOf('unit'), 'ward');
+    assert.equal(window.childTypeOf('ward'), null);
+  });
+});
