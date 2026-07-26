@@ -318,9 +318,10 @@ function invalidateHierarchyCaches(){
 function restoreAdminFocus(selector, repaint, alwaysRefocus){
   const keep = !alwaysRefocus && document.activeElement?.matches?.(selector);
   const restore = alwaysRefocus || keep;
-  return Promise.resolve(repaint()).then(() => {
-    if(restore) document.querySelector(selector)?.focus();
-  });
+  const refocus = () => { if(restore) document.querySelector(selector)?.focus(); };
+  const result = repaint();
+  if(result != null && typeof result.then === 'function') return result.then(refocus);
+  refocus();
 }
 
 // Concurrent loadAdminView() calls (e.g. rapid org switches) are unordered;

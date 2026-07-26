@@ -546,13 +546,15 @@ describe('department specialty', () => {
 });
 
 describe('inline rename', () => {
-  test('the rename target is a focusable button', () => {
+  test('the rename target is a focusable button with a 44px minimum touch target', () => {
     const { window, document } = loadFrontendEnv();
     document.getElementById('adminDetailPane').innerHTML =
       window.renderAdminDetailHTML({ tree: TREE, users: [], orgs: [], selection: { type: 'unit', id: 'u1' } });
     const btn = document.querySelector('[data-rename-target="unit:u1"]');
     assert.equal(btn.tagName, 'BUTTON');
     assert.equal(btn.type, 'button');
+    assert.equal(window.getComputedStyle(btn).display, 'inline-flex');
+    assert.ok(parseInt(window.getComputedStyle(btn).minHeight, 10) >= 44);
     btn.focus();
     assert.equal(document.activeElement, btn);
   });
@@ -820,15 +822,23 @@ describe('focus restoration', () => {
 });
 
 describe('aria-expanded and labels audit', () => {
-  test('every expandable tree row has aria-expanded, and the filter/search inputs have labels', () => {
+  test('every expandable tree row has aria-expanded, and the filter/search inputs have labels', async () => {
     const { window, document } = loadFrontendEnv();
-    const html = window.renderAdminTreeHTML(TREE, null, new Set(['hospital:h1']));
-    assert.match(html, /aria-expanded="(true|false)"/);
-    document.getElementById('adminTreeRail').innerHTML =
-      '<label for="adminStructureFilter" class="sr-only">Filter the tree by name</label><input id="adminStructureFilter">';
-    assert.ok(document.querySelector('label[for="adminStructureFilter"]'));
+    window.api = async (path) => {
+      if(path.startsWith('/api/admin/org')) return TREE;
+      if(path === '/api/admin/users') return { users: [] };
+      return {};
+    };
+    await window.loadAdminView();
+    window.switchAdminSection('structure');
+    for(const btn of document.querySelectorAll('[data-toggle-expand]')){
+      assert.match(btn.getAttribute('aria-expanded'), /^(true|false)$/);
+    }
+    const filterLabel = document.querySelector('label[for="adminStructureFilter"]');
+    const filterAria = document.getElementById('adminStructureFilter')?.getAttribute('aria-label');
+    assert.ok(filterLabel || filterAria, 'Structure filter needs a label or aria-label');
     document.getElementById('adminPeopleSection').innerHTML = window.renderAdminUsersPanelHTML({ tree: TREE, users: [], orgs: [] });
-    assert.ok(document.querySelector('label[for="adminUserSearch"]'));
+    assert.ok(document.querySelector('label[for="adminUserSearch"], #adminUserSearch[aria-label]'));
   });
 });
 

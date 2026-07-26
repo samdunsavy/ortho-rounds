@@ -301,22 +301,22 @@ function renderAdminStructureBody(){
     adminUI.structureExpanded = defaultExpandStructure(adminData.tree);
     adminUI.structureInitialized = true;
   }
-  const filterFocused = document.activeElement?.id === 'adminStructureFilter';
-  const bodyEl = document.getElementById('adminStructureBody');
-  if(bodyEl) bodyEl.classList.toggle('is-drilled', adminUI.structureMobileDrilled);
-  const rail = document.getElementById('adminTreeRail');
-  if(rail){
-    rail.innerHTML = `
+  restoreAdminFocus('#adminStructureFilter', () => {
+    const bodyEl = document.getElementById('adminStructureBody');
+    if(bodyEl) bodyEl.classList.toggle('is-drilled', adminUI.structureMobileDrilled);
+    const rail = document.getElementById('adminTreeRail');
+    if(rail){
+      rail.innerHTML = `
       <label for="adminStructureFilter" class="sr-only">Filter the tree by name</label>
       <input id="adminStructureFilter" placeholder="Filter…" value="${escapeHTML(adminUI.structureFilter)}">
       <div class="admin-cc-rows">${renderAdminTreeHTML(adminData.tree, adminUI.selectedNode)}</div>`;
-  }
-  const detail = document.getElementById('adminDetailPane');
-  if(detail){
-    detail.innerHTML = `<button type="button" class="btn admin-back-to-tree" data-back-to-tree>‹ Back to tree</button>` +
-      renderAdminDetailHTML({ tree: adminData.tree, users: adminData.users, orgs: adminData.orgs, selection: adminUI.selectedNode });
-  }
-  if(filterFocused) document.getElementById('adminStructureFilter')?.focus();
+    }
+    const detail = document.getElementById('adminDetailPane');
+    if(detail){
+      detail.innerHTML = `<button type="button" class="btn admin-back-to-tree" data-back-to-tree>‹ Back to tree</button>` +
+        renderAdminDetailHTML({ tree: adminData.tree, users: adminData.users, orgs: adminData.orgs, selection: adminUI.selectedNode });
+    }
+  });
 }
 
 document.getElementById('adminStructureSection')?.addEventListener('click', async (e) => {
@@ -446,10 +446,10 @@ document.getElementById('adminStructureSection')?.addEventListener('input', (e) 
     }
   }
   const rail = document.getElementById('adminTreeRail');
-  const focused = document.activeElement === document.getElementById('adminStructureFilter');
-  const rows = rail && rail.querySelector('.admin-cc-rows');
-  if(rows) rows.innerHTML = renderAdminTreeHTML(adminData.tree, adminUI.selectedNode);
-  if(focused) document.getElementById('adminStructureFilter').focus();
+  restoreAdminFocus('#adminStructureFilter', () => {
+    const rows = rail && rail.querySelector('.admin-cc-rows');
+    if(rows) rows.innerHTML = renderAdminTreeHTML(adminData.tree, adminUI.selectedNode);
+  });
 });
 
 document.getElementById('adminStructureSection')?.addEventListener('change', async (e) => {
