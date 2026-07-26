@@ -692,6 +692,9 @@ describe('placement change: inline confirmation and revert', () => {
     await new Promise(r => setTimeout(r, 0));
     assert.ok(document.querySelector('[data-user-row="usr2"]').textContent.includes('Saved'));
     assert.ok(!document.querySelector('[data-user-row="usr1"]').textContent.includes('Saved'));
+    const assignCell = document.querySelector('[data-assign-user="usr2"]')?.closest('td');
+    assert.ok(assignCell?.querySelector('.admin-inline-note'), 'note lives beside the select');
+    assert.equal(document.querySelector('[data-user-row="usr2"] td:last-child').querySelector('.admin-inline-note'), null);
   });
 
   test('a failed change reverts the select and shows the reason inline, not just a toast', async () => {
@@ -744,6 +747,56 @@ describe('mobile card markup for the People list', () => {
     const html = window.renderAdminUsersPanelHTML({ tree: TREE, users: CC_USERS, orgs: [] });
     assert.ok(html.includes('admin-people-cards'));
     assert.ok(html.includes('data-user-card="usr2"'));
+  });
+
+  test('Unassigned filter hides cards the same way as table rows', async () => {
+    const { window, document } = loadFrontendEnv();
+    const users = [
+      { id: 'u1', username: 'pat', role: 'member', active: true, orgId: 'bfv2-org', assignmentType: null, assignmentId: null },
+      { id: 'u2', username: 'assigned', role: 'member', active: true, orgId: 'bfv2-org', assignmentType: 'unit', assignmentId: 'u1' }
+    ];
+    window.api = async (path) => path.startsWith('/api/admin/org') ? TREE : { users };
+    await window.loadAdminView();
+    window.switchAdminSection('people');
+    document.querySelector('[data-people-filter="unassigned"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+    assert.equal(document.querySelector('[data-user-row="u1"]').style.display, '');
+    assert.equal(document.querySelector('[data-user-card="u1"]').style.display, '');
+    assert.equal(document.querySelector('[data-user-row="u2"]').style.display, 'none');
+    assert.equal(document.querySelector('[data-user-card="u2"]').style.display, 'none');
+  });
+
+  test('sole last active admin card Disable is disabled with last-admin title', async () => {
+    const { window, document } = loadFrontendEnv();
+    window.localStorage.setItem('ortho_username', 'otheradmin');
+    const users = [
+      { id: 'only', username: 'soloadmin', role: 'admin', active: true, orgId: 'bfv2-org', assignmentType: null, assignmentId: null }
+    ];
+    window.api = async (path) => path.startsWith('/api/admin/org') ? TREE : { users };
+    await window.loadAdminView();
+    window.switchAdminSection('people');
+    const btn = document.querySelector('[data-user-card="only"] [data-user-toggle="only"]');
+    assert.equal(btn.disabled, true);
+    assert.match(btn.title, /last active admin/i);
+  });
+
+  test('row placement change updates the matching card placement text', async () => {
+    const { window, document } = loadFrontendEnv();
+    const users = CC_USERS.map(u => ({ ...u }));
+    window.api = async (path, opts) => {
+      if(path.startsWith('/api/admin/org')) return TREE;
+      if(path === '/api/admin/users') return { users };
+      if(opts && opts.method === 'POST') return { ok: true };
+      return {};
+    };
+    await window.loadAdminView();
+    window.switchAdminSection('people');
+    const sel = document.querySelector('[data-assign-user="usr2"]');
+    sel.value = 'unit:u1';
+    sel.dispatchEvent(new window.Event('change', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 0));
+    const cardBody = document.querySelector('[data-user-card="usr2"] .admin-people-card-body');
+    assert.ok(cardBody.textContent.includes('Ortho › IV'));
+    assert.ok(!cardBody.textContent.includes('Default'));
   });
 });
 

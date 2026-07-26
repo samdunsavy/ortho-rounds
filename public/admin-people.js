@@ -46,6 +46,22 @@ function isLastActiveAdmin(user, users){
   return !(users || []).some(u => u.id !== user.id && u.role === 'admin' && u.active && (u.orgId || null) === (user.orgId || null));
 }
 
+function adminPeopleDisableGuard(u, users){
+  const self = isSelfUser(u);
+  const lastAdmin = isLastActiveAdmin(u, users);
+  const guard = self || (u.active && lastAdmin);
+  const title = self ? 'You cannot disable your own account' : (u.active && lastAdmin ? 'This is the last active admin — promote someone else first' : '');
+  return { guard, title };
+}
+
+function adminPeopleRoleGuard(u, users){
+  const self = isSelfUser(u);
+  const lastAdmin = isLastActiveAdmin(u, users);
+  const guard = self || lastAdmin;
+  const title = self ? 'You cannot change your own role' : (lastAdmin ? 'This is the last active admin of the organization' : '');
+  return { guard, title };
+}
+
 function matchesAdminPeopleFilter(u, filter){
   if(filter === 'unassigned') return !u.assignmentType || !u.assignmentId;
   if(filter === 'disabled') return !u.active;
@@ -79,12 +95,11 @@ function renderAdminPeopleRowHTML(u, state){
   const groups = buildAssignNodeGroups(state.tree, state.orgs);
   const selType = u.assignmentType || null, selId = u.assignmentId || null;
   const prev = selType && selId ? `${selType}:${selId}` : '';
+  const users = state.users || adminData.users;
+  const { guard: disableGuard, title: disableTitle } = adminPeopleDisableGuard(u, users);
+  const disableAttrs = disableGuard ? ` disabled title="${escapeHTML(disableTitle)}"` : '';
+  const { guard: roleDisabled, title: roleTitle } = adminPeopleRoleGuard(u, users);
   const self = isSelfUser(u);
-  const lastAdmin = isLastActiveAdmin(u, state.users || adminData.users);
-  const disableTitle = self ? 'You cannot disable your own account' : (u.active && lastAdmin ? 'This is the last active admin — promote someone else first' : '');
-  const disableAttrs = (self || (u.active && lastAdmin)) ? ` disabled title="${escapeHTML(disableTitle)}"` : '';
-  const roleTitle = self ? 'You cannot change your own role' : (lastAdmin ? 'This is the last active admin of the organization' : '');
-  const roleDisabled = self || lastAdmin;
   const actions = narrow ? '' : `
         <button class="btn" data-user-toggle="${escapeHTML(u.id)}"${disableAttrs}>${u.active ? 'Disable' : 'Enable'}</button>
         <button class="btn" data-user-reset="${escapeHTML(u.id)}">Reset password</button>`;
@@ -125,33 +140,48 @@ function renderAdminPeopleRow(userId){
   row.innerHTML = renderAdminPeopleRowHTML(u);
 }
 
+function renderAdminPeopleCard(userId){
+  const esc = (typeof CSS !== 'undefined' && CSS.escape) ? CSS.escape : s => String(s);
+  const card = document.querySelector(`[data-user-card="${esc(userId)}"]`);
+  const u = (adminData.users || []).find(x => x.id === userId);
+  if(!card || !u) return;
+  const expanded = card.classList.contains('is-expanded');
+  card.outerHTML = renderAdminPeopleCardHTML(u);
+  if(expanded){
+    document.querySelector(`[data-user-card="${esc(userId)}"]`)?.classList.add('is-expanded');
+  }
+}
+
 /** Keeps Disable disabled/title and role-select guards in sync when the user
     list changes (e.g. one of two org admins was disabled — the survivor
     becomes last active admin). */
 function refreshAdminPeopleRowGuards(){
   const users = adminData.users || [];
+  const applyToggle = (root, u) => {
+    const btn = root.querySelector('[data-user-toggle]');
+    if(!u || !btn) return;
+    const { guard, title } = adminPeopleDisableGuard(u, users);
+    btn.disabled = guard;
+    if(guard) btn.title = title;
+    else btn.removeAttribute('title');
+  };
+  const applyRole = (root, u) => {
+    const roleSel = root.querySelector('[data-role-user]');
+    if(!u || !roleSel) return;
+    const { guard, title } = adminPeopleRoleGuard(u, users);
+    roleSel.disabled = guard;
+    if(guard) roleSel.title = title;
+    else roleSel.removeAttribute('title');
+  };
   document.querySelectorAll('[data-user-row]').forEach(tr => {
     const u = users.find(x => x.id === tr.dataset.userRow);
-    const btn = tr.querySelector('[data-user-toggle]');
-    if(u && btn){
-      const self = isSelfUser(u);
-      const lastAdmin = isLastActiveAdmin(u, users);
-      const guard = self || (u.active && lastAdmin);
-      const disableTitle = self ? 'You cannot disable your own account' : (u.active && lastAdmin ? 'This is the last active admin — promote someone else first' : '');
-      btn.disabled = guard;
-      if(guard) btn.title = disableTitle;
-      else btn.removeAttribute('title');
-    }
-    const roleSel = tr.querySelector('[data-role-user]');
-    if(u && roleSel){
-      const self = isSelfUser(u);
-      const lastAdmin = isLastActiveAdmin(u, users);
-      const roleGuard = self || lastAdmin;
-      const roleTitle = self ? 'You cannot change your own role' : (lastAdmin ? 'This is the last active admin of the organization' : '');
-      roleSel.disabled = roleGuard;
-      if(roleGuard) roleSel.title = roleTitle;
-      else roleSel.removeAttribute('title');
-    }
+    applyToggle(tr, u);
+    applyRole(tr, u);
+  });
+  document.querySelectorAll('[data-user-card]').forEach(card => {
+    const u = users.find(x => x.id === card.dataset.userCard);
+    applyToggle(card, u);
+    applyRole(card, u);
   });
 }
 
@@ -161,15 +191,18 @@ function renderAdminPeopleCardHTML(u, state){
   const groups = buildAssignNodeGroups(state.tree, state.orgs);
   const placement = peopleAssignmentDisplay(u, groups, state.orgs, unscoped);
   const assignText = placement.text === '—' ? 'Not assigned' : placement.text;
-  return `<div class="admin-people-card" data-user-card="${escapeHTML(u.id)}">
+  const users = state.users || adminData.users;
+  const { guard: disableGuard, title: disableTitle } = adminPeopleDisableGuard(u, users);
+  const disableAttrs = disableGuard ? ` disabled title="${escapeHTML(disableTitle)}"` : '';
+  return `<div class="admin-people-card" data-user-card="${escapeHTML(u.id)}" data-username="${escapeHTML((u.username || '').toLowerCase())}">
     <div class="admin-people-card-head" data-card-toggle="${escapeHTML(u.id)}">
       <strong>${escapeHTML(u.username)}${isSelfUser(u) ? ' <span class="spec-badge">You</span>' : ''}</strong>
-      <span>${u.active ? 'active' : 'disabled'}</span>
+      <span>${u.active ? 'Active' : 'Disabled'}</span>
     </div>
     <div class="admin-people-card-body">
       <div class="small-muted">${escapeHTML(assignText)}</div>
       <div class="admin-inline-form">
-        <button class="btn" data-user-toggle="${escapeHTML(u.id)}">${u.active ? 'Disable' : 'Enable'}</button>
+        <button class="btn" data-user-toggle="${escapeHTML(u.id)}"${disableAttrs}>${u.active ? 'Disable' : 'Enable'}</button>
         <button class="btn" data-user-reset="${escapeHTML(u.id)}">Reset password</button>
       </div>
     </div>
@@ -218,12 +251,15 @@ function renderAdminUsersPanelHTML(state){
 
 function applyAdminPeopleFilters(){
   const q = adminUI.peopleSearch.trim().toLowerCase();
-  document.querySelectorAll('[data-user-row]').forEach(tr => {
-    const u = (adminData.users || []).find(x => x.id === tr.dataset.userRow);
-    const matchesSearch = !q || tr.dataset.username.includes(q);
+  const apply = (el, userId) => {
+    const u = (adminData.users || []).find(x => x.id === userId);
+    const username = (el.dataset.username || '').toLowerCase();
+    const matchesSearch = !q || username.includes(q);
     const matchesFilter = !u || matchesAdminPeopleFilter(u, adminUI.peopleFilter);
-    tr.style.display = matchesSearch && matchesFilter ? '' : 'none';
-  });
+    el.style.display = matchesSearch && matchesFilter ? '' : 'none';
+  };
+  document.querySelectorAll('[data-user-row]').forEach(tr => apply(tr, tr.dataset.userRow));
+  document.querySelectorAll('[data-user-card]').forEach(card => apply(card, card.dataset.userCard));
 }
 
 function applyAdminPeopleChecked(){
@@ -331,6 +367,7 @@ document.getElementById('adminPeopleSection')?.addEventListener('click', (e) => 
           ? usersRes.users.filter(u => u.orgId === adminUI.viewedOrgId)
           : usersRes.users;
         renderAdminPeopleRow(id);
+        renderAdminPeopleCard(id);
         refreshAdminPeopleRowGuards();
         applyAdminPeopleFilters();
       }catch(err){ showToast(err.message); }
@@ -425,20 +462,22 @@ document.getElementById('adminPeopleSection')?.addEventListener('change', async 
       const u = (adminData.users || []).find(x => x.id === userId);
       if(u){ u.assignmentType = nodeType; u.assignmentId = nodeId; }
       renderAdminPeopleRow(userId);
+      renderAdminPeopleCard(userId);
       applyAdminPeopleFilters();
-      const row = document.querySelector(`[data-user-row="${esc(userId)}"]`);
+      const newSel = document.querySelector(`[data-assign-user="${esc(userId)}"]`);
+      const assignCell = newSel?.closest('td');
       const note = document.createElement('span');
       note.className = 'admin-inline-note';
       note.textContent = 'Saved';
-      row?.lastElementChild?.appendChild(note);
+      assignCell?.appendChild(note);
       setTimeout(() => note.remove(), 2500);
     }catch(err){
       sel.value = sel.dataset.prev || '';
-      const row = document.querySelector(`[data-user-row="${esc(userId)}"]`);
+      const assignCell = sel.closest('td');
       const note = document.createElement('span');
       note.className = 'admin-inline-note admin-inline-note-error';
       note.textContent = err.message;
-      row?.lastElementChild?.appendChild(note);
+      assignCell?.appendChild(note);
     }
     return;
   }
