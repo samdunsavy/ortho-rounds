@@ -847,6 +847,23 @@ async function handleApi(req, res, pathname){
             if(wUnit !== stored.unitId){ delete stored.wardId; }
             else { const w = await store.getWard(stored.wardId); if(w) stored.ward = w.name; }
           }
+          if(scope){
+            // moveHistory is server-owned: rebuild from stored truth and append
+            // at most one entry; never trust client-supplied history.
+            const prior = (existingObj && Array.isArray(existingObj.moveHistory)) ? existingObj.moveHistory : [];
+            if(decision && decision.moved){
+              stored.moveHistory = prior.concat([{
+                from: decision.moved.from,
+                to: decision.moved.to,
+                fromLabel: (existingObj && existingObj.unit) || null,
+                toLabel: stored.unit || null,
+                by: actor.username,
+                at: now
+              }]);
+            } else {
+              stored.moveHistory = prior;
+            }
+          }
           stored.updatedAt = now;
           await store.upsertPatient(p.id, now, p.deleted ? 1 : 0, JSON.stringify(stored));
         }

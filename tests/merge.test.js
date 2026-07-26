@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { mergeChecklistById, mergePlanHistory, mergeLabsHistory, mergePatientRecords, stampAttribution } from '../merge.js';
+import { mergeChecklistById, mergePlanHistory, mergeLabsHistory, mergePatientRecords, stampAttribution, mergeMoveHistory } from '../merge.js';
 
 describe('mergeChecklistById', () => {
   test('keeps the newer item per id', () => {
@@ -203,5 +203,18 @@ describe('stampAttribution', () => {
     const patient = { postOpChecks: [{ id: 'c1', status: 'done' }] };
     stampAttribution(patient, null, null);
     assert.equal(patient.postOpChecks[0].doneBy, undefined);
+  });
+});
+
+describe('mergeMoveHistory', () => {
+  test('unions by signature, dedupes, sorts by at', () => {
+    const a = [{ at: 2, from: 'u1', to: 'u2', by: 'x' }, { at: 1, from: 'u0', to: 'u1', by: 'y' }];
+    const b = [{ at: 2, from: 'u1', to: 'u2', by: 'x' }, { at: 3, from: 'u2', to: 'u3', by: 'z' }];
+    const m = mergeMoveHistory(a, b);
+    assert.deepEqual(m.map(h => h.at), [1, 2, 3]);
+    assert.equal(m.length, 3);
+  });
+  test('missing sides are treated as empty', () => {
+    assert.deepEqual(mergeMoveHistory(null, undefined), []);
   });
 });

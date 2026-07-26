@@ -40,6 +40,14 @@ export function mergeLabsHistory(localHist, remoteHist){
   return [...byDate.values()].sort((a, b) => String(a.date).localeCompare(String(b.date)));
 }
 
+export function mergeMoveHistory(localHist, remoteHist){
+  const bySig = new Map();
+  const key = h => `${h.at}|${h.from}|${h.to}`;
+  for(const h of (remoteHist || [])){ if(h) bySig.set(key(h), h); }
+  for(const h of (localHist || [])){ if(h) bySig.set(key(h), h); }
+  return [...bySig.values()].sort((a, b) => (Number(a.at) || 0) - (Number(b.at) || 0));
+}
+
 export function mergePatientRecords(local, remote){
   if(!local) return Object.assign({}, remote);
   if(!remote) return Object.assign({}, local);
@@ -54,6 +62,7 @@ export function mergePatientRecords(local, remote){
     merged.dischargeChecks = mergeChecklistById(local.dischargeChecks, remote.dischargeChecks);
   }
   merged.planHistory = mergePlanHistory(local.planHistory, remote.planHistory);
+  merged.moveHistory = mergeMoveHistory(local.moveHistory, remote.moveHistory);
   merged.labs = Object.assign({}, remote.labs || {}, local.labs || {});
   merged.labsHistory = mergeLabsHistory(local.labsHistory, remote.labsHistory);
   const localPlanTs = Number(local.planUpdatedAt) || 0;

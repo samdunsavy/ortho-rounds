@@ -38,6 +38,7 @@ describe('MULTI_TENANT sync scoping (unit-based)', () => {
         await store.createDepartment({ id: 'dep2', hospitalId: 'h1', name: 'Surgery' });
         await store.createDepartment({ id: 'depx', hospitalId: 'hx', name: 'OtherOrg' });
         await store.createUnit({ id: 'unit1', departmentId: 'dep1', name: 'Unit One' });
+        await store.createUnit({ id: 'unit1b', departmentId: 'dep1', name: 'Unit One-B' });
         await store.createUnit({ id: 'unit2', departmentId: 'dep2', name: 'Unit Two' });
         await store.createUnit({ id: 'unitx', departmentId: 'depx', name: 'Unit X' });
         await store.createWard({ id: 'ward1', unitId: 'unit1', name: 'Ward One' });
@@ -48,6 +49,7 @@ describe('MULTI_TENANT sync scoping (unit-based)', () => {
         await seedUser(store, { id: 'u3', username: 'boss1', orgId: 'org1', role: 'admin' });
         await seedUser(store, { id: 'u4', username: 'lost', orgId: 'org1' });
         await seedUser(store, { id: 'u5', username: 'px', orgId: 'org2', assignment: { type: 'unit', id: 'unitx' } });
+        await seedUser(store, { id: 'ud', username: 'dlead', orgId: 'org1', assignment: { type: 'department', id: 'dep1' } });
       }
     });
     tokens = {
@@ -56,7 +58,8 @@ describe('MULTI_TENANT sync scoping (unit-based)', () => {
       boss1: await tok(srv.baseUrl, 'boss1', 'pw-boss1'),
       lost: await tok(srv.baseUrl, 'lost', 'pw-lost'),
       px: await tok(srv.baseUrl, 'px', 'pw-px'),
-      root: await tok(srv.baseUrl, 'admin', 'test-admin-pass')
+      root: await tok(srv.baseUrl, 'admin', 'test-admin-pass'),
+      dlead: await tok(srv.baseUrl, 'dlead', 'pw-dlead')
     };
     // Each member creates one patient with no unitId — auto-resolved to their
     // single assigned unit.
@@ -266,6 +269,30 @@ describe('MULTI_TENANT sync scoping (unit-based)', () => {
   test('absent activeScope reproduces the un-narrowed result', async () => {
     const a = await syncPost(srv.baseUrl, tokens.pg1, { since: 0, changes: [] });
     assert.ok(a.json.patients.every(p => p.unitId === 'unit1'));
+  });
+
+  test('a department-assigned member moves a patient between the department\'s units and it persists + audits', async () => {
+    // dlead is assigned at dep1 (covers unit1 + unit1b). Create a patient in unit1, move to unit1b.
+    await syncPost(srv.baseUrl, tokens.dlead, { since: 0, changes: [{ id: 'mv1', name: 'Mover', unitId: 'unit1', updatedAt: Date.now() }] });
+    await syncPost(srv.baseUrl, tokens.dlead, { since: 0, changes: [{ id: 'mv1', name: 'Mover', unitId: 'unit1b', updatedAt: Date.now() + 5 }] });
+    const pull = await syncPost(srv.baseUrl, tokens.dlead, { since: 0, changes: [] });
+    const p = pull.json.patients.find(x => x.id === 'mv1');
+    assert.equal(p.unitId, 'unit1b');
+    assert.equal(Array.isArray(p.moveHistory), true);
+    const last = p.moveHistory[p.moveHistory.length - 1];
+    assert.equal(last.to, 'unit1b');
+    assert.equal(last.by, 'dlead', 'by is the authenticated actor, server-stamped');
+  });
+
+  test('a client cannot forge moveHistory — server discards client-supplied entries', async () => {
+    await syncPost(srv.baseUrl, tokens.dlead, {
+      since: 0,
+      changes: [{ id: 'mv1', name: 'Mover', unitId: 'unit1b', updatedAt: Date.now() + 10,
+        moveHistory: [{ from: 'x', to: 'y', by: 'HACKER', at: 1 }] }]
+    });
+    const pull = await syncPost(srv.baseUrl, tokens.dlead, { since: 0, changes: [] });
+    const p = pull.json.patients.find(x => x.id === 'mv1');
+    assert.equal(p.moveHistory.some(h => h.by === 'HACKER'), false, 'forged entry rejected');
   });
 });
 
