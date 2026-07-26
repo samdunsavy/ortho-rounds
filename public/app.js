@@ -45,7 +45,7 @@ const LS_USERNAME = "ortho_username";
 const LS_ROLE = "ortho_role";
 const LS_PUSH_ENABLED = "ortho_pushEnabled";
 const LS_LASTSYNC = "ortho_lastSync";
-const LS_ACTIVE_SCOPE = 'ortho_active_scope';
+const LS_ACTIVE_SCOPE = "ortho_active_scope";
 const LS_LAST_FULL_SYNC = "ortho_lastFullSync";
 const LS_PRESENTED = "ortho_presented"; // { date, ids[] }
 const LS_FILTER = "ortho_filter";
@@ -2004,6 +2004,7 @@ function logout(){
   localStorage.removeItem(LS_USERNAME);
   localStorage.removeItem(LS_ROLE);
   localStorage.removeItem(LS_ORG_ID);
+  localStorage.removeItem(LS_ACTIVE_SCOPE);
   updateAccountUI();
   showLogin();
 }

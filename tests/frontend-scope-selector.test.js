@@ -29,3 +29,19 @@ describe('syncNow sends activeScope', () => {
     assert.deepEqual(sentBody.activeScope, { type: 'unit', id: 'u1' });
   });
 });
+
+describe('logout clears activeScope', () => {
+  test('logout() removes LS_ACTIVE_SCOPE so next user starts fresh', () => {
+    const { window } = loadFrontendEnv();
+    window.localStorage.setItem('ortho_token', 't');
+    window.localStorage.setItem('ortho_role', 'admin');
+    window.setActiveScope({ type: 'unit', id: 'u1' });
+    assert.equal(window.getActiveScope() !== null, true);
+    try {
+      window.logout();
+    } catch (e) {
+      // logout may have side effects (e.g., DOM updates); we test the narrow unit anyway
+    }
+    assert.equal(window.getActiveScope(), null);
+  });
+});
