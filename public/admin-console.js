@@ -187,6 +187,19 @@ function deleteBlockedReason(node, type){
   return bits.join(', ');
 }
 
+/** Turns a 409 `{ error, blockedBy: { children, users, patients } }` into a
+    sentence naming what is actually in the way. Returns null for any error
+    without a blockedBy payload so callers can fall back to err.message. */
+function describeDeleteBlock(err){
+  const b = err && err.payload && err.payload.blockedBy;
+  if(!b) return null;
+  const bits = [];
+  if(b.children) bits.push(`${b.children} child item${b.children === 1 ? '' : 's'}`);
+  if(b.patients) bits.push(`${b.patients} patient${b.patients === 1 ? '' : 's'}`);
+  if(b.users) bits.push(`${b.users} user${b.users === 1 ? '' : 's'}`);
+  return bits.length ? `Can't delete — still has ${bits.join(', ')}` : null;
+}
+
 function adminIsNarrow(){
   return typeof window !== 'undefined' && window.innerWidth < 900;
 }
@@ -359,7 +372,7 @@ document.getElementById('adminView')?.addEventListener('click', (e) => {
     if(!window.confirm(`Delete this ${type}? This cannot be undone.`)) return;
     api(`/api/admin/nodes/${encodeURIComponent(type)}/${encodeURIComponent(id)}`, { method: 'DELETE' })
       .then(() => { invalidateHierarchyCaches(); adminState.selection = { type: 'users' }; return loadAdminView(); })
-      .catch(err => showToast(err.message));
+      .catch(err => showToast(describeDeleteBlock(err) || err.message));
     return;
   }
   if(e.target.id === 'adminBulkApply'){

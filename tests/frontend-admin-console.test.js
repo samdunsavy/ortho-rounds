@@ -558,3 +558,61 @@ describe('hospital and org rows show their counts', () => {
     assert.ok(html.includes('2 users'));
   });
 });
+
+describe('409 blockedBy reaches the UI', () => {
+  test('api() attaches the status and parsed body to the thrown error', async () => {
+    const { window } = loadFrontendEnv();
+    window.fetch = async () => ({
+      ok: false,
+      status: 409,
+      json: async () => ({ error: 'Node is not empty', blockedBy: { children: 0, users: 1, patients: 3 } })
+    });
+    await assert.rejects(
+      () => window.api('/api/admin/nodes/unit/u1', { method: 'DELETE' }),
+      (err) => {
+        assert.equal(err.message, 'Node is not empty');
+        assert.equal(err.status, 409);
+        assert.equal(err.payload.blockedBy.patients, 3);
+        return true;
+      }
+    );
+  });
+
+  test('describeDeleteBlock names what is in the way', () => {
+    const { window } = loadFrontendEnv();
+    const err = new window.Error('Node is not empty');
+    err.payload = { blockedBy: { children: 0, users: 1, patients: 3 } };
+    assert.equal(window.describeDeleteBlock(err), "Can't delete — still has 3 patients, 1 user");
+  });
+
+  test('describeDeleteBlock returns null for an unrelated error', () => {
+    const { window } = loadFrontendEnv();
+    assert.equal(window.describeDeleteBlock(new window.Error('boom')), null);
+  });
+
+  test('a blocked delete toasts the explained reason, not the bare server string', async () => {
+    const { window, document } = loadFrontendEnv();
+    const toasts = [];
+    window.showToast = (m) => toasts.push(m);
+    window.confirm = () => true;
+    window.api = async (path, opts) => {
+      if(path.startsWith('/api/admin/org')) return { totals: { departments: 0, usersActive: 0, livePatients: 0 }, hospitals: [] };
+      if(path === '/api/admin/users') return { users: [] };
+      if(opts && opts.method === 'DELETE'){
+        const err = new window.Error('Node is not empty');
+        err.status = 409;
+        err.payload = { error: 'Node is not empty', blockedBy: { children: 0, users: 0, patients: 2 } };
+        throw err;
+      }
+      return {};
+    };
+    const empty = JSON.parse(JSON.stringify(TREE));
+    empty.hospitals[0].departments[0].units[1].stats.livePatients = 0;
+    empty.hospitals[0].departments[0].units[1].stats.users = 0;
+    document.getElementById('adminDetailPane').innerHTML =
+      window.renderAdminDetailHTML({ tree: empty, users: [], orgs: [], selection: { type: 'unit', id: 'u2' } });
+    document.querySelector('[data-delete-node="unit:u2"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 0));
+    assert.deepEqual([...toasts], ["Can't delete — still has 2 patients"]);
+  });
+});

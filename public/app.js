@@ -362,8 +362,16 @@ async function api(path, opts){
   }
   if(!res.ok){
     let msg = 'Request failed (' + res.status + ')';
-    try{ const j = await res.json(); if(j && j.error) msg = j.error; }catch{ /* ignore */ }
-    throw new Error(msg);
+    let payload = null;
+    try{ payload = await res.json(); }catch{ /* non-JSON body — keep the generic message */ }
+    if(payload && payload.error) msg = payload.error;
+    const err = new Error(msg);
+    // Callers that need more than a message — the admin console's delete
+    // handler reads the 409 `blockedBy` counts — would otherwise have no way
+    // to see the rest of the response body.
+    err.status = res.status;
+    if(payload) err.payload = payload;
+    throw err;
   }
   return res.status === 204 ? null : res.json();
 }
