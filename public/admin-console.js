@@ -80,10 +80,11 @@ function childTypeOf(type){
 
 function addChildRouteFor(type){
   return {
-    // Org has no parent key: POST /api/admin/hospitals infers the org from
-    // the actor for an org admin, and an instance admin drilled into a
-    // specific org's tree is a narrower case this pass doesn't cover.
-    org: { path: '/api/admin/hospitals', parentKey: null },
+    // The org tree row is data-node="org:<orgId>", so the parent id the
+    // add-child handler extracts is already the org id. An instance admin
+    // MUST send it (requestedOrgId returns null without it → 400); for an
+    // org admin the server ignores it and uses actor.orgId.
+    org: { path: '/api/admin/hospitals', parentKey: 'orgId' },
     hospital: { path: '/api/admin/departments', parentKey: 'hospitalId' },
     department: { path: '/api/admin/units', parentKey: 'departmentId' },
     unit: { path: '/api/admin/wards', parentKey: 'unitId' }
@@ -188,6 +189,14 @@ function deleteBlockedReason(node, type){
 
 function adminIsNarrow(){
   return typeof window !== 'undefined' && window.innerWidth < 900;
+}
+
+/** The org the console is currently looking at: the one an instance admin
+    drilled into, else the org the loaded tree belongs to. Null before the
+    first successful load. */
+function adminCurrentOrgId(){
+  if(adminViewOrgId) return adminViewOrgId;
+  return (adminState.tree && adminState.tree.org && adminState.tree.org.id) || null;
 }
 
 function renderAdminNodeActionsHTML(state, sel, hit){
@@ -392,7 +401,13 @@ document.getElementById('adminView')?.addEventListener('click', (e) => {
     const username = (nameEl.value || '').trim();
     if(!username){ showToast('Enter a username'); return; }
     const role = document.getElementById('adminNewUserAdmin').checked ? 'admin' : 'member';
-    api('/api/admin/users', { method: 'POST', body: JSON.stringify({ username, role }) })
+    const body = { username, role };
+    // An instance admin has no org of their own; without this the server
+    // stores the new user with no orgId at all, which resolveScope() reads
+    // as unrestricted access to every organization.
+    const orgId = adminCurrentOrgId();
+    if(orgId) body.orgId = orgId;
+    api('/api/admin/users', { method: 'POST', body: JSON.stringify(body) })
       .then(res => { window.alert(`User created. Temporary password (shown once): ${res.temporaryPassword}`); nameEl.value = ''; return loadAdminView(); })
       .catch(err => showToast(err.message));
     return;

@@ -295,7 +295,7 @@ describe('request-level coverage: structural actions (wrong parentKey corrupts d
     }
   });
 
-  test('org add-child (add hospital) posts {name} only — no parent key', async () => {
+  test('org add-child (add hospital) posts {orgId, name} so an instance admin can target the org', async () => {
     const { window, document } = loadFrontendEnv();
     const calls = [];
     window.api = mockAdminApi(calls);
@@ -308,7 +308,7 @@ describe('request-level coverage: structural actions (wrong parentKey corrupts d
     const call = calls.find(c => c.path === '/api/admin/hospitals');
     assert.ok(call, 'expected a POST to /api/admin/hospitals');
     assert.equal(call.opts.method, 'POST');
-    assert.deepEqual(JSON.parse(call.opts.body), { name: 'New Hospital' });
+    assert.deepEqual(JSON.parse(call.opts.body), { orgId: 'bfv2-org', name: 'New Hospital' });
   });
 
   test('rename posts PATCH with {name}', async () => {
@@ -358,6 +358,25 @@ describe('user lifecycle', () => {
     const users = [{ id: 'u9', username: 'off', role: 'member', active: false, orgId: null, assignmentType: null, assignmentId: null }];
     const html = window.renderAdminUsersPanelHTML({ tree: TREE, users, orgs: [], selection: { type: 'users' } });
     assert.match(html, /data-user-toggle="u9"[^>]*>Enable</);
+  });
+
+  test('create user carries the org in context so the new user is not org-less', async () => {
+    const { window, document } = loadFrontendEnv();
+    const calls = [];
+    window.api = async (path, opts) => {
+      calls.push({ path, opts });
+      if(path.startsWith('/api/admin/org')) return Object.assign({}, TREE, { org: { id: 'bfv2-org', name: 'Default' } });
+      if(path === '/api/admin/users' && (!opts || opts.method !== 'POST')) return { users: [] };
+      return { temporaryPassword: 'bone-plate-1234' };
+    };
+    window.alert = () => {};
+    await window.loadAdminView();
+    document.getElementById('adminNewUsername').value = 'newpg';
+    document.getElementById('adminCreateUser').dispatchEvent(new window.Event('click', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 0));
+    const call = calls.find(c => c.path === '/api/admin/users' && c.opts && c.opts.method === 'POST');
+    assert.ok(call, 'expected a POST to /api/admin/users');
+    assert.deepEqual(JSON.parse(call.opts.body), { username: 'newpg', role: 'member', orgId: 'bfv2-org' });
   });
 });
 
