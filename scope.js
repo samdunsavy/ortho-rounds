@@ -14,6 +14,20 @@ export async function resolveScope(actor, store){
   return { unrestricted: false, unitIds, includeUnassigned: false };
 }
 
+/** Narrow an effective scope to the intersection with a set of unit ids
+ *  (the caller's chosen activeScope subtree). Narrow-only: an unrestricted
+ *  scope collapses to exactly activeUnitIds; a restricted scope keeps only
+ *  the units it already allowed. Unassigned patients are never in an
+ *  activeScope subtree, so includeUnassigned is always false. */
+export function intersectScope(scope, activeUnitIds){
+  if(scope.unrestricted){
+    return { unrestricted: false, unitIds: new Set(activeUnitIds), includeUnassigned: false };
+  }
+  const out = new Set();
+  for(const u of scope.unitIds){ if(activeUnitIds.has(u)) out.add(u); }
+  return { unrestricted: false, unitIds: out, includeUnassigned: false };
+}
+
 export function canRead(patient, scope){
   if(scope.unrestricted) return true;
   if(!patient?.unitId) return scope.includeUnassigned;

@@ -248,6 +248,25 @@ describe('MULTI_TENANT sync scoping (unit-based)', () => {
     assert.equal(r.status, 200);
     assert.deepEqual(r.json.rejected, []);
   });
+
+  test('activeScope narrows an unrestricted admin to one department', async () => {
+    const r = await syncPost(srv.baseUrl, tokens.root, { since: 0, changes: [], activeScope: { type: 'department', id: 'dep1' } });
+    assert.equal(r.json.scoped, true, 'narrowed admin is now scoped');
+    for(const p of r.json.patients){ assert.equal(p.departmentId, 'dep1'); }
+    assert.equal(r.json.patients.some(p => p.orgId === 'org2'), false, 'other org excluded');
+  });
+
+  test('activeScope cannot widen a member beyond their permission scope', async () => {
+    // pg1 is pinned to unit1; pointing activeScope at unit2 (in-org but not theirs)
+    // intersects to empty — no escalation, and definitely no cross to unit2.
+    const r = await syncPost(srv.baseUrl, tokens.pg1, { since: 0, changes: [], activeScope: { type: 'unit', id: 'unit2' } });
+    assert.equal(r.json.patients.some(p => p.unitId === 'unit2'), false);
+  });
+
+  test('absent activeScope reproduces the un-narrowed result', async () => {
+    const a = await syncPost(srv.baseUrl, tokens.pg1, { since: 0, changes: [] });
+    assert.ok(a.json.patients.every(p => p.unitId === 'unit1'));
+  });
 });
 
 describe('GET /api/me/scope', () => {

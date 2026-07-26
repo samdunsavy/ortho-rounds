@@ -63,8 +63,8 @@ import { mergePatientRecords, stampAttribution } from './merge.js';
 import { logError, logWarn } from './logger.js';
 import { runDigestPass } from './notifications.js';
 import { listFlags, isEnabled } from './flags.js';
-import { resolveScope, canRead, decideWrite } from './scope.js';
-import { wardUnitId } from './hierarchy.js';
+import { resolveScope, canRead, decideWrite, intersectScope } from './scope.js';
+import { wardUnitId, listUnitIdsUnder } from './hierarchy.js';
 import { recordEvent, getSnapshot, isExportEnabled, startExportLoop } from './telemetry.js';
 import { buildOrgTree, buildOrgRollups, buildScopeTree } from './admin.js';
 import { NODE_TYPES, PARENT_TYPE, getNode, nodeOrgId, childrenOf, unitIdsUnder, restampUnits, restampPatient, updateNode, deleteNode, PARENT_FIELD } from './structure.js';
@@ -797,6 +797,11 @@ async function handleApi(req, res, pathname){
     const changes = Array.isArray(body.changes) ? body.changes : [];
     const now = Date.now();
     const scope = isEnabled('MULTI_TENANT') ? await resolveScope(actor, store) : null;
+    let effScope = scope;
+    if(scope && body.activeScope && body.activeScope.id){
+      const activeUnitIds = await listUnitIdsUnder(store, { type: String(body.activeScope.type || ''), id: String(body.activeScope.id) });
+      effScope = intersectScope(scope, activeUnitIds);
+    }
     // Ids the caller submitted that scoping refused — echoed back so the
     // client can EVICT them from its cache instead of retrying forever (a
     // silent `continue` leaves the record permanently _dirty). Scope refusals
@@ -818,7 +823,7 @@ async function handleApi(req, res, pathname){
         }
         let decision = null;
         if(scope){
-          decision = await decideWrite({ incoming: p, existing: existingObj, actor, scope, store });
+          decision = await decideWrite({ incoming: p, existing: existingObj, actor, scope: effScope, store });
           if(!decision.allow){ rejected.push(p.id); continue; }
         }
         stampAttribution(p, existingObj, actor);
@@ -857,7 +862,7 @@ async function handleApi(req, res, pathname){
     // unaffected; new clients can use it to confirm they're talking to the
     // version of the sync contract they expect.
     let outPatients = rows.map(rowToPatient);
-    if(scope) outPatients = outPatients.filter(p => canRead(p, scope));
+    if(scope) outPatients = outPatients.filter(p => canRead(p, effScope));
     const responseBody = { serverTime: now, patients: outPatients, apiVersion: SYNC_API_VERSION };
     if(scope){
       // Additive, flag-on only (a flag-off server sends neither key, keeping the
@@ -865,7 +870,7 @@ async function handleApi(req, res, pathname){
       // "missing from a full snapshot = out of my scope, evict" apart from the
       // unrestricted case "missing = server lost its data, resurrect".
       responseBody.rejected = rejected;
-      responseBody.scoped = !scope.unrestricted;
+      responseBody.scoped = !effScope.unrestricted;
     }
     return sendJSON(res, 200, responseBody);
   }

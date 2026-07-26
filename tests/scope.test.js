@@ -176,3 +176,22 @@ describe('scope (unit-based subtree)', () => {
     });
   });
 });
+
+import { intersectScope } from '../scope.js';
+
+describe('intersectScope — narrow-only active scope', () => {
+  test('unrestricted collapses to exactly the active units', () => {
+    const s = intersectScope({ unrestricted: true, unitIds: new Set(), includeUnassigned: true }, new Set(['u1', 'u2']));
+    assert.equal(s.unrestricted, false);
+    assert.deepEqual([...s.unitIds].sort(), ['u1', 'u2']);
+    assert.equal(s.includeUnassigned, false);
+  });
+  test('restricted keeps only its own units that are also active (never widens)', () => {
+    const s = intersectScope({ unrestricted: false, unitIds: new Set(['u1', 'u2']), includeUnassigned: false }, new Set(['u2', 'u3']));
+    assert.deepEqual([...s.unitIds], ['u2']);
+  });
+  test('empty intersection yields an empty scope (fail closed)', () => {
+    const s = intersectScope({ unrestricted: false, unitIds: new Set(['u1']), includeUnassigned: false }, new Set(['u9']));
+    assert.equal(s.unitIds.size, 0);
+  });
+});
