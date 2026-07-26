@@ -42,11 +42,18 @@ export async function decideWrite({ incoming, existing, actor, scope, store }){
   if(existing){
     if(!canRead(existing, scope)) return { allow: false };
     const requested = incoming?.unitId;
-    if(isAdmin && requested && (scope.unrestricted || scope.unitIds.has(requested))){
-      return { allow: true, ancestry: await resolveAncestry(store, requested) };
+    if(requested && requested !== existing.unitId
+       && (scope.unrestricted || scope.unitIds.has(requested))){
+      const target = await resolveAncestry(store, requested);
+      // Org clamp: a move never crosses organizations. First placement of a
+      // patient with no org yet is allowed (placement, not a cross-org move).
+      const sameOrgOrUnassigned = !existing.orgId || (target && target.orgId === existing.orgId);
+      if(target && sameOrgOrUnassigned){
+        return { allow: true, ancestry: target, moved: { from: existing.unitId || null, to: requested } };
+      }
     }
-    // Not a legitimate re-assignment: force-stamp ancestry from server truth
-    // so a client-supplied unitId (or other ancestry keys) in the payload can
+    // Not a legitimate re-assignment (out of scope, or would cross orgs):
+    // force-stamp ancestry from server truth so a client-supplied unitId can
     // never relabel the patient's tree position.
     return { allow: true, ancestry: await resolveAncestry(store, existing.unitId) };
   }

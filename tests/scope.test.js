@@ -175,6 +175,69 @@ describe('scope (unit-based subtree)', () => {
       assert.notEqual(d.ancestry.unitId, 'ux');
     });
   });
+
+  describe('decideWrite — scope-derived move + org clamp', () => {
+    let dataDir, store;
+    before(async () => {
+      dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ortho-move-'));
+      store = await createStore({ dataDir });
+      await store.init();
+      // org1: dep1 -> unitA, unitB ; org2: depX -> unitX
+      await store.createOrganization({ id: 'org1', name: 'O1', plan: 'free' });
+      await store.createOrganization({ id: 'org2', name: 'O2', plan: 'free' });
+      await store.createHospital({ id: 'h1', orgId: 'org1', name: 'H1' });
+      await store.createHospital({ id: 'hx', orgId: 'org2', name: 'HX' });
+      await store.createDepartment({ id: 'dep1', hospitalId: 'h1', name: 'D1' });
+      await store.createDepartment({ id: 'depx', hospitalId: 'hx', name: 'DX' });
+      await store.createUnit({ id: 'unitA', departmentId: 'dep1', name: 'A' });
+      await store.createUnit({ id: 'unitB', departmentId: 'dep1', name: 'B' });
+      await store.createUnit({ id: 'unitX', departmentId: 'depx', name: 'X' });
+    });
+    after(async () => { await store.close(); fs.rmSync(dataDir, { recursive: true, force: true }); });
+
+    const deptMember = { id: 'u', username: 'pg', role: 'member', orgId: 'org1' };
+    const deptScope = { unrestricted: false, unitIds: new Set(['unitA', 'unitB']), includeUnassigned: false };
+    const unitScope = { unrestricted: false, unitIds: new Set(['unitA']), includeUnassigned: false };
+    const rootScope = { unrestricted: true, unitIds: new Set(), includeUnassigned: true };
+
+    test('a department-scoped member moves a patient between two in-scope units', async () => {
+      const d = await decideWrite({ incoming: { id: 'p', unitId: 'unitB' }, existing: { id: 'p', unitId: 'unitA', orgId: 'org1' }, actor: deptMember, scope: deptScope, store });
+      assert.equal(d.allow, true);
+      assert.equal(d.ancestry.unitId, 'unitB');
+      assert.deepEqual(d.moved, { from: 'unitA', to: 'unitB' });
+    });
+
+    test('a unit-pinned member cannot move a patient out (requested unit not in scope → force-stamp, no moved)', async () => {
+      const d = await decideWrite({ incoming: { id: 'p', unitId: 'unitB' }, existing: { id: 'p', unitId: 'unitA', orgId: 'org1' }, actor: deptMember, scope: unitScope, store });
+      assert.equal(d.allow, true);
+      assert.equal(d.ancestry.unitId, 'unitA');
+      assert.equal(d.moved, undefined);
+    });
+
+    test('org clamp: even an unrestricted scope cannot move a patient into another org', async () => {
+      const d = await decideWrite({ incoming: { id: 'p', unitId: 'unitX' }, existing: { id: 'p', unitId: 'unitA', orgId: 'org1' }, actor: { role: 'admin', orgId: null }, scope: rootScope, store });
+      assert.equal(d.allow, true);
+      assert.equal(d.ancestry.unitId, 'unitA', 'target org2 unit ignored; stays put');
+      assert.equal(d.moved, undefined);
+    });
+
+    test('same-org move under an unrestricted scope is allowed and recorded', async () => {
+      const d = await decideWrite({ incoming: { id: 'p', unitId: 'unitB' }, existing: { id: 'p', unitId: 'unitA', orgId: 'org1' }, actor: { role: 'admin', orgId: null }, scope: rootScope, store });
+      assert.deepEqual(d.moved, { from: 'unitA', to: 'unitB' });
+    });
+
+    test('first placement of an unassigned patient (no orgId) is allowed', async () => {
+      const d = await decideWrite({ incoming: { id: 'p', unitId: 'unitA' }, existing: { id: 'p', unitId: null }, actor: { role: 'admin', orgId: null }, scope: rootScope, store });
+      assert.equal(d.allow, true);
+      assert.equal(d.ancestry.unitId, 'unitA');
+      assert.deepEqual(d.moved, { from: null, to: 'unitA' });
+    });
+
+    test('re-sending the same unitId is not a move (no moved marker)', async () => {
+      const d = await decideWrite({ incoming: { id: 'p', unitId: 'unitA' }, existing: { id: 'p', unitId: 'unitA', orgId: 'org1' }, actor: deptMember, scope: deptScope, store });
+      assert.equal(d.moved, undefined);
+    });
+  });
 });
 
 import { intersectScope } from '../scope.js';
