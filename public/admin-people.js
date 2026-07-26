@@ -3,6 +3,38 @@
    task ports the old users-table code over unchanged in behaviour, reading
    adminData/adminUI instead of adminState. */
 
+let adminSecretResolver = null;
+
+/** A show-once secret (temporary password) with a copy button — replaces
+    window.alert(...), which the design spec forbids for this. Resolves
+    when the admin dismisses it. */
+function showAdminSecret(title, secret){
+  return new Promise(resolve => {
+    adminSecretResolver = resolve;
+    document.getElementById('adminSecretTitle').textContent = title;
+    document.getElementById('adminSecretValue').value = secret;
+    document.getElementById('adminSecretModal').classList.add('active');
+  });
+}
+
+function closeAdminSecret(){
+  document.getElementById('adminSecretModal').classList.remove('active');
+  const resolve = adminSecretResolver;
+  adminSecretResolver = null;
+  if(resolve) resolve();
+}
+
+document.getElementById('adminSecretDoneBtn')?.addEventListener('click', closeAdminSecret);
+document.getElementById('adminSecretCopyBtn')?.addEventListener('click', async () => {
+  const value = document.getElementById('adminSecretValue').value;
+  try{
+    await navigator.clipboard.writeText(value);
+    showToast('Copied to clipboard');
+  }catch{
+    showToast('Could not copy — check clipboard permission');
+  }
+});
+
 function isSelfUser(u){
   return u.username === localStorage.getItem('ortho_username');
 }
@@ -51,6 +83,8 @@ function renderAdminPeopleRowHTML(u, state){
   const lastAdmin = isLastActiveAdmin(u, state.users || adminData.users);
   const disableTitle = self ? 'You cannot disable your own account' : (u.active && lastAdmin ? 'This is the last active admin — promote someone else first' : '');
   const disableAttrs = (self || (u.active && lastAdmin)) ? ` disabled title="${escapeHTML(disableTitle)}"` : '';
+  const roleTitle = self ? 'You cannot change your own role' : (lastAdmin ? 'This is the last active admin of the organization' : '');
+  const roleDisabled = self || lastAdmin;
   const actions = narrow ? '' : `
         <button class="btn" data-user-toggle="${escapeHTML(u.id)}"${disableAttrs}>${u.active ? 'Disable' : 'Enable'}</button>
         <button class="btn" data-user-reset="${escapeHTML(u.id)}">Reset password</button>`;
@@ -66,9 +100,15 @@ function renderAdminPeopleRowHTML(u, state){
     assignCell = `<td><select data-assign-user="${escapeHTML(u.id)}" data-prev="${escapeHTML(prev)}">${renderAssignSelectOptionsHTML(groups, selType, selId)}</select></td>`;
   }
   const nameCell = self ? `${escapeHTML(u.username)} <span class="spec-badge">You</span>` : escapeHTML(u.username);
+  const roleCell = narrow
+    ? `<td>${u.role === 'admin' ? '<span class="spec-badge">Admin</span>' : 'Member'}</td>`
+    : `<td><select data-role-user="${escapeHTML(u.id)}"${roleDisabled ? ` disabled title="${escapeHTML(roleTitle)}"` : ''}>
+        <option value="member"${u.role === 'member' ? ' selected' : ''}>Member</option>
+        <option value="admin"${u.role === 'admin' ? ' selected' : ''}>Admin</option>
+      </select></td>`;
   return `${checkCell}
         <td>${nameCell}</td>
-        <td>${u.role === 'admin' ? '<span class="spec-badge">Admin</span>' : 'Member'}</td>
+        ${roleCell}
         ${assignCell}
         <td>${u.active ? 'active' : 'disabled'}${actions}
         </td>`;
@@ -85,27 +125,40 @@ function renderAdminPeopleRow(userId){
   row.innerHTML = renderAdminPeopleRowHTML(u);
 }
 
-/** Keeps Disable disabled/title in sync when the user list changes (e.g. one
-    of two org admins was disabled — the survivor becomes last active admin). */
+/** Keeps Disable disabled/title and role-select guards in sync when the user
+    list changes (e.g. one of two org admins was disabled — the survivor
+    becomes last active admin). */
 function refreshAdminPeopleRowGuards(){
   const users = adminData.users || [];
   document.querySelectorAll('[data-user-row]').forEach(tr => {
     const u = users.find(x => x.id === tr.dataset.userRow);
     const btn = tr.querySelector('[data-user-toggle]');
-    if(!u || !btn) return;
-    const self = isSelfUser(u);
-    const lastAdmin = isLastActiveAdmin(u, users);
-    const guard = self || (u.active && lastAdmin);
-    const disableTitle = self ? 'You cannot disable your own account' : (u.active && lastAdmin ? 'This is the last active admin — promote someone else first' : '');
-    btn.disabled = guard;
-    if(guard) btn.title = disableTitle;
-    else btn.removeAttribute('title');
+    if(u && btn){
+      const self = isSelfUser(u);
+      const lastAdmin = isLastActiveAdmin(u, users);
+      const guard = self || (u.active && lastAdmin);
+      const disableTitle = self ? 'You cannot disable your own account' : (u.active && lastAdmin ? 'This is the last active admin — promote someone else first' : '');
+      btn.disabled = guard;
+      if(guard) btn.title = disableTitle;
+      else btn.removeAttribute('title');
+    }
+    const roleSel = tr.querySelector('[data-role-user]');
+    if(u && roleSel){
+      const self = isSelfUser(u);
+      const lastAdmin = isLastActiveAdmin(u, users);
+      const roleGuard = self || lastAdmin;
+      const roleTitle = self ? 'You cannot change your own role' : (lastAdmin ? 'This is the last active admin of the organization' : '');
+      roleSel.disabled = roleGuard;
+      if(roleGuard) roleSel.title = roleTitle;
+      else roleSel.removeAttribute('title');
+    }
   });
 }
 
 function renderAdminUsersPanelHTML(state){
   const narrow = adminIsNarrow();
   const unscoped = adminNeedsOrgChoice();
+  const groups = buildAssignNodeGroups(state.tree, state.orgs);
   const rows = (state.users || []).map(u =>
     `<tr data-user-row="${escapeHTML(u.id)}" data-username="${escapeHTML((u.username || '').toLowerCase())}">${renderAdminPeopleRowHTML(u, state)}</tr>`
   ).join('');
@@ -114,9 +167,12 @@ function renderAdminUsersPanelHTML(state){
     <div class="small-muted">Choose an organization on the Organizations tab to create users.</div>
     <button type="button" class="btn" id="adminPeoplePickOrg">Go to Organizations</button>` : `
     <div class="admin-inline-form">
+      <label for="adminNewUsername" class="sr-only">New username</label>
       <input id="adminNewUsername" placeholder="New username" maxlength="32">
       <label class="scribe-check"><input type="checkbox" id="adminNewUserAdmin"> Admin</label>
-      <button class="btn" id="adminCreateUser">Create user</button>
+      <label for="adminNewUserPlacement" class="sr-only">Can see patients in</label>
+      <select id="adminNewUserPlacement">${renderAssignSelectOptionsHTML(groups, null, null)}</select>
+      <button class="btn" id="adminCreateUser">Create person</button>
     </div>`;
   const chips = ['all', 'unassigned', 'disabled', 'admins'].map(f =>
     `<button type="button" class="admin-people-chip${f === adminUI.peopleFilter ? ' is-active' : ''}" data-people-filter="${f}">${f[0].toUpperCase() + f.slice(1)}</button>`
@@ -246,7 +302,7 @@ document.getElementById('adminPeopleSection')?.addEventListener('click', (e) => 
     e.stopPropagation();
     const id = resetBtn.dataset.userReset;
     api(`/api/admin/users/${encodeURIComponent(id)}/reset-password`, { method: 'POST' })
-      .then(res => { window.alert(`Temporary password (shown once): ${res.temporaryPassword}`); })
+      .then(res => showAdminSecret('Password reset', res.temporaryPassword))
       .catch(err => showToast(err.message));
     return;
   }
@@ -257,12 +313,24 @@ document.getElementById('adminPeopleSection')?.addEventListener('click', (e) => 
     const username = (nameEl.value || '').trim();
     if(!username){ showToast('Enter a username'); return; }
     const role = document.getElementById('adminNewUserAdmin').checked ? 'admin' : 'member';
-    const body = { username, role };
     const orgId = adminUI.viewedOrgId || (adminData.tree && adminData.tree.org && adminData.tree.org.id) || null;
     if(!orgId){ showToast('Choose an organization first'); return; }
-    body.orgId = orgId;
+    const placement = document.getElementById('adminNewUserPlacement').value;
+    const body = { username, role, orgId };
+    let nodeType = null, nodeId = null;
+    if(placement){
+      const i = placement.indexOf(':');
+      nodeType = placement.slice(0, i);
+      nodeId = placement.slice(i + 1);
+    }
     api('/api/admin/users', { method: 'POST', body: JSON.stringify(body) })
-      .then(res => { window.alert(`User created. Temporary password (shown once): ${res.temporaryPassword}`); nameEl.value = ''; return loadAdminView(); })
+      .then(async res => {
+        if(nodeType) await api(`/api/admin/users/${res.id}/assign`, { method: 'POST', body: JSON.stringify({ nodeType, nodeId }) });
+        nameEl.value = '';
+        document.getElementById('adminNewUserPlacement').value = '';
+        await loadAdminView();
+        await showAdminSecret('Person created', res.temporaryPassword);
+      })
       .catch(err => showToast(err.message));
     return;
   }
@@ -273,6 +341,24 @@ document.getElementById('adminPeopleSection')?.addEventListener('change', async 
     const id = e.target.dataset.userCheck;
     if(e.target.checked) adminUI.peopleChecked.add(id); else adminUI.peopleChecked.delete(id);
     refreshAdminBulkBar();
+    return;
+  }
+  const roleSel = e.target.closest('[data-role-user]');
+  if(roleSel){
+    const id = roleSel.dataset.roleUser;
+    const user = (adminData.users || []).find(u => u.id === id);
+    const newRole = roleSel.value;
+    const prevRole = user ? user.role : (newRole === 'admin' ? 'member' : 'admin');
+    const ok = await showConfirm('Change role', `Make ${user ? user.username : 'this person'} ${newRole === 'admin' ? 'an admin' : 'a member'}?`, { confirmLabel: 'Change role' });
+    if(!ok){ roleSel.value = prevRole; return; }
+    try{
+      await api(`/api/admin/users/${encodeURIComponent(id)}/role`, { method: 'POST', body: JSON.stringify({ role: newRole }) });
+      showToast('Role updated');
+      await loadAdminView();
+    }catch(err){
+      roleSel.value = prevRole;
+      showToast(err.message);
+    }
     return;
   }
   const sel = e.target.closest('[data-assign-user]');

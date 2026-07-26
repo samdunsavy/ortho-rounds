@@ -2184,6 +2184,23 @@
   </div>
 </div>
 
+<!-- ADMIN SECRET (temporary password, shown once) -->
+<div class="modal-overlay" id="adminSecretModal">
+  <div class="modal" style="max-width:420px;">
+    <div class="modal-head">
+      <h2 id="adminSecretTitle">Temporary password</h2>
+    </div>
+    <div class="modal-body">
+      <p style="margin:0 0 10px;">Shown once — write it down or copy it now.</p>
+      <input id="adminSecretValue" readonly style="font-family:monospace;font-size:16px;width:100%;">
+    </div>
+    <div class="modal-foot">
+      <button type="button" class="btn primary" id="adminSecretCopyBtn">Copy</button>
+      <button type="button" class="btn" id="adminSecretDoneBtn">Done</button>
+    </div>
+  </div>
+</div>
+
 <!-- APP DIALOG (confirm / prompt) -->
 <div class="modal-overlay" id="appDialogModal">
   <div class="modal" style="max-width:400px;">

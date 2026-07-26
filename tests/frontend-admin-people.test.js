@@ -502,6 +502,150 @@ describe('own-row and last-admin disabled states', () => {
   });
 });
 
+describe('show-once secret modal', () => {
+  test('showAdminSecret shows the secret and a copy button, and resolves on Done', async () => {
+    const { window, document } = loadFrontendEnv();
+    window.navigator.clipboard = { writeText: async () => {} };
+    const p = window.showAdminSecret('User created', 'bone-plate-1234');
+    assert.equal(document.getElementById('adminSecretModal').classList.contains('active'), true);
+    assert.equal(document.getElementById('adminSecretValue').value, 'bone-plate-1234');
+    document.getElementById('adminSecretDoneBtn').click();
+    await p;
+    assert.equal(document.getElementById('adminSecretModal').classList.contains('active'), false);
+  });
+
+  test('the copy button copies the secret to the clipboard', async () => {
+    const { window, document } = loadFrontendEnv();
+    const copied = [];
+    window.navigator.clipboard = { writeText: async (t) => copied.push(t) };
+    window.showAdminSecret('User created', 'bone-plate-1234');
+    document.getElementById('adminSecretCopyBtn').click();
+    await new Promise(r => setTimeout(r, 0));
+    assert.deepEqual(copied, ['bone-plate-1234']);
+  });
+});
+
+describe('create person in one step', () => {
+  test('create form has username, role and placement together, and no window.alert is used', async () => {
+    const { window, document } = loadFrontendEnv();
+    window.api = async (path, opts) => {
+      if(path.startsWith('/api/admin/org')) return TREE;
+      if(path === '/api/admin/users' && (!opts || opts.method !== 'POST')) return { users: [] };
+      return { id: 'new1', username: 'newperson', temporaryPassword: 'bone-plate-9999' };
+    };
+    let alerted = false;
+    window.alert = () => { alerted = true; };
+    await window.loadAdminView();
+    window.switchAdminSection('people');
+    assert.ok(document.getElementById('adminNewUserPlacement'), 'expected a placement picker in the create form');
+
+    document.getElementById('adminNewUsername').value = 'newperson';
+    document.getElementById('adminCreateUser').dispatchEvent(new window.Event('click', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 0));
+
+    assert.equal(alerted, false);
+    assert.equal(document.getElementById('adminSecretModal').classList.contains('active'), true);
+    assert.equal(document.getElementById('adminSecretValue').value, 'bone-plate-9999');
+  });
+
+  test('a chosen placement creates the user then assigns them (two calls)', async () => {
+    const { window, document } = loadFrontendEnv();
+    const calls = [];
+    window.api = async (path, opts) => {
+      calls.push({ path, opts });
+      if(path.startsWith('/api/admin/org')) return TREE;
+      if(path === '/api/admin/users' && (!opts || opts.method !== 'POST')) return { users: [] };
+      if(path === '/api/admin/users' && opts && opts.method === 'POST') return { id: 'new1', temporaryPassword: 'x' };
+      return { ok: true };
+    };
+    await window.loadAdminView();
+    window.switchAdminSection('people');
+    document.getElementById('adminNewUsername').value = 'placed1';
+    document.getElementById('adminNewUserPlacement').value = 'unit:u1';
+    document.getElementById('adminCreateUser').dispatchEvent(new window.Event('click', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 0));
+    const createCall = calls.find(c => c.path === '/api/admin/users' && c.opts && c.opts.method === 'POST');
+    assert.ok(createCall);
+    const createBody = JSON.parse(createCall.opts.body);
+    assert.equal(createBody.username, 'placed1');
+    assert.equal(createBody.role, 'member');
+    assert.equal(createBody.nodeType, undefined);
+    assert.equal(createBody.nodeId, undefined);
+    const assignCall = calls.find(c => c.path === '/api/admin/users/new1/assign');
+    assert.ok(assignCall, 'expected a follow-up POST to /assign');
+    assert.deepEqual(JSON.parse(assignCall.opts.body), { nodeType: 'unit', nodeId: 'u1' });
+  });
+});
+
+describe('role change', () => {
+  const USERS = [
+    { id: 'me', username: 'currentuser', role: 'admin', active: true, orgId: 'bfv2-org', assignmentType: null, assignmentId: null },
+    { id: 'x', username: 'member1', role: 'member', active: true, orgId: 'bfv2-org', assignmentType: null, assignmentId: null }
+  ];
+
+  test('the role select posts to /role after a confirmation naming the person and the new role', async () => {
+    const { window, document } = loadFrontendEnv();
+    window.localStorage.setItem('ortho_username', 'currentuser');
+    const calls = [];
+    let confirmMessage = '';
+    window.showConfirm = (title, message) => { confirmMessage = message; return Promise.resolve(true); };
+    window.api = async (path, opts) => {
+      calls.push({ path, opts });
+      if(path.startsWith('/api/admin/org')) return TREE;
+      if(path === '/api/admin/users') return { users: USERS };
+      return { ok: true, role: 'admin' };
+    };
+    await window.loadAdminView();
+    window.switchAdminSection('people');
+    const sel = document.querySelector('[data-role-user="x"]');
+    sel.value = 'admin';
+    sel.dispatchEvent(new window.Event('change', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 0));
+    assert.match(confirmMessage, /member1/);
+    assert.match(confirmMessage, /admin/);
+    const call = calls.find(c => c.path === '/api/admin/users/x/role');
+    assert.ok(call);
+    assert.deepEqual(JSON.parse(call.opts.body), { role: 'admin' });
+  });
+
+  test('declining the confirmation reverts the select and posts nothing', async () => {
+    const { window, document } = loadFrontendEnv();
+    window.localStorage.setItem('ortho_username', 'currentuser');
+    const calls = [];
+    window.showConfirm = () => Promise.resolve(false);
+    window.api = async (path, opts) => {
+      calls.push({ path, opts });
+      if(path.startsWith('/api/admin/org')) return TREE;
+      if(path === '/api/admin/users') return { users: USERS };
+      return {};
+    };
+    await window.loadAdminView();
+    window.switchAdminSection('people');
+    const sel = document.querySelector('[data-role-user="x"]');
+    sel.value = 'admin';
+    sel.dispatchEvent(new window.Event('change', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 0));
+    assert.equal(sel.value, 'member');
+    assert.equal(calls.some(c => c.path === '/api/admin/users/x/role'), false);
+  });
+
+  test('the role select is disabled on your own row and for the last active admin of the org', async () => {
+    const { window, document } = loadFrontendEnv();
+    window.localStorage.setItem('ortho_username', 'currentuser');
+    const users = [
+      { id: 'me', username: 'currentuser', role: 'member', active: true, orgId: 'bfv2-org', assignmentType: null, assignmentId: null },
+      { id: 'only', username: 'soloadmin', role: 'admin', active: true, orgId: 'bfv2-org', assignmentType: null, assignmentId: null }
+    ];
+    window.api = async (path) => path.startsWith('/api/admin/org') ? TREE : { users };
+    await window.loadAdminView();
+    window.switchAdminSection('people');
+    assert.equal(document.querySelector('[data-role-user="me"]').disabled, true);
+    assert.ok(document.querySelector('[data-role-user="me"]').title.length > 0);
+    assert.equal(document.querySelector('[data-role-user="only"]').disabled, true);
+    assert.match(document.querySelector('[data-role-user="only"]').title, /last active admin/i);
+  });
+});
+
 describe('mobile read-only (removed in Task 11 — still gates today)', () => {
   test('narrow users panel has no live write path: no checkbox, no assign select, but still shows username and assignment as text', () => {
     const { window } = loadFrontendEnv();
