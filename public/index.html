@@ -740,7 +740,7 @@
   .admin-users-table th,.admin-users-table td{padding:8px 6px;border-bottom:1px solid var(--line);text-align:left;font-size:14px;}
   .admin-people-chips{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0;}
   .admin-people-chip{background:var(--card);border:1px solid var(--line);border-radius:999px;padding:6px 14px;font:inherit;font-size:13px;color:var(--ink-soft);cursor:pointer;min-height:44px;}
-  .admin-people-chip.is-active{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600;}
+  .admin-people-chip.is-active{background:var(--accent);border-color:var(--accent);color:var(--on-accent);font-weight:600;}
   .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;}
   .admin-bulk-bar{display:flex;gap:8px;align-items:center;background:var(--accent-soft);border-radius:8px;padding:8px;margin-bottom:8px;position:sticky;top:0;z-index:5;}
   .admin-bulk-bar[hidden]{display:none;}
@@ -781,8 +781,11 @@
   .admin-detail-head input[data-rename-input]{font-size:inherit;font-weight:700;width:100%;}
   .admin-rename-error{color:var(--bad);}
   .admin-cc-children{display:flex;flex-direction:column;gap:2px;margin-bottom:8px;}
-  .admin-node-actions{display:flex;gap:6px;align-items:center;margin-left:auto;flex-wrap:wrap;}
-  .admin-node-actions .btn[disabled]{opacity:.55;cursor:not-allowed;}
+  .admin-detail-actions{display:flex;gap:6px;align-items:center;margin-left:auto;flex-wrap:wrap;}
+  .admin-detail-actions .btn[disabled]{opacity:.55;cursor:not-allowed;}
+  .admin-rename-target:focus-visible{outline:none;box-shadow:var(--focus-ring);border-radius:4px;}
+  .admin-cc-chevron:focus-visible,.admin-cc-row:focus-visible,.admin-attention-row:focus-visible,
+  .admin-people-chip:focus-visible,.admin-back-to-tree:focus-visible{outline:none;box-shadow:var(--focus-ring);}
   .admin-back-to-tree{display:none;margin-bottom:10px;}
   @media (max-width:899px){
     #adminStructureBody.is-drilled .admin-cc-rail{display:none;}

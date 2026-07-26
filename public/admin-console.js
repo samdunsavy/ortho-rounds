@@ -311,6 +311,18 @@ function invalidateHierarchyCaches(){
   if(typeof invalidateScopeTree === 'function') invalidateScopeTree();
 }
 
+/** Captures whether `selector` is focused, runs `repaint`, then refocuses the
+    matching element — used when a full-section repaint would otherwise drop
+    keyboard focus (Structure filter, People search). Pass `alwaysRefocus` to
+    restore a different selector after repaint (e.g. rename target). */
+function restoreAdminFocus(selector, repaint, alwaysRefocus){
+  const keep = !alwaysRefocus && document.activeElement?.matches?.(selector);
+  const restore = alwaysRefocus || keep;
+  return Promise.resolve(repaint()).then(() => {
+    if(restore) document.querySelector(selector)?.focus();
+  });
+}
+
 // Concurrent loadAdminView() calls (e.g. rapid org switches) are unordered;
 // only the latest completion may replace adminData and re-render.
 let adminLoadSeq = 0;

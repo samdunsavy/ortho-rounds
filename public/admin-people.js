@@ -291,12 +291,14 @@ function applyAdminPeopleChecked(){
 function renderAdminPeopleSection(){
   const el = document.getElementById('adminPeopleSection');
   if(!el) return;
+  const searchFocused = document.activeElement?.id === 'adminUserSearch';
   el.innerHTML = renderAdminUsersPanelHTML(adminData);
   const search = document.getElementById('adminUserSearch');
   if(search) search.value = adminUI.peopleSearch;
   applyAdminPeopleFilters();
   applyAdminPeopleChecked();
   refreshAdminBulkBar();
+  if(searchFocused && search) search.focus();
 }
 
 function selectedAdminUserIds(){

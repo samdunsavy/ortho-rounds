@@ -279,7 +279,7 @@ function renderAdminNodeActionsHTML(state, sel, hit){
     </span>` : '';
   const deleteLabel = blocked ? `Can't delete — ${escapeHTML(blocked)}` : 'Delete';
   return `
-    <span class="admin-node-actions">
+    <span class="admin-detail-actions">
       ${moveHTML}
       <button class="btn" data-delete-node="${escapeHTML(key)}"${blocked ? ' disabled' : ''} title="${escapeHTML(deleteLabel)}">${escapeHTML(deleteLabel)}</button>
     </span>
@@ -301,6 +301,7 @@ function renderAdminStructureBody(){
     adminUI.structureExpanded = defaultExpandStructure(adminData.tree);
     adminUI.structureInitialized = true;
   }
+  const filterFocused = document.activeElement?.id === 'adminStructureFilter';
   const bodyEl = document.getElementById('adminStructureBody');
   if(bodyEl) bodyEl.classList.toggle('is-drilled', adminUI.structureMobileDrilled);
   const rail = document.getElementById('adminTreeRail');
@@ -315,6 +316,7 @@ function renderAdminStructureBody(){
     detail.innerHTML = `<button type="button" class="btn admin-back-to-tree" data-back-to-tree>‹ Back to tree</button>` +
       renderAdminDetailHTML({ tree: adminData.tree, users: adminData.users, orgs: adminData.orgs, selection: adminUI.selectedNode });
   }
+  if(filterFocused) document.getElementById('adminStructureFilter')?.focus();
 }
 
 document.getElementById('adminStructureSection')?.addEventListener('click', async (e) => {
@@ -497,6 +499,9 @@ document.getElementById('adminStructureSection')?.addEventListener('keydown', (e
     return;
   }
   api(`/api/admin/nodes/${encodeURIComponent(type)}/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ name }) })
-    .then(() => { invalidateHierarchyCaches(); return loadAdminView(); })
+    .then(() => restoreAdminFocus(`[data-rename-target="${key}"]`, () => {
+      invalidateHierarchyCaches();
+      return loadAdminView();
+    }, true))
     .catch(err => showToast(err.message));
 });

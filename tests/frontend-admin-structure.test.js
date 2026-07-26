@@ -792,6 +792,65 @@ describe('phone drill-down', () => {
   });
 });
 
+const CC_USERS = [
+  { id: 'usr1', username: 'xavier', role: 'admin', active: true, orgId: null, assignmentType: null, assignmentId: null },
+  { id: 'usr2', username: 'Amit', role: 'member', active: true, orgId: 'bfv2-org', assignmentType: 'org', assignmentId: 'bfv2-org' },
+  { id: 'usr3', username: 'ghost', role: 'member', active: true, orgId: 'bfv2-org', assignmentType: 'unit', assignmentId: 'gone-unit' }
+];
+
+describe('focus restoration', () => {
+  test('renaming a node keeps focus on the (now read-only) name after the reload-triggered repaint', async () => {
+    const { window, document } = loadFrontendEnv();
+    window.api = async (path, opts) => {
+      if(path.startsWith('/api/admin/org')) return TREE;
+      if(path === '/api/admin/users') return { users: [] };
+      if(opts && opts.method === 'PATCH') return { ok: true };
+      return {};
+    };
+    await window.loadAdminView();
+    window.switchAdminSection('structure');
+    window.selectAdminNode('unit', 'u1');
+    document.querySelector('[data-rename-target="unit:u1"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+    const input = document.querySelector('[data-rename-input="unit:u1"]');
+    input.value = 'IV Ward';
+    input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await new Promise(r => setTimeout(r, 0));
+    assert.equal(document.activeElement.closest('[data-rename-target]')?.dataset.renameTarget, 'unit:u1');
+  });
+});
+
+describe('aria-expanded and labels audit', () => {
+  test('every expandable tree row has aria-expanded, and the filter/search inputs have labels', () => {
+    const { window, document } = loadFrontendEnv();
+    const html = window.renderAdminTreeHTML(TREE, null, new Set(['hospital:h1']));
+    assert.match(html, /aria-expanded="(true|false)"/);
+    document.getElementById('adminTreeRail').innerHTML =
+      '<label for="adminStructureFilter" class="sr-only">Filter the tree by name</label><input id="adminStructureFilter">';
+    assert.ok(document.querySelector('label[for="adminStructureFilter"]'));
+    document.getElementById('adminPeopleSection').innerHTML = window.renderAdminUsersPanelHTML({ tree: TREE, users: [], orgs: [] });
+    assert.ok(document.querySelector('label[for="adminUserSearch"]'));
+  });
+});
+
+describe('no schema words in the interface', () => {
+  test('the People panel never says "assignment" or shows a raw lowercase type badge', () => {
+    const { window } = loadFrontendEnv();
+    const html = window.renderAdminUsersPanelHTML({ tree: TREE, users: CC_USERS, orgs: [] });
+    assert.ok(!/\bassignment\b/i.test(html));
+  });
+  test('the Structure detail badge is capitalized, never a raw lowercase type', () => {
+    const { window } = loadFrontendEnv();
+    const html = window.renderAdminDetailHTML({ tree: TREE, users: [], orgs: [], selection: { type: 'unit', id: 'u1' } });
+    assert.ok(!html.includes('>unit<'));
+    assert.ok(html.includes('>Unit<'));
+  });
+  test('no visible copy contains the word "node"', () => {
+    const { window } = loadFrontendEnv();
+    const html = window.renderAdminDetailHTML({ tree: TREE, users: [], orgs: [], selection: { type: 'unit', id: 'u1' } });
+    assert.ok(!/\bnode\b/i.test(html.replace(/data-[a-z-]*node[a-z-]*="[^"]*"/gi, '')));
+  });
+});
+
 describe('add-child in-flight guard', () => {
   test('the add button and input disable while the request is in flight, and clear on success', async () => {
     const { window, document } = loadFrontendEnv();
