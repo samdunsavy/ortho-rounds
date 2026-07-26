@@ -730,6 +730,32 @@ describe('actionable delete blockers', () => {
     document.querySelector('[data-organize-unit="u1"]').dispatchEvent(new window.Event('click', { bubbles: true }));
     assert.equal(organizedUnit, 'u1');
   });
+
+  test('clicking the users blocker link switches to People with the node filter', async () => {
+    const { window, document } = loadFrontendEnv();
+    Object.defineProperty(window, 'innerWidth', { value: 1200, configurable: true });
+    const tree = deletableU1Tree();
+    window.showConfirm = () => Promise.resolve(true);
+    window.api = async (path, opts) => {
+      if(path.startsWith('/api/admin/org')) return tree;
+      if(path === '/api/admin/users') return { users: [] };
+      if(opts && opts.method === 'DELETE'){
+        const err = new window.Error('Node is not empty');
+        err.status = 409;
+        err.payload = { error: 'Node is not empty', blockedBy: { children: 0, users: 1, patients: 0 } };
+        throw err;
+      }
+      return {};
+    };
+    await window.loadAdminView();
+    window.switchAdminSection('structure');
+    window.selectAdminNode('unit', 'u1');
+    document.querySelector('[data-delete-node="unit:u1"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 0));
+    document.querySelector('[data-attention-people="node:unit:u1"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+    assert.equal(document.getElementById('adminPeopleSection').hidden, false);
+    assert.equal(window.getAdminPeopleFilter(), 'node:unit:u1');
+  });
 });
 
 describe('delete selects the parent', () => {

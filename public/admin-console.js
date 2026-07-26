@@ -177,7 +177,11 @@ function quickActionAddPerson(){
 }
 
 function quickActionFixAssignment(){
-  adminUI.peopleFilter = 'unassigned';
+  openAdminPeopleFilter('unassigned');
+}
+
+function openAdminPeopleFilter(filter){
+  adminUI.peopleFilter = filter;
   switchAdminSection('people');
 }
 
@@ -192,7 +196,7 @@ document.getElementById('adminOverviewBody')?.addEventListener('click', (e) => {
   const unitRow = e.target.closest('[data-attention-unit]');
   if(unitRow){ switchAdminSection('structure'); selectAdminNode('unit', unitRow.dataset.attentionUnit); return; }
   const peopleRow = e.target.closest('[data-attention-people]');
-  if(peopleRow){ adminUI.peopleFilter = peopleRow.dataset.attentionPeople; switchAdminSection('people'); return; }
+  if(peopleRow){ openAdminPeopleFilter(peopleRow.dataset.attentionPeople); return; }
 });
 
 function renderAdminStatTiles(tree){

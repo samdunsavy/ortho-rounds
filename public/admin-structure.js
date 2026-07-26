@@ -397,6 +397,8 @@ document.getElementById('adminStructureSection')?.addEventListener('click', asyn
   }
   const organizeBtn = e.target.closest('[data-organize-unit]');
   if(organizeBtn){ e.stopPropagation(); openOrganizeForUnit(organizeBtn.dataset.organizeUnit); return; }
+  const peopleBtn = e.target.closest('[data-attention-people]');
+  if(peopleBtn){ e.stopPropagation(); openAdminPeopleFilter(peopleBtn.dataset.attentionPeople); return; }
   const moveConfirmBtn = e.target.closest('[data-move-confirm]');
   if(moveConfirmBtn){
     e.stopPropagation();
