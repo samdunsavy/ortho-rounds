@@ -177,6 +177,16 @@ describe('Overview: computeAdminNeedsAttention', () => {
     assert.deepEqual([...cats.emptyUnits], []); // u1 has patients+wards, u2 has a user
   });
 
+  test('org-assigned user is not categorized as stale when org is in orgs list', () => {
+    const { window } = loadFrontendEnv();
+    const users = [
+      { id: 'u-org', username: 'amy', active: true, role: 'member', assignmentType: 'org', assignmentId: 'bfv2-org' }
+    ];
+    const orgs = [{ id: 'bfv2-org', name: 'Default' }];
+    const cats = window.computeAdminNeedsAttention(TREE, users, orgs);
+    assert.deepEqual([...cats.stale.map(u => u.id)], []);
+  });
+
   test('renderAdminNeedsAttentionHTML omits a category with zero entries', () => {
     const { window } = loadFrontendEnv();
     const html = window.renderAdminNeedsAttentionHTML({ unassigned: [], stale: [], emptyUnits: [], disabled: [] });

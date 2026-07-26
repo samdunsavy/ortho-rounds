@@ -66,7 +66,7 @@ function matchesAdminPeopleFilter(u, filter){
   if(filter === 'unassigned') return !u.assignmentType || !u.assignmentId;
   if(filter === 'disabled') return !u.active;
   if(filter === 'admins') return u.role === 'admin';
-  if(filter === 'stale') return !!(u.assignmentType && u.assignmentId && !assignLabelFor(buildAssignNodeGroups(adminData.tree, []), u.assignmentType, u.assignmentId));
+  if(filter === 'stale') return !!(u.assignmentType && u.assignmentId && !assignLabelFor(buildAssignNodeGroups(adminData.tree, adminData.orgs), u.assignmentType, u.assignmentId));
   if(filter && filter.startsWith('node:')){
     const [, type, id] = filter.split(':');
     return u.assignmentType === type && u.assignmentId === id;
@@ -85,7 +85,7 @@ function peopleAssignmentDisplay(u, groups, orgs, unscoped){
   const label = assignLabelFor(groups, selType, selId);
   if(label) return { text: label, readOnly: unscoped, enterOrgId: unscoped && u.orgId ? u.orgId : null };
   if(unscoped) return { text: `Within ${orgNameForUser(u, orgs)}`, readOnly: true, enterOrgId: u.orgId || null };
-  return { text: 'Assigned to a place that no longer exists', readOnly: true, enterOrgId: null };
+  return { text: 'Assigned to a place that no longer exists', readOnly: false, enterOrgId: null };
 }
 
 function renderAdminPeopleRowHTML(u, state){

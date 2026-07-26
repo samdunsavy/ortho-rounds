@@ -89,6 +89,16 @@ describe('users panel', () => {
     const html = window.renderAdminUsersPanelHTML({ tree: TREE, users: CC_USERS, orgs: [] });
     assert.ok(html.includes('Assigned to a place that no longer exists'));
   });
+  test('scoped stale assignment renders editable reassign select', () => {
+    const { window } = loadFrontendEnv();
+    const html = window.renderAdminUsersPanelHTML({
+      tree: TREE,
+      users: [CC_USERS[2]],
+      orgs: [{ id: 'bfv2-org', name: 'Default' }]
+    });
+    assert.ok(html.includes('data-assign-user="usr3"'));
+    assert.match(html, /<select[^>]*data-assign-user="usr3"/);
+  });
   test('rows carry a search key and a checkbox', () => {
     const { window } = loadFrontendEnv();
     const html = window.renderAdminUsersPanelHTML({ tree: TREE, users: CC_USERS, orgs: [] });
@@ -359,6 +369,17 @@ describe('filter chips', () => {
     assert.equal(m(USERS[0], 'disabled'), false);
     assert.equal(m(USERS[0], 'admins'), true);
     assert.equal(m(USERS[2], 'admins'), false);
+  });
+
+  test('org-assigned user does not match stale filter when org is in orgs list', async () => {
+    const { window } = loadFrontendEnv();
+    window.api = async (path) => {
+      if(path.startsWith('/api/admin/org')) return TREE;
+      if(path === '/api/admin/users') return { users: USERS };
+      return {};
+    };
+    await window.loadAdminView();
+    assert.equal(window.matchesAdminPeopleFilter(USERS[0], 'stale'), false);
   });
 
   test('clicking a chip filters the visible rows and marks it active', async () => {

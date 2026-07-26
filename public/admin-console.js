@@ -133,13 +133,13 @@ function renderAdminOverviewSection(){
   if(needsOrg) return;
   renderAdminStatTilesInto(adminData.tree);
   const attn = document.getElementById('adminNeedsAttention');
-  if(attn) attn.innerHTML = renderAdminNeedsAttentionHTML(computeAdminNeedsAttention(adminData.tree, adminData.users));
+  if(attn) attn.innerHTML = renderAdminNeedsAttentionHTML(computeAdminNeedsAttention(adminData.tree, adminData.users, adminData.orgs));
 }
 
 /** Four Needs-attention categories. A unit is "empty" when it has no wards,
     no live patients and no assigned users — migration debris. */
-function computeAdminNeedsAttention(tree, users){
-  const groups = buildAssignNodeGroups(tree, []);
+function computeAdminNeedsAttention(tree, users, orgs){
+  const groups = buildAssignNodeGroups(tree, orgs || []);
   const unassigned = [], stale = [], disabled = [];
   for(const u of users || []){
     if(!u.active){ disabled.push(u); continue; }
