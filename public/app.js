@@ -45,6 +45,7 @@ const LS_USERNAME = "ortho_username";
 const LS_ROLE = "ortho_role";
 const LS_PUSH_ENABLED = "ortho_pushEnabled";
 const LS_LASTSYNC = "ortho_lastSync";
+const LS_ACTIVE_SCOPE = 'ortho_active_scope';
 const LS_LAST_FULL_SYNC = "ortho_lastFullSync";
 const LS_PRESENTED = "ortho_presented"; // { date, ids[] }
 const LS_FILTER = "ortho_filter";
@@ -1872,7 +1873,8 @@ async function syncNow(opts){
     const dirty = (await cacheGetAll()).filter(r => r._dirty);
     const changes = dirty.map(stripClientFields);
 
-    const res = await api('/api/sync', { method:'POST', body: JSON.stringify({ since, changes }) });
+    const activeScope = getActiveScope() || undefined;
+    const res = await api('/api/sync', { method:'POST', body: JSON.stringify({ since, changes, activeScope }) });
     const uploadedIds = new Set(dirty.map(d => d.id));
 
     await mergeServerRecords(res.patients || []);
@@ -1899,7 +1901,7 @@ async function syncNow(opts){
     localStorage.setItem(LS_LASTSYNC, String(res.serverTime));
 
     if(shouldFullReconcile(!!opts.fullReconcile)){
-      const snap = await api('/api/sync', { method:'POST', body: JSON.stringify({ since: 0, changes: [] }) });
+      const snap = await api('/api/sync', { method:'POST', body: JSON.stringify({ since: 0, changes: [], activeScope }) });
       await reconcileWithSnapshot(snap.patients || [], snap.scoped);
       localStorage.setItem(LS_LASTSYNC, String(snap.serverTime));
     }
@@ -1986,6 +1988,7 @@ async function attemptLogin(){
     localStorage.setItem(LS_ORG_ID, data.orgId || '');
     void refreshServerFlags();
     updateAccountUI();
+    void renderScopeSelector();
     hideLogin();
     await refreshAiStatus();
     await syncNow({ fullReconcile: true });
@@ -6148,6 +6151,43 @@ function invalidateScopeTree(){
   cachedScopeTree = null;
 }
 
+function getActiveScope(){
+  try{ const v = JSON.parse(localStorage.getItem(LS_ACTIVE_SCOPE) || 'null'); return (v && v.id) ? { type: v.type, id: v.id } : null; }
+  catch{ return null; }
+}
+function setActiveScope(node){
+  if(node && node.id) localStorage.setItem(LS_ACTIVE_SCOPE, JSON.stringify({ type: node.type, id: node.id }));
+  else localStorage.removeItem(LS_ACTIVE_SCOPE);
+  // New scope = new slice: force a full re-pull; the eviction path clears the
+  // previous slice's patients from cache.
+  localStorage.setItem(LS_LASTSYNC, '0');
+  scheduleSync();
+}
+
+async function renderScopeSelector(){
+  const el = document.getElementById('scopeSelect');
+  if(!el) return;
+  if(!(isAdmin() && scopePickerActive())){ el.hidden = true; return; }
+  el.hidden = false;
+  const { tree } = await loadScopeTree();
+  const cur = getActiveScope();
+  const opts = ['<option value="">All</option>'];
+  for(const dep of (tree.departments || [])){
+    opts.push(`<option value="department:${escapeHTML(dep.id)}">${escapeHTML(dep.name)}</option>`);
+    for(const u of (dep.units || [])){
+      opts.push(`<option value="unit:${escapeHTML(u.id)}">&nbsp;&nbsp;${escapeHTML(dep.name)} · ${escapeHTML(u.name)}</option>`);
+    }
+  }
+  el.innerHTML = opts.join('');
+  el.value = cur ? `${cur.type}:${cur.id}` : '';
+  el.onchange = () => {
+    const raw = el.value || '';
+    const i = raw.indexOf(':');
+    if(i < 0){ setActiveScope(null); return; }
+    setActiveScope({ type: raw.slice(0, i), id: raw.slice(i + 1) });
+  };
+}
+
 function flatUnitsFromScopeTree(tree){
   const out = [];
   for(const dep of ((tree && tree.departments) || [])){
@@ -7750,6 +7790,7 @@ async function refreshServerFlags(){
     serverFlags = data.flags || {};
   }catch{ /* offline — leave as-is */ }
   updateAccountUI();
+  void renderScopeSelector();
 }
 
 function openPresentationMode(){
