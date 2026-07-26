@@ -394,3 +394,60 @@ describe('admin soft busy state', () => {
     assert.equal(document.getElementById('adminBusyStatus').hidden, true);
   });
 });
+
+describe('admin visual polish hooks', () => {
+  test('Admin title uses the admin-view-title class for hierarchy styling', () => {
+    const { document } = loadFrontendEnv();
+    const title = document.getElementById('adminViewTitle');
+    assert.ok(title);
+    assert.ok(title.classList.contains('admin-view-title'));
+  });
+
+  test('stat tiles and structure panels use elevated card surfaces (shadow token)', async () => {
+    const { window, document } = loadFrontendEnv();
+    window.api = async (path) => {
+      if(path.startsWith('/api/admin/org')) return {
+        org: { id: 'bfv2-org', name: 'Default', stats: { livePatients: 5, byStatus: { postop: 3, preop: 1, conservative: 1, fordischarge: 0 }, users: 2, lastActivity: null } },
+        totals: { hospitals: 1, departments: 1, units: 1, wards: 1, usersActive: 2, usersDisabled: 0, livePatients: 5 },
+        hospitals: [{ id: 'h1', name: 'City', stats: { livePatients: 5, byStatus: {}, users: 2, lastActivity: null }, departments: [
+          { id: 'd1', name: 'Ortho', specialty: 'ortho', stats: { livePatients: 5, byStatus: {}, users: 2, lastActivity: null }, units: [
+            { id: 'u1', name: 'IV', stats: { livePatients: 5, byStatus: {}, users: 1, lastActivity: null }, wards: [] }
+          ] }
+        ] }]
+      };
+      if(path === '/api/admin/users') return { users: [] };
+      return {};
+    };
+    await window.loadAdminView();
+    const tile = document.querySelector('#adminStatTiles .admin-stat-tile');
+    assert.ok(tile);
+    const tileShadow = window.getComputedStyle(tile).boxShadow;
+    assert.notEqual(tileShadow, 'none');
+    window.switchAdminSection('structure');
+    window.selectAdminNode('unit', 'u1');
+    const rail = document.getElementById('adminTreeRail');
+    const detail = document.getElementById('adminDetailPane');
+    assert.notEqual(window.getComputedStyle(rail).boxShadow, 'none');
+    assert.notEqual(window.getComputedStyle(detail).boxShadow, 'none');
+  });
+
+  test('selected section tab uses accent-soft fill', async () => {
+    const { window, document } = loadFrontendEnv();
+    window.api = async (path) => {
+      if(path.startsWith('/api/admin/org')) return {
+        org: { id: 'bfv2-org', name: 'Default', stats: { livePatients: 0, byStatus: {}, users: 0, lastActivity: null } },
+        totals: { hospitals: 0, departments: 0, units: 0, wards: 0, usersActive: 0, usersDisabled: 0, livePatients: 0 },
+        hospitals: []
+      };
+      if(path === '/api/admin/users') return { users: [] };
+      return {};
+    };
+    await window.loadAdminView();
+    const tab = document.querySelector('[data-admin-section="overview"]');
+    assert.equal(tab.getAttribute('aria-selected'), 'true');
+    const bg = window.getComputedStyle(tab).backgroundColor;
+    // accent-soft is not transparent / not equal to the unselected tab's empty background
+    assert.notEqual(bg, 'rgba(0, 0, 0, 0)');
+    assert.notEqual(bg, 'transparent');
+  });
+});
