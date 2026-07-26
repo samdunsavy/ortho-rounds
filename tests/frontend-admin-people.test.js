@@ -575,6 +575,34 @@ describe('create person in one step', () => {
     assert.ok(assignCall, 'expected a follow-up POST to /assign');
     assert.deepEqual(JSON.parse(assignCall.opts.body), { nodeType: 'unit', nodeId: 'u1' });
   });
+
+  test('create still shows the temporary password when assign fails', async () => {
+    const { window, document } = loadFrontendEnv();
+    const calls = [];
+    window.api = async (path, opts) => {
+      calls.push({ path, opts });
+      if(path.startsWith('/api/admin/org')) return TREE;
+      if(path === '/api/admin/users' && (!opts || opts.method !== 'POST')) return { users: [] };
+      if(path === '/api/admin/users' && opts && opts.method === 'POST') return { id: 'new1', temporaryPassword: 'bone-plate-fail' };
+      if(path.endsWith('/assign')) throw new Error('assign failed');
+      return { ok: true };
+    };
+    await window.loadAdminView();
+    window.switchAdminSection('people');
+    document.getElementById('adminNewUsername').value = 'placed2';
+    document.getElementById('adminNewUserPlacement').value = 'unit:u1';
+    document.getElementById('adminCreateUser').dispatchEvent(new window.Event('click', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 0));
+    const createCall = calls.find(c => c.path === '/api/admin/users' && c.opts && c.opts.method === 'POST');
+    assert.ok(createCall);
+    const createBody = JSON.parse(createCall.opts.body);
+    assert.equal(createBody.nodeType, undefined);
+    assert.equal(createBody.nodeId, undefined);
+    assert.equal(document.getElementById('adminSecretModal').classList.contains('active'), true);
+    assert.equal(document.getElementById('adminSecretValue').value, 'bone-plate-fail');
+    assert.equal(document.getElementById('adminNewUsername').value, '');
+    assert.equal(document.getElementById('adminNewUserPlacement').value, '');
+  });
 });
 
 describe('role change', () => {

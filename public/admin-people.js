@@ -325,10 +325,20 @@ document.getElementById('adminPeopleSection')?.addEventListener('click', (e) => 
     }
     api('/api/admin/users', { method: 'POST', body: JSON.stringify(body) })
       .then(async res => {
-        if(nodeType) await api(`/api/admin/users/${res.id}/assign`, { method: 'POST', body: JSON.stringify({ nodeType, nodeId }) });
+        if(nodeType){
+          try{
+            await api(`/api/admin/users/${res.id}/assign`, { method: 'POST', body: JSON.stringify({ nodeType, nodeId }) });
+          }catch(err){
+            showToast(err.message);
+          }
+        }
         nameEl.value = '';
         document.getElementById('adminNewUserPlacement').value = '';
-        await loadAdminView();
+        try{
+          await loadAdminView();
+        }catch(err){
+          showToast(err.message);
+        }
         await showAdminSecret('Person created', res.temporaryPassword);
       })
       .catch(err => showToast(err.message));
