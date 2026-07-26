@@ -55,8 +55,18 @@ function renderAdminSectionTabs(){
 
 const ADMIN_SECTION_IDS = { overview: 'adminOverviewSection', people: 'adminPeopleSection', structure: 'adminStructureSection', orgs: 'adminOrgsSection' };
 
+function renderAdminOrgChip(){
+  const chip = document.getElementById('adminOrgChip');
+  if(!chip) return;
+  if(!adminUI.viewedOrgId){ chip.hidden = true; return; }
+  const org = (adminUI.allOrgs || []).find(o => o.id === adminUI.viewedOrgId) || (adminData.tree && adminData.tree.org);
+  document.getElementById('adminOrgChipName').textContent = org ? org.name : 'Organization';
+  chip.hidden = false;
+}
+
 function renderAdminSection(){
   renderAdminSectionTabs();
+  renderAdminOrgChip();
   for(const [name, id] of Object.entries(ADMIN_SECTION_IDS)){
     const el = document.getElementById(id);
     if(el) el.hidden = adminUI.section !== name;
@@ -78,6 +88,10 @@ function switchAdminSection(section){
   renderAdminSection();
   document.getElementById(`adminTab-${section}`)?.focus();
 }
+
+document.getElementById('adminOrgChip')?.addEventListener('click', (e) => {
+  if(e.target.closest('[data-org-chip-close]')) exitAdminOrgContext();
+});
 
 document.getElementById('adminSectionTabs')?.addEventListener('click', (e) => {
   const btn = e.target.closest('[data-admin-section]');

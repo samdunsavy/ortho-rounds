@@ -5,6 +5,9 @@
 function renderAdminOrgsSection(){
   const el = document.getElementById('adminOrgsSection');
   if(!el) return;
+  const repairHTML = isInstanceAdminUser()
+    ? `<div class="admin-inline-form"><button class="btn" data-repair-ancestry>Repair ancestry</button></div>`
+    : '';
   el.innerHTML = `<h3>Organizations</h3>` + (adminData.orgs || []).map(o => `
     <div class="admin-org-card" data-org-id="${escapeHTML(o.id)}">
       <strong>${escapeHTML(o.name)}</strong> <span class="spec-badge">${escapeHTML(o.plan)}</span>
@@ -18,7 +21,8 @@ function renderAdminOrgsSection(){
     <div class="admin-inline-form">
       <input placeholder="New organization name" id="adminNewOrgName" maxlength="80">
       <button class="btn" id="adminAddOrgBtn">Create organization</button>
-    </div>`;
+    </div>
+    ${repairHTML}`;
 }
 
 /** Leave a drilled-in org and go back to the all-orgs list. */
@@ -53,6 +57,17 @@ document.getElementById('adminOrgsSection')?.addEventListener('click', (e) => {
     api('/api/admin/orgs', { method: 'POST', body: JSON.stringify({ name }) })
       .then(() => { input.value = ''; return loadAdminView(); })
       .catch(err => showToast(err.message));
+    return;
+  }
+  if(e.target.closest('[data-repair-ancestry]')){
+    e.stopPropagation();
+    showConfirm('Repair ancestry', 'Re-derives every patient\'s hospital/department/unit/ward labels and stats from their current unit assignment. Safe to run any time; only fixes migration debris, does not move anyone.', { confirmLabel: 'Repair' })
+      .then(ok => {
+        if(!ok) return;
+        return api('/api/admin/repair-ancestry', { method: 'POST' })
+          .then(res => showToast(`Fixed ancestry for ${res.restamped} patients`))
+          .catch(err => showToast(err.message));
+      });
     return;
   }
   const mkOrgAdmin = e.target.closest('[data-create-org-admin]');
