@@ -181,6 +181,26 @@ describe('admin console — end-to-end provisioning flow (flag on)', () => {
     assert.equal(rollups.json.orgs.find(o => o.id === orgId).stats.livePatients, 1); // cp2 landed under the unit
     assert.equal((await api(srv.baseUrl, boss, '/api/admin/orgs')).status, 403); // org admin can't list orgs
   });
+
+  test('instance admin must name an org when creating a user (no org-less users)', async () => {
+    const orphan = await api(srv.baseUrl, root, '/api/admin/users', { method: 'POST', body: { username: 'orphan1' } });
+    assert.equal(orphan.status, 400);
+    assert.equal(orphan.json.error, 'orgId required');
+
+    // And the rejected user really was not created.
+    const after = await api(srv.baseUrl, root, '/api/admin/users', { method: 'GET' });
+    assert.equal(after.json.users.some(u => u.username === 'orphan1'), false);
+
+    const placed = await api(srv.baseUrl, root, '/api/admin/users', { method: 'POST', body: { username: 'placed1', orgId } });
+    assert.equal(placed.status, 200);
+    const listed = (await api(srv.baseUrl, root, '/api/admin/users', { method: 'GET' })).json.users;
+    assert.equal(listed.find(u => u.username === 'placed1').orgId, orgId);
+  });
+
+  test('instance admin naming an unknown org gets 404', async () => {
+    const bad = await api(srv.baseUrl, root, '/api/admin/users', { method: 'POST', body: { username: 'nowhere1', orgId: 'no-such-org' } });
+    assert.equal(bad.status, 404);
+  });
 });
 
 describe('admin console — flag OFF: new routes do not exist', () => {
@@ -209,5 +229,11 @@ describe('admin console — flag OFF: new routes do not exist', () => {
     assert.equal(list.status, 200);
     const keys = Object.keys(list.json.users[0]).sort();
     assert.deepEqual(keys, ['active', 'createdAt', 'id', 'role', 'username']); // no wardId/orgId leak flag-off
+  });
+
+  test('no orgId is required when MULTI_TENANT is off', async () => {
+    const u = await api(srv.baseUrl, root, '/api/admin/users', { method: 'POST', body: { username: 'plainflagoff' } });
+    assert.equal(u.status, 200);
+    assert.ok(u.json.temporaryPassword);
   });
 });

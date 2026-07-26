@@ -720,7 +720,13 @@ async function handleApi(req, res, pathname){
           if(!(await departmentInOrg(String(body.wardId), actor.orgId))) return sendJSON(res, 403, { error: 'Department is not in this organization' });
           newUser.wardId = String(body.wardId);
         }
-      }else if(body.orgId){
+      }else{
+        // An instance admin has no org of their own to infer from. Without an
+        // explicit target the user was stored with orgId undefined, and
+        // resolveScope() grants any admin lacking an orgId unrestricted access
+        // to every org's patients — so this must be a hard requirement, not a
+        // client-side convention.
+        if(!body.orgId) return sendJSON(res, 400, { error: 'orgId required' });
         if(!(await store.getOrganization(body.orgId))) return sendJSON(res, 404, { error: 'Organization not found' });
         newUser.orgId = body.orgId;
         if(body.wardId){
