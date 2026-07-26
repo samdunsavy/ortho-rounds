@@ -4,6 +4,55 @@
    command-center tree/detail code over unchanged in behaviour, reading
    adminData/adminUI instead of the old adminState/module adminViewOrgId. */
 
+function isAdminNodeExpanded(key){
+  return adminUI.structureExpanded.has(key);
+}
+
+function toggleAdminNodeExpanded(key){
+  if(adminUI.structureExpanded.has(key)) adminUI.structureExpanded.delete(key);
+  else adminUI.structureExpanded.add(key);
+}
+
+/** Opens to department level: every hospital and department key, so today's
+    single hospital is fully visible without a click. */
+function defaultExpandStructure(tree){
+  const keys = new Set();
+  for(const h of (tree && tree.hospitals) || []){
+    keys.add(`hospital:${h.id}`);
+    for(const dep of h.departments || []) keys.add(`department:${dep.id}`);
+  }
+  return keys;
+}
+
+function nodeMatchesStructureFilter(node, query){
+  const q = (query || '').trim().toLowerCase();
+  if(!q) return true;
+  return (node.name || '').toLowerCase().includes(q);
+}
+
+/** The chain of "type:id" keys from the org down to (but not including) the
+    given node — used to auto-expand every ancestor of a filter match. */
+function ancestorsOf(tree, type, id){
+  const chain = [];
+  if(tree && tree.org) chain.push(`org:${tree.org.id}`);
+  for(const h of (tree && tree.hospitals) || []){
+    if(type === 'hospital' && h.id === id) return chain;
+    const withHospital = [...chain, `hospital:${h.id}`];
+    for(const dep of h.departments || []){
+      if(type === 'department' && dep.id === id) return withHospital;
+      const withDep = [...withHospital, `department:${dep.id}`];
+      for(const u of dep.units || []){
+        if(type === 'unit' && u.id === id) return withDep;
+        const withUnit = [...withDep, `unit:${u.id}`];
+        for(const w of u.wards || []){
+          if(type === 'ward' && w.id === id) return withUnit;
+        }
+      }
+    }
+  }
+  return [];
+}
+
 function findAdminNode(tree, type, id){
   if(!tree) return null;
   for(const h of tree.hospitals || []){
@@ -21,25 +70,45 @@ function findAdminNode(tree, type, id){
   return null;
 }
 
-function ccRowHTML(type, id, label, count, depth, selection){
+function ccRowHTML(type, id, label, count, unitLabel, depth, selection, expandable, expanded){
   const sel = selection && selection.type === type && selection.id === id ? ' is-selected' : '';
-  const c = count === null || count === undefined ? '' : `<span class="cc-count">${count}</span>`;
-  return `<button type="button" data-depth="${depth}" data-node="${escapeHTML(type)}:${escapeHTML(id)}" class="admin-cc-row${sel}">${escapeHTML(label)}${c}</button>`;
+  const countLabel = count === null || count === undefined ? '' : `${count} ${unitLabel}${count === 1 ? '' : 's'}`;
+  const c = countLabel ? `<span class="cc-count">${escapeHTML(countLabel)}</span>` : '';
+  const key = `${type}:${id}`;
+  const chevron = expandable
+    ? `<button type="button" class="admin-cc-chevron" data-toggle-expand="${escapeHTML(key)}" aria-expanded="${!!expanded}" aria-label="${expanded ? 'Collapse' : 'Expand'}">${expanded ? '▾' : '▸'}</button>`
+    : '<span class="admin-cc-chevron-spacer"></span>';
+  return `<span class="admin-cc-row-wrap" data-depth="${depth}">${chevron}<button type="button" data-node="${escapeHTML(key)}" class="admin-cc-row${sel}">${escapeHTML(label)}${c}</button></span>`;
 }
 
-function renderAdminTreeHTML(tree, selection){
+function renderAdminTreeHTML(tree, selection, expanded){
+  const exp = expanded || adminUI.structureExpanded;
+  const q = adminUI.structureFilter || '';
   let out = '';
   if(tree && tree.org){
-    out += ccRowHTML('org', tree.org.id, tree.org.name || 'Organization', tree.org.stats ? tree.org.stats.livePatients : null, 0, selection);
+    out += ccRowHTML('org', tree.org.id, tree.org.name || 'Organization', tree.org.stats ? tree.org.stats.livePatients : null, 'patient', 0, selection, false, false);
   }
   for(const h of (tree && tree.hospitals) || []){
-    out += ccRowHTML('hospital', h.id, h.name, h.stats ? h.stats.livePatients : null, 0, selection);
+    const hExpanded = exp.has(`hospital:${h.id}`);
+    const hasMatch = (h.departments || []).some(dep => nodeMatchesStructureFilter(dep, q) || (dep.units || []).some(u => nodeMatchesStructureFilter(u, q) || (u.wards || []).some(w => nodeMatchesStructureFilter(w, q))));
+    if(q && !nodeMatchesStructureFilter(h, q) && !hasMatch) continue;
+    out += ccRowHTML('hospital', h.id, h.name, h.stats ? h.stats.livePatients : null, 'patient', 0, selection, true, hExpanded || (q && hasMatch));
+    if(!hExpanded && !(q && hasMatch)) continue;
     for(const dep of h.departments || []){
-      out += ccRowHTML('department', dep.id, dep.name, dep.stats.livePatients, 1, selection);
+      const depExpanded = exp.has(`department:${dep.id}`);
+      const depHasMatch = (dep.units || []).some(u => nodeMatchesStructureFilter(u, q) || (u.wards || []).some(w => nodeMatchesStructureFilter(w, q)));
+      if(q && !nodeMatchesStructureFilter(dep, q) && !depHasMatch) continue;
+      out += ccRowHTML('department', dep.id, dep.name, dep.stats.livePatients, 'patient', 1, selection, true, depExpanded || (q && depHasMatch));
+      if(!depExpanded && !(q && depHasMatch)) continue;
       for(const u of dep.units || []){
-        out += ccRowHTML('unit', u.id, u.name, u.stats.livePatients, 2, selection);
+        const uExpanded = exp.has(`unit:${u.id}`);
+        const uHasMatch = (u.wards || []).some(w => nodeMatchesStructureFilter(w, q));
+        if(q && !nodeMatchesStructureFilter(u, q) && !uHasMatch) continue;
+        out += ccRowHTML('unit', u.id, u.name, u.stats.livePatients, 'patient', 2, selection, !!(u.wards || []).length, uExpanded || (q && uHasMatch));
+        if((u.wards || []).length && !uExpanded && !(q && uHasMatch)) continue;
         for(const w of u.wards || []){
-          out += ccRowHTML('ward', w.id, w.name, w.stats.livePatients, 3, selection);
+          if(q && !nodeMatchesStructureFilter(w, q)) continue;
+          out += ccRowHTML('ward', w.id, w.name, w.stats.livePatients, 'pinned', 3, selection, false, false);
         }
       }
     }
@@ -73,12 +142,14 @@ function childListOf(type, node){
   return [];
 }
 
-function nodeStatsHTML(node){
+function nodeStatsHTML(node, type){
   const s = node.stats;
   if(!s) return '';
-  const plural = s.livePatients === 1 ? '' : 's';
+  const label = type === 'unit' ? `${s.livePatients} patient${s.livePatients === 1 ? '' : 's'} in this unit`
+    : type === 'ward' ? `${s.livePatients} pinned to this ward`
+    : `${s.livePatients} live patient${s.livePatients === 1 ? '' : 's'}`;
   return `
-    <div class="small-muted">${s.livePatients} live patient${plural} · ${s.users} user${s.users === 1 ? '' : 's'}</div>
+    <div class="small-muted">${label} · ${s.users} user${s.users === 1 ? '' : 's'}</div>
     ${renderAdminStatusBar(s.byStatus, s.livePatients)}
     <div class="small-muted">${s.lastActivity ? 'Active ' + formatRelativeTime(s.lastActivity) : 'No activity yet'}</div>`;
 }
@@ -111,7 +182,7 @@ function renderAdminDetailHTML(state){
       <span class="spec-badge">${escapeHTML(humanNodeType(sel.type))}</span>
       ${renderAdminNodeActionsHTML(state, sel, hit)}
     </div>
-    ${nodeStatsHTML(node)}
+    ${nodeStatsHTML(node, sel.type)}
     <h4>${childType ? childType[0].toUpperCase() + childType.slice(1) + 's' : 'Contents'}</h4>
     <div class="admin-cc-children">${kidsHTML}</div>
     ${addChild}`;
@@ -181,13 +252,26 @@ function renderAdminStructureSection(){
 }
 
 function renderAdminStructureBody(){
+  if(adminData.tree && !adminUI.structureExpanded.size) adminUI.structureExpanded = defaultExpandStructure(adminData.tree);
   const rail = document.getElementById('adminTreeRail');
-  if(rail) rail.innerHTML = renderAdminTreeHTML(adminData.tree, adminUI.selectedNode);
+  if(rail){
+    rail.innerHTML = `
+      <label for="adminStructureFilter" class="sr-only">Filter the tree by name</label>
+      <input id="adminStructureFilter" placeholder="Filter…" value="${escapeHTML(adminUI.structureFilter)}">
+      <div class="admin-cc-rows">${renderAdminTreeHTML(adminData.tree, adminUI.selectedNode)}</div>`;
+  }
   const detail = document.getElementById('adminDetailPane');
   if(detail) detail.innerHTML = renderAdminDetailHTML({ tree: adminData.tree, users: adminData.users, orgs: adminData.orgs, selection: adminUI.selectedNode });
 }
 
 document.getElementById('adminStructureSection')?.addEventListener('click', (e) => {
+  const chevron = e.target.closest('[data-toggle-expand]');
+  if(chevron){
+    e.stopPropagation();
+    toggleAdminNodeExpanded(chevron.dataset.toggleExpand);
+    renderAdminStructureBody();
+    return;
+  }
   const addBtn = e.target.closest('[data-add-child]');
   if(addBtn){
     e.stopPropagation();
@@ -240,6 +324,33 @@ document.getElementById('adminStructureSection')?.addEventListener('click', (e) 
   const i = raw.indexOf(':');
   if(i === -1) selectAdminNode(raw, null);
   else selectAdminNode(raw.slice(0, i), raw.slice(i + 1));
+});
+
+document.getElementById('adminStructureSection')?.addEventListener('input', (e) => {
+  if(e.target.id !== 'adminStructureFilter') return;
+  adminUI.structureFilter = e.target.value;
+  if(adminUI.structureFilter.trim()){
+    const walk = (type, id, name) => {
+      if(nodeMatchesStructureFilter({ name }, adminUI.structureFilter)){
+        for(const key of ancestorsOf(adminData.tree, type, id)) adminUI.structureExpanded.add(key);
+      }
+    };
+    for(const h of (adminData.tree && adminData.tree.hospitals) || []){
+      walk('hospital', h.id, h.name);
+      for(const dep of h.departments || []){
+        walk('department', dep.id, dep.name);
+        for(const u of dep.units || []){
+          walk('unit', u.id, u.name);
+          for(const w of u.wards || []) walk('ward', w.id, w.name);
+        }
+      }
+    }
+  }
+  const rail = document.getElementById('adminTreeRail');
+  const focused = document.activeElement === document.getElementById('adminStructureFilter');
+  const rows = rail && rail.querySelector('.admin-cc-rows');
+  if(rows) rows.innerHTML = renderAdminTreeHTML(adminData.tree, adminUI.selectedNode);
+  if(focused) document.getElementById('adminStructureFilter').focus();
 });
 
 document.getElementById('adminStructureSection')?.addEventListener('change', async (e) => {

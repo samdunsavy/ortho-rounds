@@ -12,10 +12,12 @@ function mockAdminApi(calls, overrides){
   };
 }
 
+const EXPANDED_TO_UNITS = new Set(['hospital:h1', 'department:d1', 'unit:u1']);
+
 describe('command center tree', () => {
   test('renders a row per node with live counts (no Users/Organizations rows anymore — those are sections now)', () => {
     const { window } = loadFrontendEnv();
-    const html = window.renderAdminTreeHTML(TREE, null);
+    const html = window.renderAdminTreeHTML(TREE, null, EXPANDED_TO_UNITS);
     assert.ok(html.includes('data-node="hospital:h1"'));
     assert.ok(html.includes('data-node="department:d1"'));
     assert.ok(html.includes('data-node="unit:u1"'));
@@ -25,7 +27,7 @@ describe('command center tree', () => {
   });
   test('marks the selected node', () => {
     const { window } = loadFrontendEnv();
-    const html = window.renderAdminTreeHTML(TREE, { type: 'unit', id: 'u1' });
+    const html = window.renderAdminTreeHTML(TREE, { type: 'unit', id: 'u1' }, EXPANDED_TO_UNITS);
     assert.match(html, /data-node="unit:u1"[^>]*class="[^"]*is-selected/);
   });
   test('findAdminNode locates a node and its parent', () => {
@@ -48,7 +50,7 @@ describe('detail panel', () => {
     const { window } = loadFrontendEnv();
     const html = window.renderAdminDetailHTML({ tree: TREE, users: [], orgs: [], selection: { type: 'unit', id: 'u1' } });
     assert.ok(html.includes('IV'));
-    assert.ok(html.includes('4 live patient'));
+    assert.ok(html.includes('4 patients in this unit'));
     assert.ok(html.includes('7MOW'));
     assert.ok(html.includes('data-add-child="unit:u1"'));
     assert.ok(html.includes('>Unit<'));
@@ -347,5 +349,90 @@ describe('instance-admin org context', () => {
     document.getElementById('adminAddOrgBtn').dispatchEvent(new window.Event('click', { bubbles: true }));
     await new Promise(r => setTimeout(r, 0));
     assert.deepEqual([...toasts], ['Enter an organization name']);
+  });
+});
+
+describe('tree expansion', () => {
+  test('isAdminNodeExpanded/toggleAdminNodeExpanded track a Set of "type:id" keys', () => {
+    const { window } = loadFrontendEnv();
+    assert.equal(window.isAdminNodeExpanded('department:d1'), false);
+    window.toggleAdminNodeExpanded('department:d1');
+    assert.equal(window.isAdminNodeExpanded('department:d1'), true);
+    window.toggleAdminNodeExpanded('department:d1');
+    assert.equal(window.isAdminNodeExpanded('department:d1'), false);
+  });
+
+  test('defaultExpandStructure expands every hospital and department, so one hospital is fully visible', () => {
+    const { window } = loadFrontendEnv();
+    const expanded = window.defaultExpandStructure(TREE);
+    assert.equal(expanded.has('hospital:h1'), true);
+    assert.equal(expanded.has('department:d1'), true);
+    assert.equal(expanded.has('unit:u1'), false);
+  });
+
+  test('a collapsed hospital hides its departments; expanding it shows them; aria-expanded reflects state', () => {
+    const { window } = loadFrontendEnv();
+    const collapsedHtml = window.renderAdminTreeHTML(TREE, null, new Set());
+    assert.ok(!collapsedHtml.includes('data-node="department:d1"'));
+    assert.match(collapsedHtml, /data-toggle-expand="hospital:h1"[^>]*aria-expanded="false"/);
+
+    const expandedHtml = window.renderAdminTreeHTML(TREE, null, new Set(['hospital:h1']));
+    assert.ok(expandedHtml.includes('data-node="department:d1"'));
+    assert.match(expandedHtml, /data-toggle-expand="hospital:h1"[^>]*aria-expanded="true"/);
+  });
+
+  test('clicking the chevron toggles expansion without selecting the row', async () => {
+    const { window, document } = loadFrontendEnv();
+    window.api = async (path) => path.startsWith('/api/admin/org') ? TREE : { users: [] };
+    await window.loadAdminView();
+    window.switchAdminSection('structure');
+    const detailBefore = document.getElementById('adminDetailPane').innerHTML;
+    document.querySelector('[data-toggle-expand="hospital:h1"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+    assert.ok(!document.querySelector('[data-node="department:d1"]'));
+    assert.equal(document.getElementById('adminDetailPane').innerHTML, detailBefore);
+    assert.ok(!document.querySelector('.admin-cc-row.is-selected'));
+  });
+
+  test('expansion state survives a reload', async () => {
+    const { window, document } = loadFrontendEnv();
+    window.api = async (path) => path.startsWith('/api/admin/org') ? TREE : { users: [] };
+    await window.loadAdminView();
+    window.switchAdminSection('structure');
+    document.querySelector('[data-toggle-expand="hospital:h1"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+    assert.ok(!document.querySelector('[data-node="department:d1"]'));
+    await window.loadAdminView();
+    assert.ok(!document.querySelector('[data-node="department:d1"]'), 'stayed collapsed across the reload');
+  });
+
+  test('counts are labelled, not bare numbers', () => {
+    const { window } = loadFrontendEnv();
+    const html = window.renderAdminTreeHTML(TREE, null, new Set(['hospital:h1', 'department:d1']));
+    assert.match(html, /IV[\s\S]{0,40}4 patients/);
+  });
+});
+
+describe('tree filter', () => {
+  test('nodeMatchesStructureFilter matches a case-insensitive substring of the name', () => {
+    const { window } = loadFrontendEnv();
+    assert.equal(window.nodeMatchesStructureFilter({ name: 'General' }, 'gen'), true);
+    assert.equal(window.nodeMatchesStructureFilter({ name: 'General' }, 'xyz'), false);
+    assert.equal(window.nodeMatchesStructureFilter({ name: 'General' }, ''), true);
+  });
+
+  test('ancestorsOf returns the chain of keys from the org down to a ward', () => {
+    const { window } = loadFrontendEnv();
+    assert.deepEqual([...window.ancestorsOf(TREE, 'ward', 'w1')], ['org:bfv2-org', 'hospital:h1', 'department:d1', 'unit:u1']);
+  });
+
+  test('typing in the filter box narrows the tree to matches and auto-expands to reveal them', async () => {
+    const { window, document } = loadFrontendEnv();
+    window.api = async (path) => path.startsWith('/api/admin/org') ? TREE : { users: [] };
+    await window.loadAdminView();
+    window.switchAdminSection('structure');
+    const filter = document.getElementById('adminStructureFilter');
+    filter.value = 'general';
+    filter.dispatchEvent(new window.Event('input', { bubbles: true }));
+    assert.ok(document.querySelector('[data-node="unit:u2"]')); // "General" — matches, and its ancestors auto-expand
+    assert.ok(!document.querySelector('[data-node="unit:u1"]')); // "IV" — does not match, hidden
   });
 });
