@@ -16,7 +16,7 @@ The console shipped 2026-07-24 as a desktop-first master-detail "command center"
 
 ### 2. Confirmed defects
 
-All nine of the following were confirmed as things actually hit in use.
+Nine confirmed by use, plus six more found by a full code audit ([Audit admin console bugs](df21266a-0c55-44f6-a454-430f314a8242)). Full suite is green: 425 passed.
 
 | # | Defect | Evidence |
 |---|---|---|
@@ -24,11 +24,17 @@ All nine of the following were confirmed as things actually hit in use.
 | 2 | As instance admin, the "Organization" tab is blank or stale until an org is picked | `switchAdminTab('org')` (`:526`) only toggles `display`; `loadAdminView` (`:496`) never paints `#adminOrgPane` while `adminViewOrgId` is null |
 | 3 | Drilling into an org is a one-way trip, and the assignment picker collapses to that one org | `adminState.orgs = tree.org ? [tree.org] : []` (`:512`) overwrites the instance admin's full org list; no exit affordance exists |
 | 4 | Rename uses `window.prompt`, passwords use `window.alert` | `:334`, `:385`, `:396` — unreliable in the installed PWA, and inconsistent with the app's `showConfirm` |
-| 5 | Everything is read-only under 900px, and resizing never re-evaluates | `adminIsNarrow()` (`:189`) is read at render time only, with no `resize` listener |
+| 5 | Everything is read-only under 900px, and resizing never re-evaluates | `adminIsNarrow()` (`:189`) is read at render time only, with no `resize` listener; Organizations tab never consults it at all (`:476–491`) |
 | 6 | Deleting a node dumps you on the Users panel | `adminState.selection = { type: 'users' }` (`:352`) |
 | 7 | Assigned users render as `Stale (unit:7f3a…)` or "— none —" | `assignLabelFor` (`:453`) exposes a raw type:id; `buildAssignNodeGroups` can be missing the node after defect 3 |
 | 8 | Node counts look wrong | Departments double-count users holding both a legacy `wardId` and an `assignmentType` (`admin.js:75-83`); hospitals and the org show no count at all (`admin-console.js:44`, `:47`); ward counts are a subset of their unit's with nothing saying so |
 | 9 | It throws / goes blank in some states | `renderAdminOrgsTab` (`:478`) and `switchAdminTab` (`:527`) dereference `getElementById` results with no null guard; `renderAdminStatTiles` (`:409`) assumes `tree.totals` and `dep.stats.byStatus` exist |
+| 10 | Instance admin "Add hospital" always 400s | `addChildRouteFor('org')` (`:81–86`) posts `{ name }` only; `requestedOrgId` requires an explicit `orgId` for instance admins (`server.js:476–480`). Comment at `:83–85` admits the case is uncovered; the frontend test locks in `{ name }` only |
+| 11 | Leaving a drilled-in org does not clear `adminViewOrgId` | Selecting Organizations (rail or tab) calls `switchAdminTab('orgs')` but leaves `adminViewOrgId` set (`:61–67`, `app.js:3609`). `loadAdminView` then skips the orgs early-return, refreshes the *hidden* org tree, and never re-renders org cards — so create-org succeeds on the server while the list stays stale |
+| 12 | Selection from org A survives into org B | `openAdminView` clears `adminViewOrgId` but not `selection` (`:540–542`); View org B with a unit from A still selected → "That item no longer exists" |
+| 13 | 409 `blockedBy` never reaches the UI | `api()` surfaces only `j.error` (`app.js:363–366`); toast is `"Node is not empty"` and the `{ children, users, patients }` payload is dropped |
+| 14 | Hospital delete looks allowed when users are assigned to it | `buildOrgTree` never counts `assignmentType === 'hospital'\|'org'` (`admin.js:75–83`), so `deleteBlockedReason` sees only children and enables Delete; the server still 409s |
+| 15 | Ward patient stats ignore whether `wardId` belongs to the patient's `unitId` | A patient `{ unitId: uA, wardId: wB }` where `wB` is under a different unit is counted in both (`admin.js:86–96`) |
 
 ### 3. A privilege-escalation bug
 
@@ -87,7 +93,7 @@ Desktop renders a table (person, role, "Can see patients in", status, actions). 
 
 - **People assigned here** — the list the previous spec promised. This is the link between the two halves of the console and makes "who can see this ward" answerable. Each entry links into People.
 - **Specialty** for departments — already supported by `PATCH /api/admin/nodes/department/:id` (`server.js:557`) and simply never exposed.
-- **Children** with an inline add-child form that disables while in flight (so a double-tap cannot create two wards), clears on success, and keeps focus for adding several in a row.
+- **Children** with an inline add-child form that disables while in flight (so a double-tap cannot create two wards), clears on success, and keeps focus for adding several in a row. When an instance admin is viewing a specific org and adds a hospital under that org, the request carries that org's `orgId` — the same from-context rule as create-person (defect 10). Org admins continue to rely on the server inferring `orgId` from the actor.
 
 **Rename** is an inline edit: click the name, type, Enter to save, Escape to cancel, 80-character limit enforced in place with an inline message. No `window.prompt`.
 
@@ -99,11 +105,12 @@ Desktop renders a table (person, role, "Can see patients in", status, actions). 
 
 ### 4. Organizations
 
-Org cards with rollup stats, create-org, and create-org-admin, as today. What changes:
+Org cards with rollup stats, create-org, and create-org-admin, as today. Empty create-org / create-org-admin input shows an inline message rather than silently no-oping (`app.js:3611–3623`). What changes:
 
 - The all-orgs list and the currently-viewed org's tree are **separate pieces of state**, so drilling in no longer collapses the assignment picker to one org.
-- Drilling in sets a persistent **"Viewing: ‹org› ✕"** chip in the header. The ✕ returns to the all-orgs list.
-- Selecting the "Organization" section before an org is chosen shows a *choose an organization* prompt instead of a blank pane.
+- Drilling in sets a persistent **"Viewing: ‹org› ✕"** chip in the header. Clearing the chip (or switching to the Organizations section) **clears `adminViewOrgId`** and re-renders the org cards — defect 11's root cause, where leaving a drilled-in org left the id set and every subsequent reload refreshed the hidden tree instead of the cards.
+- Switching the viewed org **resets selection** to Overview (or People), so a unit selected in org A cannot linger into org B as "That item no longer exists" (defect 12).
+- Selecting Structure / Overview before an org is chosen shows a *choose an organization* prompt instead of a blank pane / permanent "Loading…".
 - **Repair ancestry** gets a button here (instance admin only), with a plain explanation of what it does and a confirmation, wired to the existing `POST /api/admin/repair-ancestry`.
 
 ### 5. Backend changes
@@ -123,15 +130,17 @@ Two route changes, plus one correction to the pure stats builder in `admin.js`.
 
 When `MULTI_TENANT` is enabled and the actor is an instance admin, `orgId` becomes **required** → 400 `"orgId required"`. Org admins are unaffected; their `orgId` continues to be inferred from the actor (`server.js:718`). Creating an additional *instance* admin is not something the console offers — org admins are created via `POST /api/admin/orgs/:id/admin` and the first instance admin via `bootstrapAdmin` — so requiring an org here closes the escalation path without removing a capability. Existing server tests that create users as an instance admin without an org are updated to pass one.
 
-**Corrected: user and patient counts in `admin.js` (defect 8)**
+**Corrected: user and patient counts in `admin.js` (defects 8, 14, 15)**
 
-Three separate problems produce the counts that look wrong:
+Five separate problems produce the counts that look wrong:
 
 - **Users are double-counted at department level.** `buildOrgTree` (`admin.js:75-83`) increments a department's `users` for a legacy `wardId` *and* again for `assignmentType === 'department'` with the same id, so a user carrying both is counted twice. Each user is counted exactly once: node-based assignment wins, and the legacy `wardId` is used only when the user has no assignment.
-- **Hospitals and the org show no count at all.** `ccRowHTML` is called with `null` for both (`admin-console.js:47`, `:44`), so the two levels you'd most want a total for are blank. `buildOrgTree` gains rolled-up `stats` on each hospital and on the org, summed from their departments.
-- **Ward counts read as inconsistent with the unit above them.** This one is correct as computed — a unit's count is every patient in that unit, while a ward's is only the subset explicitly pinned to that ward (`admin.js:96`), so the wards under a unit legitimately don't sum to it. The fix is labelling, not arithmetic: the unit row reads "12 patients in this unit" and the ward row "3 pinned to this ward", so the relationship is stated rather than inferred.
+- **`assignmentType` of `hospital` or `org` is never counted.** The same loop only increments department / unit / ward stats, so a user assigned to a hospital leaves that hospital's delete preview empty even though the server will 409 (defect 14). The loop gains hospital and org buckets.
+- **Hospitals and the org show no count at all.** `ccRowHTML` is called with `null` for both (`admin-console.js:47`, `:44`), so the two levels you'd most want a total for are blank. `buildOrgTree` gains rolled-up `stats` on each hospital and on the org (patients summed from their departments; users from the buckets above).
+- **Ward patient stats ignore whether `wardId` belongs to the patient's `unitId`.** A patient `{ unitId: uA, wardId: wB }` where `wB` lives under a different unit is counted in both (defect 15). Count a patient toward a ward only when that ward belongs to the patient's unit.
+- **Ward counts read as inconsistent with the unit above them.** The arithmetic above is otherwise correct — a unit's count is every patient in that unit, while a ward's is only the subset pinned to that ward — so the wards under a unit legitimately don't sum to it. The residual fix is labelling: the unit row reads "12 patients in this unit" and the ward row "3 pinned to this ward".
 
-No other route or builder changes. Every other defect above is fixable in the frontend against the routes as they already exist.
+No other route or builder changes. Every other defect above is fixable in the frontend against the routes as they already exist. The client-side delete preview (`deleteBlockedReason`) then sees the same hospital/org user counts the server uses, so Delete is disabled before the click rather than after a 409.
 
 ### 6. State and rendering
 
@@ -152,7 +161,7 @@ Three tiers, chosen by where the user can act on the error:
 - **Section banner with Retry** — the section failed to load.
 - **Toast** — only for failures with no obvious home.
 
-Specific cases: a 409 on delete renders as the explained, clickable blockers from §3. A 404 caused by a concurrent admin renders "Someone else changed this — refreshed" and reloads. A 403 renders the server's message in plain language. Every destructive action (delete node, disable user, change role, move node, repair ancestry) confirms through `showConfirm`, naming exactly what will happen. Every mutating control disables while its request is in flight.
+Specific cases: a 409 on delete reads `blockedBy` from the response body (defect 13 — today `api()` drops it and toasts only `"Node is not empty"`) and renders the explained, clickable blockers from §3. A 404 caused by a concurrent admin renders "Someone else changed this — refreshed" and reloads. A 403 renders the server's message in plain language. Every destructive action (delete node, disable user, change role, move node, repair ancestry) confirms through `showConfirm`, naming exactly what will happen. Every mutating control disables while its request is in flight. Focus is restored after any re-render that destroys the previously focused control.
 
 ### 8. Visual and accessibility
 
@@ -170,8 +179,10 @@ Frontend, jsdom, following `tests/frontend-admin-console.test.js`:
 - Deleting a node selects the parent.
 - Move requires the explicit button and a confirmation; changing the picker alone posts nothing.
 - The org chip returns to the all-orgs list, and the placement picker still lists every org after drilling into one.
-- Instance-admin create-person sends the viewed org's `orgId`.
+- Instance-admin create-person and add-hospital both send the viewed org's `orgId`.
+- Leaving a drilled-in org (chip ✕ or Organizations section) clears the viewed-org id and re-renders the org cards; switching orgs resets selection.
 - Role control is disabled on your own row and for an org's last active admin.
+- A 409 delete response surfaces `blockedBy` counts as clickable blockers, not a bare `"Node is not empty"` toast.
 - A stale placement renders the plain-language warning with a Reassign action.
 - A narrow viewport (< 900px) exposes editing controls; resizing between widths re-renders correctly.
 - Flag off → the entry points stay hidden and the view renders nothing.
@@ -180,14 +191,14 @@ Server, following `tests/server-admin-console.test.js`:
 
 - `POST /api/admin/users/:id/role` — happy path both directions; 403 cross-org for an org admin; 400 on self; 400 on last active admin of an org; `tokenVersion` incremented; 400 on an invalid role value.
 - `POST /api/admin/users` as an instance admin without `orgId` → 400; with `orgId` → user created in that org.
-- `buildOrgTree` counts a user holding both a legacy `wardId` and a matching `assignmentType: 'department'` exactly once, and returns rolled-up `stats` on each hospital and on the org.
+- `buildOrgTree` counts a user holding both a legacy `wardId` and a matching `assignmentType: 'department'` exactly once; counts `assignmentType` of `hospital` / `org`; returns rolled-up `stats` on each hospital and on the org; and counts a patient toward a ward only when that ward belongs to the patient's unit.
 - `MULTI_TENANT` off → both behaviours unchanged.
 
 ## Suggested sequencing
 
 The console must stay usable throughout, so the work lands in an order where each step is independently shippable:
 
-1. **Security first** — tighten `POST /api/admin/users`, fix the client to send `orgId`, and update the affected server tests. This is the escalation fix and shouldn't wait behind a UI rewrite.
+1. **Security and instance-admin org context first** — tighten `POST /api/admin/users`, fix the client to send `orgId` on create-person *and* add-hospital, and update the affected server/frontend tests. These are the escalation and always-400 bugs and shouldn't wait behind a UI rewrite.
 2. **State and rendering split** (§6) with the current visual design intact. This alone kills defects 1, 5 and 6.
 3. **Section shell** (§1) — the segmented control, Overview, and moving the `app.js` handler in.
 4. **People** (§2), then the role route (§5) it depends on.
