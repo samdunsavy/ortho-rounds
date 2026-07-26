@@ -779,7 +779,7 @@ describe('mobile card markup for the People list', () => {
     assert.match(btn.title, /last active admin/i);
   });
 
-  test('row placement change updates the matching card placement text', async () => {
+  test('row placement change updates the matching card assign select', async () => {
     const { window, document } = loadFrontendEnv();
     const users = CC_USERS.map(u => ({ ...u }));
     window.api = async (path, opts) => {
@@ -794,9 +794,9 @@ describe('mobile card markup for the People list', () => {
     sel.value = 'unit:u1';
     sel.dispatchEvent(new window.Event('change', { bubbles: true }));
     await new Promise(r => setTimeout(r, 0));
-    const cardBody = document.querySelector('[data-user-card="usr2"] .admin-people-card-body');
-    assert.ok(cardBody.textContent.includes('Ortho › IV'));
-    assert.ok(!cardBody.textContent.includes('Default'));
+    const cardSel = document.querySelector('[data-user-card="usr2"] [data-assign-user="usr2"]');
+    assert.equal(cardSel.value, 'unit:u1');
+    assert.equal(cardSel.selectedOptions[0].textContent, 'Ortho › IV');
   });
 });
 
@@ -808,5 +808,63 @@ describe('no mobile read-only gate (Task 11)', () => {
     assert.ok(html.includes('data-assign-user'));
     assert.ok(html.includes('data-user-check'));
     assert.ok(html.includes('id="adminCreateUser"'));
+  });
+
+  test('narrow viewport cards contain full write controls in the DOM', async () => {
+    const { window, document } = loadFrontendEnv();
+    Object.defineProperty(window, 'innerWidth', { value: 500, configurable: true });
+    window.api = async (path) => path.startsWith('/api/admin/org') ? TREE : { users: CC_USERS };
+    await window.loadAdminView();
+    window.switchAdminSection('people');
+    const card = document.querySelector('[data-user-card="usr2"]');
+    assert.ok(card.querySelector('[data-assign-user="usr2"]'));
+    assert.ok(card.querySelector('[data-role-user="usr2"]'));
+    assert.ok(card.querySelector('[data-user-check="usr2"]'));
+  });
+
+  test('assign change on a card select shows Saved beside the card assign control', async () => {
+    const { window, document } = loadFrontendEnv();
+    Object.defineProperty(window, 'innerWidth', { value: 500, configurable: true });
+    const users = CC_USERS.map(u => ({ ...u }));
+    window.api = async (path, opts) => {
+      if(path.startsWith('/api/admin/org')) return TREE;
+      if(path === '/api/admin/users') return { users };
+      if(opts && opts.method === 'POST') return { ok: true };
+      return {};
+    };
+    await window.loadAdminView();
+    window.switchAdminSection('people');
+    document.querySelector('[data-user-card="usr2"]')?.classList.add('is-expanded');
+    const sel = document.querySelector('[data-user-card="usr2"] [data-assign-user="usr2"]');
+    sel.value = 'unit:u1';
+    sel.dispatchEvent(new window.Event('change', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 0));
+    const assignHost = document.querySelector('[data-user-card="usr2"] .admin-people-card-assign');
+    assert.ok(assignHost?.querySelector('.admin-inline-note')?.textContent.includes('Saved'));
+  });
+
+  test('card role change posts to /role after confirm', async () => {
+    const { window, document } = loadFrontendEnv();
+    Object.defineProperty(window, 'innerWidth', { value: 500, configurable: true });
+    const users = CC_USERS.map(u => ({ ...u }));
+    const calls = [];
+    window.showConfirm = () => Promise.resolve(true);
+    window.api = async (path, opts) => {
+      calls.push({ path, opts });
+      if(path.startsWith('/api/admin/org')) return TREE;
+      if(path === '/api/admin/users') return { users };
+      if(opts && opts.method === 'POST') return { ok: true };
+      return {};
+    };
+    await window.loadAdminView();
+    window.switchAdminSection('people');
+    document.querySelector('[data-user-card="usr2"]')?.classList.add('is-expanded');
+    const sel = document.querySelector('[data-user-card="usr2"] [data-role-user="usr2"]');
+    sel.value = 'admin';
+    sel.dispatchEvent(new window.Event('change', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 0));
+    const roleCall = calls.find(c => c.path === '/api/admin/users/usr2/role');
+    assert.ok(roleCall, 'expected POST to /role');
+    assert.equal(JSON.parse(roleCall.opts.body).role, 'admin');
   });
 });

@@ -186,18 +186,44 @@ function renderAdminPeopleCardHTML(u, state){
   state = state || adminData;
   const unscoped = adminNeedsOrgChoice();
   const groups = buildAssignNodeGroups(state.tree, state.orgs);
-  const placement = peopleAssignmentDisplay(u, groups, state.orgs, unscoped);
-  const assignText = placement.text === '—' ? 'Not assigned' : placement.text;
+  const selType = u.assignmentType || null, selId = u.assignmentId || null;
+  const prev = selType && selId ? `${selType}:${selId}` : '';
   const users = state.users || adminData.users;
   const { guard: disableGuard, title: disableTitle } = adminPeopleDisableGuard(u, users);
   const disableAttrs = disableGuard ? ` disabled title="${escapeHTML(disableTitle)}"` : '';
+  const { guard: roleDisabled, title: roleTitle } = adminPeopleRoleGuard(u, users);
+  const self = isSelfUser(u);
+  const placement = peopleAssignmentDisplay(u, groups, state.orgs, unscoped);
+  const checkHTML = unscoped ? '' : `<input type="checkbox" data-user-check="${escapeHTML(u.id)}"${adminUI.peopleChecked.has(u.id) ? ' checked' : ''}>`;
+  const roleHTML = `<select data-role-user="${escapeHTML(u.id)}"${roleDisabled ? ` disabled title="${escapeHTML(roleTitle)}"` : ''}>
+        <option value="member"${u.role === 'member' ? ' selected' : ''}>Member</option>
+        <option value="admin"${u.role === 'admin' ? ' selected' : ''}>Admin</option>
+      </select>`;
+  let assignHTML;
+  if(placement.readOnly){
+    const editBtn = placement.enterOrgId
+      ? ` <button type="button" class="btn" data-enter-user-org="${escapeHTML(placement.enterOrgId)}">Edit in org</button>`
+      : '';
+    const assignText = placement.text === '—' ? 'Not assigned' : placement.text;
+    assignHTML = `<span>${escapeHTML(assignText)}</span>${editBtn}`;
+  }else{
+    assignHTML = `<select data-assign-user="${escapeHTML(u.id)}" data-prev="${escapeHTML(prev)}">${renderAssignSelectOptionsHTML(groups, selType, selId)}</select>`;
+  }
   return `<div class="admin-people-card" data-user-card="${escapeHTML(u.id)}" data-username="${escapeHTML((u.username || '').toLowerCase())}">
     <div class="admin-people-card-head" data-card-toggle="${escapeHTML(u.id)}">
-      <strong>${escapeHTML(u.username)}${isSelfUser(u) ? ' <span class="spec-badge">You</span>' : ''}</strong>
+      <strong>${escapeHTML(u.username)}${self ? ' <span class="spec-badge">You</span>' : ''}</strong>
       <span>${u.active ? 'Active' : 'Disabled'}</span>
     </div>
     <div class="admin-people-card-body">
-      <div class="small-muted">${escapeHTML(assignText)}</div>
+      ${checkHTML}
+      <div class="admin-people-card-field">
+        <span class="small-muted">Role</span>
+        ${roleHTML}
+      </div>
+      <div class="admin-people-card-field admin-people-card-assign">
+        <span class="small-muted">Can see patients in</span>
+        ${assignHTML}
+      </div>
       <div class="admin-inline-form">
         <button class="btn" data-user-toggle="${escapeHTML(u.id)}"${disableAttrs}>${u.active ? 'Disable' : 'Enable'}</button>
         <button class="btn" data-user-reset="${escapeHTML(u.id)}">Reset password</button>
@@ -274,9 +300,9 @@ function renderAdminPeopleSection(){
 }
 
 function selectedAdminUserIds(){
-  return Array.from(document.querySelectorAll('[data-user-check]'))
+  return [...new Set(Array.from(document.querySelectorAll('[data-user-check]'))
     .filter(cb => cb.checked)
-    .map(cb => cb.dataset.userCheck);
+    .map(cb => cb.dataset.userCheck))];
 }
 
 function refreshAdminBulkBar(){
@@ -417,10 +443,42 @@ document.getElementById('adminPeopleSection')?.addEventListener('click', (e) => 
   }
 });
 
+function adminEscId(id){
+  return (typeof CSS !== 'undefined' && CSS.escape) ? CSS.escape(id) : String(id);
+}
+
+function adminAssignNoteHost(sel){
+  return sel.closest('.admin-people-card-assign') || sel.closest('td') || sel.parentElement;
+}
+
+function showAdminAssignNote(userId, text, isError){
+  document.querySelectorAll(`[data-assign-user="${adminEscId(userId)}"]`).forEach(sel => {
+    const host = adminAssignNoteHost(sel);
+    host?.querySelectorAll('.admin-inline-note').forEach(n => n.remove());
+    const note = document.createElement('span');
+    note.className = isError ? 'admin-inline-note admin-inline-note-error' : 'admin-inline-note';
+    note.textContent = text;
+    host?.appendChild(note);
+    if(!isError) setTimeout(() => note.remove(), 2500);
+  });
+}
+
+function syncAdminAssignSelects(userId, value){
+  document.querySelectorAll(`[data-assign-user="${adminEscId(userId)}"]`).forEach(s => {
+    s.value = value;
+    s.dataset.prev = value;
+  });
+}
+
+function syncAdminRoleSelects(userId, role){
+  document.querySelectorAll(`[data-role-user="${adminEscId(userId)}"]`).forEach(s => { s.value = role; });
+}
+
 document.getElementById('adminPeopleSection')?.addEventListener('change', async (e) => {
   if(e.target.matches('[data-user-check]')){
     const id = e.target.dataset.userCheck;
     if(e.target.checked) adminUI.peopleChecked.add(id); else adminUI.peopleChecked.delete(id);
+    applyAdminPeopleChecked();
     refreshAdminBulkBar();
     return;
   }
@@ -431,13 +489,13 @@ document.getElementById('adminPeopleSection')?.addEventListener('change', async 
     const newRole = roleSel.value;
     const prevRole = user ? user.role : (newRole === 'admin' ? 'member' : 'admin');
     const ok = await showConfirm('Change role', `Make ${user ? user.username : 'this person'} ${newRole === 'admin' ? 'an admin' : 'a member'}?`, { confirmLabel: 'Change role' });
-    if(!ok){ roleSel.value = prevRole; return; }
+    if(!ok){ syncAdminRoleSelects(id, prevRole); return; }
     try{
       await api(`/api/admin/users/${encodeURIComponent(id)}/role`, { method: 'POST', body: JSON.stringify({ role: newRole }) });
       showToast('Role updated');
       await loadAdminView();
     }catch(err){
-      roleSel.value = prevRole;
+      syncAdminRoleSelects(id, prevRole);
       showToast(err.message);
     }
     return;
@@ -449,29 +507,19 @@ document.getElementById('adminPeopleSection')?.addEventListener('change', async 
     const nodeType = sepIdx === -1 ? null : raw.slice(0, sepIdx);
     const nodeId = sepIdx === -1 ? null : raw.slice(sepIdx + 1);
     const userId = sel.dataset.assignUser;
-    const esc = (typeof CSS !== 'undefined' && CSS.escape) ? CSS.escape : s => String(s);
+    const prev = sel.dataset.prev || '';
     try{
       await api(`/api/admin/users/${userId}/assign`, { method: 'POST', body: JSON.stringify({ nodeType, nodeId }) });
-      sel.dataset.prev = raw;
       const u = (adminData.users || []).find(x => x.id === userId);
       if(u){ u.assignmentType = nodeType; u.assignmentId = nodeId; }
       renderAdminPeopleRow(userId);
       renderAdminPeopleCard(userId);
+      syncAdminAssignSelects(userId, raw);
       applyAdminPeopleFilters();
-      const newSel = document.querySelector(`[data-assign-user="${esc(userId)}"]`);
-      const assignCell = newSel?.closest('td');
-      const note = document.createElement('span');
-      note.className = 'admin-inline-note';
-      note.textContent = 'Saved';
-      assignCell?.appendChild(note);
-      setTimeout(() => note.remove(), 2500);
+      showAdminAssignNote(userId, 'Saved', false);
     }catch(err){
-      sel.value = sel.dataset.prev || '';
-      const assignCell = sel.closest('td');
-      const note = document.createElement('span');
-      note.className = 'admin-inline-note admin-inline-note-error';
-      note.textContent = err.message;
-      assignCell?.appendChild(note);
+      syncAdminAssignSelects(userId, prev);
+      showAdminAssignNote(userId, err.message, true);
     }
     return;
   }
