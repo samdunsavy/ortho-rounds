@@ -264,14 +264,9 @@ function describeDeleteBlockersHTML(err, type, id){
   return `<div class="small-muted">Can't delete — still has:</div>${bits.map(b => `<div>${b}</div>`).join('')}`;
 }
 
-function adminIsNarrow(){
-  return typeof window !== 'undefined' && window.innerWidth < 900;
-}
-
 function renderAdminNodeActionsHTML(state, sel, hit){
   const key = `${sel.type}:${sel.id}`;
   if(sel.type === 'org') return '';
-  if(adminIsNarrow()) return '<span class="small-muted">Open on a larger screen to move or delete</span>';
   const blocked = deleteBlockedReason(hit.node, sel.type);
   const parents = validMoveParents(state.tree, sel.type, hit.parentId);
   const moveHTML = MOVE_PARENT_TYPE[sel.type] ? `

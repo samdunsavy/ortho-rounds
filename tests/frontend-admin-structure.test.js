@@ -210,23 +210,19 @@ describe('request-level coverage: structural actions (wrong parentKey corrupts d
   });
 });
 
-describe('mobile read-only (removed in Task 11 — still gates today)', () => {
-  test('narrow viewport hides move/delete controls and shows a note', () => {
+describe('no mobile read-only gate (Task 11)', () => {
+  test('a narrow viewport still renders Move and Delete controls', () => {
     const { window } = loadFrontendEnv();
     Object.defineProperty(window, 'innerWidth', { value: 500, configurable: true });
     const html = window.renderAdminDetailHTML({ tree: TREE, users: [], orgs: [], selection: { type: 'unit', id: 'u1' } });
-    assert.ok(html.includes('data-rename-target='));
-    assert.ok(html.includes('data-add-child='));
-    assert.ok(!html.includes('data-move-node='));
-    assert.ok(!html.includes('data-delete-node='));
-    assert.ok(html.includes('larger screen'));
-  });
-  test('wide viewport keeps the controls', () => {
-    const { window } = loadFrontendEnv();
-    Object.defineProperty(window, 'innerWidth', { value: 1200, configurable: true });
-    const html = window.renderAdminDetailHTML({ tree: TREE, users: [], orgs: [], selection: { type: 'unit', id: 'u1' } });
-    assert.ok(html.includes('data-rename-target='));
     assert.ok(html.includes('data-move-node='));
+    assert.ok(html.includes('data-delete-node='));
+    assert.ok(!html.includes('larger screen'));
+  });
+
+  test('adminIsNarrow no longer exists as a rendering gate', () => {
+    const { window } = loadFrontendEnv();
+    assert.equal(typeof window.adminIsNarrow, 'undefined');
   });
 });
 

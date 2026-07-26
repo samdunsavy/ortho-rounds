@@ -90,7 +90,6 @@ function peopleAssignmentDisplay(u, groups, orgs, unscoped){
 
 function renderAdminPeopleRowHTML(u, state){
   state = state || adminData;
-  const narrow = adminIsNarrow();
   const unscoped = adminNeedsOrgChoice();
   const groups = buildAssignNodeGroups(state.tree, state.orgs);
   const selType = u.assignmentType || null, selId = u.assignmentId || null;
@@ -100,14 +99,14 @@ function renderAdminPeopleRowHTML(u, state){
   const disableAttrs = disableGuard ? ` disabled title="${escapeHTML(disableTitle)}"` : '';
   const { guard: roleDisabled, title: roleTitle } = adminPeopleRoleGuard(u, users);
   const self = isSelfUser(u);
-  const actions = narrow ? '' : `
+  const actions = `
         <button class="btn" data-user-toggle="${escapeHTML(u.id)}"${disableAttrs}>${u.active ? 'Disable' : 'Enable'}</button>
         <button class="btn" data-user-reset="${escapeHTML(u.id)}">Reset password</button>`;
-  const checkCell = (narrow || unscoped) ? '<td></td>' : `<td><input type="checkbox" data-user-check="${escapeHTML(u.id)}"${adminUI.peopleChecked.has(u.id) ? ' checked' : ''}></td>`;
+  const checkCell = unscoped ? '<td></td>' : `<td><input type="checkbox" data-user-check="${escapeHTML(u.id)}"${adminUI.peopleChecked.has(u.id) ? ' checked' : ''}></td>`;
   const placement = peopleAssignmentDisplay(u, groups, state.orgs, unscoped);
   let assignCell;
-  if(narrow || placement.readOnly){
-    const editBtn = placement.enterOrgId && !narrow
+  if(placement.readOnly){
+    const editBtn = placement.enterOrgId
       ? ` <button type="button" class="btn" data-enter-user-org="${escapeHTML(placement.enterOrgId)}">Edit in org</button>`
       : '';
     assignCell = `<td>${escapeHTML(placement.text)}${editBtn}</td>`;
@@ -115,9 +114,7 @@ function renderAdminPeopleRowHTML(u, state){
     assignCell = `<td><select data-assign-user="${escapeHTML(u.id)}" data-prev="${escapeHTML(prev)}">${renderAssignSelectOptionsHTML(groups, selType, selId)}</select></td>`;
   }
   const nameCell = self ? `${escapeHTML(u.username)} <span class="spec-badge">You</span>` : escapeHTML(u.username);
-  const roleCell = narrow
-    ? `<td>${u.role === 'admin' ? '<span class="spec-badge">Admin</span>' : 'Member'}</td>`
-    : `<td><select data-role-user="${escapeHTML(u.id)}"${roleDisabled ? ` disabled title="${escapeHTML(roleTitle)}"` : ''}>
+  const roleCell = `<td><select data-role-user="${escapeHTML(u.id)}"${roleDisabled ? ` disabled title="${escapeHTML(roleTitle)}"` : ''}>
         <option value="member"${u.role === 'member' ? ' selected' : ''}>Member</option>
         <option value="admin"${u.role === 'admin' ? ' selected' : ''}>Admin</option>
       </select></td>`;
@@ -210,15 +207,13 @@ function renderAdminPeopleCardHTML(u, state){
 }
 
 function renderAdminUsersPanelHTML(state){
-  const narrow = adminIsNarrow();
   const unscoped = adminNeedsOrgChoice();
   const groups = buildAssignNodeGroups(state.tree, state.orgs);
   const rows = (state.users || []).map(u =>
     `<tr data-user-row="${escapeHTML(u.id)}" data-username="${escapeHTML((u.username || '').toLowerCase())}">${renderAdminPeopleRowHTML(u, state)}</tr>`
   ).join('');
   const cards = (state.users || []).map(u => renderAdminPeopleCardHTML(u, state)).join('');
-  const narrowNote = narrow ? '<div class="small-muted">Open on a larger screen to edit</div>' : '';
-  const createUserForm = narrow ? '' : unscoped ? `
+  const createUserForm = unscoped ? `
     <div class="small-muted">Choose an organization on the Organizations tab to create users.</div>
     <button type="button" class="btn" id="adminPeoplePickOrg">Go to Organizations</button>` : `
     <div class="admin-inline-form">
@@ -239,7 +234,6 @@ function renderAdminUsersPanelHTML(state){
       <input id="adminUserSearch" placeholder="Search people…">
     </div>
     <div class="admin-people-chips">${chips}</div>
-    ${narrowNote}
     ${createUserForm}
     <div id="adminBulkBar" class="admin-bulk-bar" hidden></div>
     <table class="admin-users-table">
@@ -288,7 +282,7 @@ function selectedAdminUserIds(){
 function refreshAdminBulkBar(){
   const bar = document.getElementById('adminBulkBar');
   if(!bar) return;
-  if(adminIsNarrow() || adminNeedsOrgChoice()){ bar.hidden = true; bar.innerHTML = ''; return; }
+  if(adminNeedsOrgChoice()){ bar.hidden = true; bar.innerHTML = ''; return; }
   const ids = selectedAdminUserIds();
   if(!ids.length){ bar.hidden = true; bar.innerHTML = ''; return; }
   const groups = buildAssignNodeGroups(adminData.tree, adminData.orgs);
