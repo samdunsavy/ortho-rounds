@@ -3857,6 +3857,7 @@ function bindEvents(){
   document.getElementById('pgScopeBtn')?.addEventListener('click', ()=> setPgScope(!isPgScopeMine()));
   document.getElementById('pgScopeBtnMobile')?.addEventListener('click', ()=> setPgScope(!isPgScopeMine()));
   document.getElementById('bulkBarApplyBtn')?.addEventListener('click', ()=> void applyBulkPlan());
+  document.getElementById('bulkBarMoveBtn')?.addEventListener('click', ()=> void bulkMoveToUnit());
   document.getElementById('bulkBarCancelBtn')?.addEventListener('click', ()=>{
     bulkSelectMode = false;
     bulkSelectedIds.clear();
@@ -6147,6 +6148,50 @@ function invalidateScopeTree(){
   cachedScopeTree = null;
 }
 
+function flatUnitsFromScopeTree(tree){
+  const out = [];
+  for(const dep of ((tree && tree.departments) || [])){
+    for(const u of (dep.units || [])){
+      out.push({ id: u.id, name: dep.name ? `${dep.name} · ${u.name}` : u.name });
+    }
+  }
+  return out;
+}
+
+function movePatientToUnit(p, unitId){
+  p.unitId = unitId;
+  // Moving units invalidates any ward; the server re-derives ward + ancestry
+  // labels from the new unitId on sync, so drop the stale ward locally.
+  delete p.wardId;
+  delete p.ward;
+  return p;
+}
+
+async function bulkMoveToUnit(){
+  if(!bulkSelectedIds.size){ showToast('Select patients first'); return; }
+  const { tree } = await loadScopeTree();
+  const units = flatUnitsFromScopeTree(tree);
+  if(!units.length){ showToast('No units yet — create one in the console'); return; }
+  const fields = await showPromptFields('Move to unit', [
+    { id: 'unit', label: `Move ${bulkSelectedIds.size} patient(s) to`, type: 'select', value: '',
+      options: [{ value: '', label: 'Select unit…' }].concat(units.map(u => ({ value: u.id, label: u.name }))) }
+  ]);
+  if(!fields || !fields.unit) return;
+  const count = bulkSelectedIds.size;
+  for(const id of bulkSelectedIds){
+    const p = patients.find(x => x.id === id);
+    if(!p) continue;
+    movePatientToUnit(p, fields.unit);
+    await savePatient(p);
+  }
+  bulkSelectMode = false;
+  bulkSelectedIds.clear();
+  document.getElementById('bulkPlanBtn')?.classList.remove('active');
+  updateBulkBar();
+  renderAll();
+  showToast(`Moved ${count} patient(s)`);
+}
+
 function fillSelect(el, items, placeholder){
   if(!el) return;
   const opts = [`<option value="">${escapeHTML(placeholder)}</option>`]
@@ -8344,6 +8389,8 @@ function updateBulkBar(){
   }else{
     bar.classList.remove('active');
   }
+  const moveBtn = document.getElementById('bulkBarMoveBtn');
+  if(moveBtn) moveBtn.hidden = !(isAdmin() && scopePickerActive());
 }
 
 function toggleBulkSelectMode(){
