@@ -778,6 +778,12 @@
   .admin-cc-children{display:flex;flex-direction:column;gap:2px;margin-bottom:8px;}
   .admin-node-actions{display:flex;gap:6px;align-items:center;margin-left:auto;flex-wrap:wrap;}
   .admin-node-actions .btn[disabled]{opacity:.55;cursor:not-allowed;}
+  .admin-back-to-tree{display:none;margin-bottom:10px;}
+  @media (max-width:899px){
+    #adminStructureBody.is-drilled .admin-cc-rail{display:none;}
+    #adminStructureBody:not(.is-drilled) .admin-cc-detail{display:none;}
+    #adminStructureBody.is-drilled .admin-back-to-tree{display:inline-block;}
+  }
   @media (min-width:900px){
     .admin-cc{display:grid;grid-template-columns:280px 1fr;gap:12px;align-items:start;}
     .admin-cc-rail{margin-bottom:0;max-height:calc(100vh - 140px);overflow-y:auto;}

@@ -124,6 +124,12 @@ function renderAdminTreeHTML(tree, selection, expanded){
 
 function selectAdminNode(type, id){
   adminUI.selectedNode = id ? { type, id } : { type };
+  adminUI.structureMobileDrilled = true;
+  renderAdminStructureBody();
+}
+
+function backToAdminTree(){
+  adminUI.structureMobileDrilled = false;
   renderAdminStructureBody();
 }
 
@@ -239,6 +245,25 @@ function deleteBlockedReason(node, type){
   return bits.join(', ');
 }
 
+/** Renders a 409's blockedBy counts as clickable, actionable links: the
+    patients count opens Organize filtered to that unit (only meaningful at
+    unit granularity — a department/hospital/org spans multiple units, so
+    that count renders as plain text there instead of a broken link), and
+    the users count opens People filtered to this item. */
+function describeDeleteBlockersHTML(err, type, id){
+  const b = err && err.payload && err.payload.blockedBy;
+  if(!b) return `<div class="small-muted">${escapeHTML(err.message)}</div>`;
+  const bits = [];
+  if(b.children) bits.push(`${b.children} child item${b.children === 1 ? '' : 's'}`);
+  if(b.patients){
+    bits.push(type === 'unit'
+      ? `<button type="button" class="admin-attention-row" data-organize-unit="${escapeHTML(id)}">${b.patients} patient${b.patients === 1 ? '' : 's'} — Organize</button>`
+      : `${b.patients} patient${b.patients === 1 ? '' : 's'}`);
+  }
+  if(b.users) bits.push(`<button type="button" class="admin-attention-row" data-attention-people="node:${escapeHTML(type)}:${escapeHTML(id)}">${b.users} user${b.users === 1 ? '' : 's'} — People</button>`);
+  return `<div class="small-muted">Can't delete — still has:</div>${bits.map(b => `<div>${b}</div>`).join('')}`;
+}
+
 function adminIsNarrow(){
   return typeof window !== 'undefined' && window.innerWidth < 900;
 }
@@ -250,16 +275,20 @@ function renderAdminNodeActionsHTML(state, sel, hit){
   const blocked = deleteBlockedReason(hit.node, sel.type);
   const parents = validMoveParents(state.tree, sel.type, hit.parentId);
   const moveHTML = MOVE_PARENT_TYPE[sel.type] ? `
-    <select data-move-node="${escapeHTML(key)}">
-      <option value="">Move to…</option>
-      ${parents.map(p => `<option value="${escapeHTML(p.id)}">${escapeHTML(p.name)}</option>`).join('')}
-    </select>` : '';
+    <span class="admin-move-group">
+      <select data-move-node="${escapeHTML(key)}">
+        <option value="">Move to…</option>
+        ${parents.map(p => `<option value="${escapeHTML(p.id)}">${escapeHTML(p.name)}</option>`).join('')}
+      </select>
+      <button class="btn" data-move-confirm="${escapeHTML(key)}" disabled>Move</button>
+    </span>` : '';
   const deleteLabel = blocked ? `Can't delete — ${escapeHTML(blocked)}` : 'Delete';
   return `
     <span class="admin-node-actions">
       ${moveHTML}
       <button class="btn" data-delete-node="${escapeHTML(key)}"${blocked ? ' disabled' : ''} title="${escapeHTML(deleteLabel)}">${escapeHTML(deleteLabel)}</button>
-    </span>`;
+    </span>
+    <div id="adminDeleteBlockers"></div>`;
 }
 
 function renderAdminStructureSection(){
@@ -277,6 +306,8 @@ function renderAdminStructureBody(){
     adminUI.structureExpanded = defaultExpandStructure(adminData.tree);
     adminUI.structureInitialized = true;
   }
+  const bodyEl = document.getElementById('adminStructureBody');
+  if(bodyEl) bodyEl.classList.toggle('is-drilled', adminUI.structureMobileDrilled);
   const rail = document.getElementById('adminTreeRail');
   if(rail){
     rail.innerHTML = `
@@ -285,10 +316,14 @@ function renderAdminStructureBody(){
       <div class="admin-cc-rows">${renderAdminTreeHTML(adminData.tree, adminUI.selectedNode)}</div>`;
   }
   const detail = document.getElementById('adminDetailPane');
-  if(detail) detail.innerHTML = renderAdminDetailHTML({ tree: adminData.tree, users: adminData.users, orgs: adminData.orgs, selection: adminUI.selectedNode });
+  if(detail){
+    detail.innerHTML = `<button type="button" class="btn admin-back-to-tree" data-back-to-tree>‹ Back to tree</button>` +
+      renderAdminDetailHTML({ tree: adminData.tree, users: adminData.users, orgs: adminData.orgs, selection: adminUI.selectedNode });
+  }
 }
 
-document.getElementById('adminStructureSection')?.addEventListener('click', (e) => {
+document.getElementById('adminStructureSection')?.addEventListener('click', async (e) => {
+  if(e.target.closest('[data-back-to-tree]')){ e.stopPropagation(); backToAdminTree(); return; }
   const chevron = e.target.closest('[data-toggle-expand]');
   if(chevron){
     e.stopPropagation();
@@ -343,10 +378,44 @@ document.getElementById('adminStructureSection')?.addEventListener('click', (e) 
     const raw = delBtn.dataset.deleteNode;
     const i = raw.indexOf(':');
     const type = raw.slice(0, i), id = raw.slice(i + 1);
-    if(!window.confirm(`Delete this ${humanNodeType(type)}? This cannot be undone.`)) return;
+    if(!(await showConfirm(`Delete this ${humanNodeType(type)}?`, 'This cannot be undone.', { confirmLabel: 'Delete', danger: true }))) return;
+    const hitBeforeDelete = findAdminNode(adminData.tree, type, id);
     api(`/api/admin/nodes/${encodeURIComponent(type)}/${encodeURIComponent(id)}`, { method: 'DELETE' })
-      .then(() => { invalidateHierarchyCaches(); adminUI.selectedNode = null; return loadAdminView(); })
-      .catch(err => showToast(describeDeleteBlock(err) || err.message));
+      .then(() => {
+        invalidateHierarchyCaches();
+        adminUI.selectedNode = hitBeforeDelete && hitBeforeDelete.parentType && hitBeforeDelete.parentId
+          ? { type: hitBeforeDelete.parentType, id: hitBeforeDelete.parentId }
+          : null;
+        return loadAdminView();
+      })
+      .catch(err => {
+        const el = document.getElementById('adminDeleteBlockers');
+        if(el) el.innerHTML = describeDeleteBlockersHTML(err, type, id);
+        else showToast(describeDeleteBlock(err) || err.message);
+      });
+    return;
+  }
+  const organizeBtn = e.target.closest('[data-organize-unit]');
+  if(organizeBtn){ e.stopPropagation(); openOrganizeForUnit(organizeBtn.dataset.organizeUnit); return; }
+  const moveConfirmBtn = e.target.closest('[data-move-confirm]');
+  if(moveConfirmBtn){
+    e.stopPropagation();
+    const key = moveConfirmBtn.dataset.moveConfirm;
+    const i = key.indexOf(':');
+    const type = key.slice(0, i), id = key.slice(i + 1);
+    const sel = document.querySelector(`[data-move-node="${key}"]`);
+    const newParentId = sel && sel.value;
+    if(!newParentId) return;
+    const hit = findAdminNode(adminData.tree, type, id);
+    const parentType = MOVE_PARENT_TYPE[type];
+    const parentOption = [...sel.options].find(o => o.value === newParentId);
+    const fromName = hit && hit.parentId ? (findAdminNode(adminData.tree, parentType, hit.parentId) || {}).node?.name || 'its current place' : 'its current place';
+    const toName = parentOption ? parentOption.textContent : 'the new place';
+    const ok = await showConfirm('Move', `Move ${hit ? hit.node.name : 'this'} from ${fromName} to ${toName}?`);
+    if(!ok) return;
+    api(`/api/admin/nodes/${encodeURIComponent(type)}/${encodeURIComponent(id)}/move`, { method: 'POST', body: JSON.stringify({ newParentId }) })
+      .then(() => { invalidateHierarchyCaches(); return loadAdminView(); })
+      .catch(err => { showToast(err.message); loadAdminView(); });
     return;
   }
   const row = e.target.closest('[data-node]');
@@ -399,14 +468,9 @@ document.getElementById('adminStructureSection')?.addEventListener('change', asy
   }
   const moveSel = e.target.closest('[data-move-node]');
   if(moveSel){
-    const newParentId = moveSel.value;
-    if(!newParentId) return;
-    const raw = moveSel.dataset.moveNode;
-    const i = raw.indexOf(':');
-    const type = raw.slice(0, i), id = raw.slice(i + 1);
-    api(`/api/admin/nodes/${encodeURIComponent(type)}/${encodeURIComponent(id)}/move`, { method: 'POST', body: JSON.stringify({ newParentId }) })
-      .then(() => { invalidateHierarchyCaches(); return loadAdminView(); })
-      .catch(err => { showToast(err.message); loadAdminView(); });
+    const btn = document.querySelector(`[data-move-confirm="${moveSel.dataset.moveNode}"]`);
+    if(btn) btn.disabled = !moveSel.value;
+    return;
   }
 });
 

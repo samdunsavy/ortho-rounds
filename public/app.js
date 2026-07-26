@@ -8467,6 +8467,23 @@ function toggleBulkSelectMode(){
   if(bulkSelectMode) showToast('Tap patients to select, then Apply plan');
 }
 
+/** Structure's delete-blocker link for "still has N patients": closes the
+    admin view, switches to the main patient list filtered to this unit, and
+    turns on bulk-select so the admin can move them straight away. Only
+    meaningful at unit granularity — filterByUnit() has no ward-level or
+    multi-unit (department/hospital) filter, so this is only ever called for
+    a unit or a ward's owning unit. */
+function openOrganizeForUnit(unitId){
+  closeAdminView();
+  switchView('rounds');
+  currentUnitFilter = unitId || '';
+  const el = document.getElementById('unitFilter');
+  if(el && !el.hidden) el.value = currentUnitFilter;
+  renderRounds();
+  if(!bulkSelectMode) toggleBulkSelectMode();
+  showToast('Showing this unit\'s patients — select some, then tap Move to unit');
+}
+
 async function applyBulkPlan(){
   if(!bulkSelectedIds.size){ showToast('Select patients first'); return; }
   const fields = await showPromptFields('Bulk plan', [

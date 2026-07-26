@@ -196,7 +196,7 @@ describe('request-level coverage: structural actions (wrong parentKey corrupts d
     const { window, document } = loadFrontendEnv();
     const calls = [];
     window.api = mockAdminApi(calls);
-    window.confirm = () => true;
+    window.showConfirm = () => Promise.resolve(true);
     const empty = JSON.parse(JSON.stringify(TREE));
     empty.hospitals[0].departments[0].units[1].stats.livePatients = 0;
     empty.hospitals[0].departments[0].units[1].stats.users = 0;
@@ -241,11 +241,12 @@ describe('409 blockedBy reaches the UI', () => {
     const { window } = loadFrontendEnv();
     assert.equal(window.describeDeleteBlock(new window.Error('boom')), null);
   });
-  test('a blocked delete toasts the explained reason, not the bare server string', async () => {
+  test('a blocked delete renders actionable blockers in the detail pane, not a bare toast', async () => {
     const { window, document } = loadFrontendEnv();
+    Object.defineProperty(window, 'innerWidth', { value: 1200, configurable: true });
     const toasts = [];
     window.showToast = (m) => toasts.push(m);
-    window.confirm = () => true;
+    window.showConfirm = () => Promise.resolve(true);
     window.api = async (path, opts) => {
       if(path.startsWith('/api/admin/org')) return { totals: { departments: 0, usersActive: 0, livePatients: 0 }, hospitals: [] };
       if(path === '/api/admin/users') return { users: [] };
@@ -264,7 +265,8 @@ describe('409 blockedBy reaches the UI', () => {
       window.renderAdminDetailHTML({ tree: empty, users: [], orgs: [], selection: { type: 'unit', id: 'u2' } });
     document.querySelector('[data-delete-node="unit:u2"]').dispatchEvent(new window.Event('click', { bubbles: true }));
     await new Promise(r => setTimeout(r, 0));
-    assert.deepEqual([...toasts], ["Can't delete — still has 2 patients"]);
+    assert.equal(toasts.length, 0);
+    assert.ok(document.getElementById('adminDeleteBlockers').textContent.includes('2 patients'));
   });
 });
 
@@ -608,6 +610,163 @@ describe('inline rename', () => {
     await new Promise(r => setTimeout(r, 0));
     assert.equal(calls.filter(c => c.opts && c.opts.method === 'PATCH').length, 0);
     assert.ok(document.getElementById('adminDetailPane').textContent.includes('80'));
+  });
+});
+
+describe('explicit Move with confirmation', () => {
+  test('changing the picker alone posts nothing; the Move button is required', async () => {
+    const { window, document } = loadFrontendEnv();
+    Object.defineProperty(window, 'innerWidth', { value: 1200, configurable: true });
+    const calls = [];
+    window.api = async (path, opts) => { calls.push({ path, opts }); return {}; };
+    document.getElementById('adminDetailPane').innerHTML =
+      window.renderAdminDetailHTML({ tree: TREE, users: [], orgs: [], selection: { type: 'ward', id: 'w1' } });
+    const sel = document.querySelector('[data-move-node="ward:w1"]');
+    sel.value = sel.querySelector('option:not([value=""])').value;
+    sel.dispatchEvent(new window.Event('change', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 0));
+    assert.equal(calls.some(c => c.opts && c.opts.method === 'POST'), false);
+    assert.ok(document.querySelector('[data-move-confirm="ward:w1"]'), 'expected an explicit Move button');
+  });
+
+  test('the Move button confirms naming both ends before posting', async () => {
+    const { window, document } = loadFrontendEnv();
+    Object.defineProperty(window, 'innerWidth', { value: 1200, configurable: true });
+    const calls = [];
+    let confirmMessage = '';
+    window.showConfirm = (title, message) => { confirmMessage = message; return Promise.resolve(true); };
+    window.api = async (path, opts) => { calls.push({ path, opts }); return path.startsWith('/api/admin/org') ? TREE : { users: [] }; };
+    await window.loadAdminView();
+    window.switchAdminSection('structure');
+    window.selectAdminNode('ward', 'w1');
+    const sel = document.querySelector('[data-move-node="ward:w1"]');
+    sel.value = 'u2';
+    sel.dispatchEvent(new window.Event('change', { bubbles: true }));
+    document.querySelector('[data-move-confirm="ward:w1"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 0));
+    assert.match(confirmMessage, /7MOW/);
+    assert.match(confirmMessage, /IV/);
+    assert.match(confirmMessage, /General/);
+    const call = calls.find(c => c.path === '/api/admin/nodes/ward/w1/move');
+    assert.ok(call);
+    assert.deepEqual(JSON.parse(call.opts.body), { newParentId: 'u2' });
+  });
+
+  test('declining the confirmation posts nothing', async () => {
+    const { window, document } = loadFrontendEnv();
+    Object.defineProperty(window, 'innerWidth', { value: 1200, configurable: true });
+    const calls = [];
+    window.showConfirm = () => Promise.resolve(false);
+    window.api = async (path, opts) => { calls.push({ path, opts }); return {}; };
+    document.getElementById('adminDetailPane').innerHTML =
+      window.renderAdminDetailHTML({ tree: TREE, users: [], orgs: [], selection: { type: 'ward', id: 'w1' } });
+    document.querySelector('[data-move-node="ward:w1"]').value = 'u2';
+    document.querySelector('[data-move-node="ward:w1"]').dispatchEvent(new window.Event('change', { bubbles: true }));
+    document.querySelector('[data-move-confirm="ward:w1"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 0));
+    assert.equal(calls.some(c => c.opts && c.opts.method === 'POST'), false);
+  });
+});
+
+describe('actionable delete blockers', () => {
+  function deletableU1Tree(){
+    const t = JSON.parse(JSON.stringify(TREE));
+    const u1 = t.hospitals[0].departments[0].units[0];
+    u1.stats.livePatients = 0;
+    u1.stats.users = 0;
+    u1.wards = [];
+    return t;
+  }
+
+  test('a 409 with blockedBy.patients renders a link into Organize; blockedBy.users renders a link into People', async () => {
+    const { window, document } = loadFrontendEnv();
+    Object.defineProperty(window, 'innerWidth', { value: 1200, configurable: true });
+    const tree = deletableU1Tree();
+    window.showConfirm = () => Promise.resolve(true);
+    window.api = async (path, opts) => {
+      if(path.startsWith('/api/admin/org')) return tree;
+      if(path === '/api/admin/users') return { users: [] };
+      if(opts && opts.method === 'DELETE'){
+        const err = new window.Error('Node is not empty');
+        err.status = 409;
+        err.payload = { error: 'Node is not empty', blockedBy: { children: 0, users: 1, patients: 2 } };
+        throw err;
+      }
+      return {};
+    };
+    await window.loadAdminView();
+    window.switchAdminSection('structure');
+    window.selectAdminNode('unit', 'u1');
+    document.querySelector('[data-delete-node="unit:u1"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 0));
+    const detail = document.getElementById('adminDetailPane');
+    assert.ok(detail.querySelector('[data-organize-unit="u1"]'));
+    assert.ok(detail.querySelector('[data-attention-people="node:unit:u1"]'));
+  });
+
+  test('clicking the patients blocker link calls openOrganizeForUnit', async () => {
+    const { window, document } = loadFrontendEnv();
+    Object.defineProperty(window, 'innerWidth', { value: 1200, configurable: true });
+    const tree = deletableU1Tree();
+    window.showConfirm = () => Promise.resolve(true);
+    let organizedUnit = null;
+    window.openOrganizeForUnit = (id) => { organizedUnit = id; };
+    window.api = async (path, opts) => {
+      if(path.startsWith('/api/admin/org')) return tree;
+      if(path === '/api/admin/users') return { users: [] };
+      if(opts && opts.method === 'DELETE'){
+        const err = new window.Error('Node is not empty');
+        err.status = 409;
+        err.payload = { error: 'Node is not empty', blockedBy: { children: 0, users: 0, patients: 2 } };
+        throw err;
+      }
+      return {};
+    };
+    await window.loadAdminView();
+    window.switchAdminSection('structure');
+    window.selectAdminNode('unit', 'u1');
+    document.querySelector('[data-delete-node="unit:u1"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 0));
+    document.querySelector('[data-organize-unit="u1"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+    assert.equal(organizedUnit, 'u1');
+  });
+});
+
+describe('delete selects the parent', () => {
+  test('deleting a unit selects its department, not the People section', async () => {
+    const { window, document } = loadFrontendEnv();
+    Object.defineProperty(window, 'innerWidth', { value: 1200, configurable: true });
+    window.showConfirm = () => Promise.resolve(true);
+    const empty = JSON.parse(JSON.stringify(TREE));
+    empty.hospitals[0].departments[0].units[1].stats.livePatients = 0;
+    empty.hospitals[0].departments[0].units[1].stats.users = 0;
+    window.api = async (path, opts) => {
+      if(path.startsWith('/api/admin/org')) return empty;
+      if(path === '/api/admin/users') return { users: [] };
+      if(opts && opts.method === 'DELETE') return { deleted: true };
+      return {};
+    };
+    await window.loadAdminView();
+    window.switchAdminSection('structure');
+    window.selectAdminNode('unit', 'u2');
+    document.querySelector('[data-delete-node="unit:u2"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 0));
+    assert.ok(document.getElementById('adminDetailPane').innerHTML.includes('Ortho'));
+    assert.equal(document.getElementById('adminPeopleSection').hidden, true);
+  });
+});
+
+describe('phone drill-down', () => {
+  test('selecting a row marks the structure body as drilled; Back clears it without losing the selection', async () => {
+    const { window, document } = loadFrontendEnv();
+    window.api = async (path) => path.startsWith('/api/admin/org') ? TREE : { users: [] };
+    await window.loadAdminView();
+    window.switchAdminSection('structure');
+    window.selectAdminNode('unit', 'u1');
+    assert.equal(document.getElementById('adminStructureBody').classList.contains('is-drilled'), true);
+    document.querySelector('[data-back-to-tree]').dispatchEvent(new window.Event('click', { bubbles: true }));
+    assert.equal(document.getElementById('adminStructureBody').classList.contains('is-drilled'), false);
+    assert.ok(document.getElementById('adminDetailPane').innerHTML.includes('IV'), 'selection itself is preserved');
   });
 });
 
