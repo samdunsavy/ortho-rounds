@@ -3,6 +3,29 @@
    task ports the old users-table code over unchanged in behaviour, reading
    adminData/adminUI instead of adminState. */
 
+function isSelfUser(u){
+  return u.username === localStorage.getItem('ortho_username');
+}
+
+/** Mirrors the server's own last-admin check in POST .../role (server.js)
+    so the client never offers a click that can only 400. */
+function isLastActiveAdmin(user, users){
+  if(user.role !== 'admin') return false;
+  return !(users || []).some(u => u.id !== user.id && u.role === 'admin' && u.active && (u.orgId || null) === (user.orgId || null));
+}
+
+function matchesAdminPeopleFilter(u, filter){
+  if(filter === 'unassigned') return !u.assignmentType || !u.assignmentId;
+  if(filter === 'disabled') return !u.active;
+  if(filter === 'admins') return u.role === 'admin';
+  if(filter === 'stale') return !!(u.assignmentType && u.assignmentId && !assignLabelFor(buildAssignNodeGroups(adminData.tree, []), u.assignmentType, u.assignmentId));
+  if(filter && filter.startsWith('node:')){
+    const [, type, id] = filter.split(':');
+    return u.assignmentType === type && u.assignmentId === id;
+  }
+  return true; // 'all'
+}
+
 function orgNameForUser(user, orgs){
   const hit = (orgs || []).find(o => o.id === user.orgId);
   return hit ? hit.name : (user.orgId || 'their organization');
@@ -24,8 +47,12 @@ function renderAdminPeopleRowHTML(u, state){
   const groups = buildAssignNodeGroups(state.tree, state.orgs);
   const selType = u.assignmentType || null, selId = u.assignmentId || null;
   const prev = selType && selId ? `${selType}:${selId}` : '';
+  const self = isSelfUser(u);
+  const lastAdmin = isLastActiveAdmin(u, state.users || adminData.users);
+  const disableTitle = self ? 'You cannot disable your own account' : (u.active && lastAdmin ? 'This is the last active admin — promote someone else first' : '');
+  const disableAttrs = (self || (u.active && lastAdmin)) ? ` disabled title="${escapeHTML(disableTitle)}"` : '';
   const actions = narrow ? '' : `
-        <button class="btn" data-user-toggle="${escapeHTML(u.id)}">${u.active ? 'Disable' : 'Enable'}</button>
+        <button class="btn" data-user-toggle="${escapeHTML(u.id)}"${disableAttrs}>${u.active ? 'Disable' : 'Enable'}</button>
         <button class="btn" data-user-reset="${escapeHTML(u.id)}">Reset password</button>`;
   const checkCell = (narrow || unscoped) ? '<td></td>' : `<td><input type="checkbox" data-user-check="${escapeHTML(u.id)}"${adminUI.peopleChecked.has(u.id) ? ' checked' : ''}></td>`;
   const placement = peopleAssignmentDisplay(u, groups, state.orgs, unscoped);
@@ -38,8 +65,9 @@ function renderAdminPeopleRowHTML(u, state){
   }else{
     assignCell = `<td><select data-assign-user="${escapeHTML(u.id)}" data-prev="${escapeHTML(prev)}">${renderAssignSelectOptionsHTML(groups, selType, selId)}</select></td>`;
   }
+  const nameCell = self ? `${escapeHTML(u.username)} <span class="spec-badge">You</span>` : escapeHTML(u.username);
   return `${checkCell}
-        <td>${escapeHTML(u.username)}</td>
+        <td>${nameCell}</td>
         <td>${u.role === 'admin' ? '<span class="spec-badge">admin</span>' : 'member'}</td>
         ${assignCell}
         <td>${u.active ? 'active' : 'disabled'}${actions}
@@ -72,24 +100,32 @@ function renderAdminUsersPanelHTML(state){
       <label class="scribe-check"><input type="checkbox" id="adminNewUserAdmin"> Admin</label>
       <button class="btn" id="adminCreateUser">Create user</button>
     </div>`;
+  const chips = ['all', 'unassigned', 'disabled', 'admins'].map(f =>
+    `<button type="button" class="admin-people-chip${f === adminUI.peopleFilter ? ' is-active' : ''}" data-people-filter="${f}">${f[0].toUpperCase() + f.slice(1)}</button>`
+  ).join('');
   return `
     <div class="admin-detail-head"><h3>People</h3></div>
     <div class="admin-inline-form">
-      <input id="adminUserSearch" placeholder="Search users…">
+      <label for="adminUserSearch" class="sr-only">Search people</label>
+      <input id="adminUserSearch" placeholder="Search people…">
     </div>
+    <div class="admin-people-chips">${chips}</div>
     ${narrowNote}
     ${createUserForm}
     <div id="adminBulkBar" class="admin-bulk-bar" hidden></div>
     <table class="admin-users-table">
-      <thead><tr><th></th><th>User</th><th>Role</th><th>Can see patients in</th><th>Status</th></tr></thead>
+      <thead><tr><th></th><th>Person</th><th>Role</th><th>Can see patients in</th><th>Status</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>`;
 }
 
-function applyAdminPeopleSearch(){
+function applyAdminPeopleFilters(){
   const q = adminUI.peopleSearch.trim().toLowerCase();
   document.querySelectorAll('[data-user-row]').forEach(tr => {
-    tr.style.display = !q || tr.dataset.username.includes(q) ? '' : 'none';
+    const u = (adminData.users || []).find(x => x.id === tr.dataset.userRow);
+    const matchesSearch = !q || tr.dataset.username.includes(q);
+    const matchesFilter = !u || matchesAdminPeopleFilter(u, adminUI.peopleFilter);
+    tr.style.display = matchesSearch && matchesFilter ? '' : 'none';
   });
 }
 
@@ -105,7 +141,7 @@ function renderAdminPeopleSection(){
   el.innerHTML = renderAdminUsersPanelHTML(adminData);
   const search = document.getElementById('adminUserSearch');
   if(search) search.value = adminUI.peopleSearch;
-  applyAdminPeopleSearch();
+  applyAdminPeopleFilters();
   applyAdminPeopleChecked();
   refreshAdminBulkBar();
 }
@@ -132,10 +168,17 @@ function refreshAdminBulkBar(){
 document.getElementById('adminPeopleSection')?.addEventListener('input', (e) => {
   if(e.target.id !== 'adminUserSearch') return;
   adminUI.peopleSearch = e.target.value;
-  applyAdminPeopleSearch();
+  applyAdminPeopleFilters();
 });
 
 document.getElementById('adminPeopleSection')?.addEventListener('click', (e) => {
+  const chip = e.target.closest('[data-people-filter]');
+  if(chip){
+    adminUI.peopleFilter = chip.dataset.peopleFilter;
+    document.querySelectorAll('[data-people-filter]').forEach(b => b.classList.toggle('is-active', b === chip));
+    applyAdminPeopleFilters();
+    return;
+  }
   const enterOrgBtn = e.target.closest('[data-enter-user-org]');
   if(enterOrgBtn){
     e.stopPropagation();
@@ -174,6 +217,7 @@ document.getElementById('adminPeopleSection')?.addEventListener('click', (e) => 
           ? usersRes.users.filter(u => u.orgId === adminUI.viewedOrgId)
           : usersRes.users;
         renderAdminPeopleRow(id);
+        applyAdminPeopleFilters();
       }catch(err){ showToast(err.message); }
     })();
     return;

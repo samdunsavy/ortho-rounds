@@ -340,6 +340,111 @@ describe('search and selection survive a mutation (defect 1)', () => {
   });
 });
 
+describe('filter chips', () => {
+  const USERS = [
+    { id: 'me', username: 'currentuser', role: 'admin', active: true, orgId: null, assignmentType: 'org', assignmentId: 'bfv2-org' },
+    { id: 'a', username: 'alice', role: 'admin', active: true, orgId: null, assignmentType: null, assignmentId: null },
+    { id: 'b', username: 'bob', role: 'member', active: true, orgId: null, assignmentType: null, assignmentId: null },
+    { id: 'c', username: 'carol', role: 'member', active: false, orgId: null, assignmentType: 'unit', assignmentId: 'u1' }
+  ];
+
+  test('matchesAdminPeopleFilter: all/unassigned/disabled/admins', () => {
+    const { window } = loadFrontendEnv();
+    const m = window.matchesAdminPeopleFilter;
+    assert.equal(m(USERS[1], 'all'), true);
+    assert.equal(m(USERS[1], 'unassigned'), true);
+    assert.equal(m(USERS[2], 'unassigned'), true);
+    assert.equal(m(USERS[0], 'unassigned'), false);
+    assert.equal(m(USERS[3], 'disabled'), true);
+    assert.equal(m(USERS[0], 'disabled'), false);
+    assert.equal(m(USERS[0], 'admins'), true);
+    assert.equal(m(USERS[2], 'admins'), false);
+  });
+
+  test('clicking a chip filters the visible rows and marks it active', async () => {
+    const { window, document } = loadFrontendEnv();
+    window.localStorage.setItem('ortho_username', 'currentuser');
+    window.api = async (path) => path.startsWith('/api/admin/org') ? TREE : { users: USERS };
+    await window.loadAdminView();
+    window.switchAdminSection('people');
+    document.querySelector('[data-people-filter="unassigned"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+    assert.equal(document.querySelector('[data-people-filter="unassigned"]').classList.contains('is-active'), true);
+    assert.equal(document.querySelector('[data-user-row="a"]').style.display, '');
+    assert.equal(document.querySelector('[data-user-row="me"]').style.display, 'none');
+  });
+
+  test('the filter survives a mutation, same as search', async () => {
+    const { window, document } = loadFrontendEnv();
+    window.localStorage.setItem('ortho_username', 'currentuser');
+    window.api = async (path, opts) => {
+      if(path.startsWith('/api/admin/org')) return TREE;
+      if(path === '/api/admin/users') return { users: USERS };
+      if(opts && opts.method === 'POST') return { ok: true };
+      return {};
+    };
+    window.showConfirm = () => Promise.resolve(true);
+    await window.loadAdminView();
+    window.switchAdminSection('people');
+    document.querySelector('[data-people-filter="admins"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+    document.querySelector('[data-user-toggle="b"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 0));
+    assert.equal(document.querySelector('[data-people-filter="admins"]').classList.contains('is-active'), true);
+    assert.equal(document.querySelector('[data-user-row="b"]').style.display, 'none');
+  });
+});
+
+describe('own-row and last-admin disabled states', () => {
+  const SOLE_ADMIN = [
+    { id: 'me', username: 'currentuser', role: 'admin', active: true, orgId: 'bfv2-org', assignmentType: null, assignmentId: null },
+    { id: 'x', username: 'member1', role: 'member', active: true, orgId: 'bfv2-org', assignmentType: null, assignmentId: null }
+  ];
+
+  test('isSelfUser matches the logged-in username', () => {
+    const { window } = loadFrontendEnv();
+    window.localStorage.setItem('ortho_username', 'currentuser');
+    assert.equal(window.isSelfUser(SOLE_ADMIN[0]), true);
+    assert.equal(window.isSelfUser(SOLE_ADMIN[1]), false);
+  });
+
+  test('isLastActiveAdmin is true only for the sole active admin of its org bucket', () => {
+    const { window } = loadFrontendEnv();
+    assert.equal(window.isLastActiveAdmin(SOLE_ADMIN[0], SOLE_ADMIN), true);
+    const twoAdmins = [SOLE_ADMIN[0], Object.assign({}, SOLE_ADMIN[1], { role: 'admin' })];
+    assert.equal(window.isLastActiveAdmin(twoAdmins[0], twoAdmins), false);
+  });
+
+  test('your own row disables the Disable button with a reason', () => {
+    const { window } = loadFrontendEnv();
+    window.localStorage.setItem('ortho_username', 'currentuser');
+    const html = window.renderAdminUsersPanelHTML({ tree: TREE, users: SOLE_ADMIN, orgs: [] });
+    assert.match(html, /data-user-toggle="me"[^>]*disabled[^>]*title="[^"]*own account[^"]*"/);
+  });
+
+  test('your own row is marked "You"', () => {
+    const { window } = loadFrontendEnv();
+    window.localStorage.setItem('ortho_username', 'currentuser');
+    const html = window.renderAdminUsersPanelHTML({ tree: TREE, users: SOLE_ADMIN, orgs: [] });
+    assert.ok(html.includes('You'));
+  });
+
+  test('a non-self last active admin cannot be Disabled from the UI', async () => {
+    const { window, document } = loadFrontendEnv();
+    window.localStorage.setItem('ortho_username', 'otheradmin');
+    const users = [
+      { id: 'me', username: 'otheradmin', role: 'admin', active: true, orgId: 'bfv2-org', assignmentType: null, assignmentId: null },
+      { id: 'only', username: 'soloadmin', role: 'admin', active: true, orgId: 'bfv2-org', assignmentType: null, assignmentId: null },
+      { id: 'x', username: 'member1', role: 'member', active: true, orgId: 'bfv2-org', assignmentType: null, assignmentId: null }
+    ];
+    users[0].role = 'member';
+    window.api = async (path) => path.startsWith('/api/admin/org') ? TREE : { users };
+    await window.loadAdminView();
+    window.switchAdminSection('people');
+    const btn = document.querySelector('[data-user-toggle="only"]');
+    assert.equal(btn.disabled, true);
+    assert.match(btn.title, /last active admin/i);
+  });
+});
+
 describe('mobile read-only (removed in Task 11 — still gates today)', () => {
   test('narrow users panel has no live write path: no checkbox, no assign select, but still shows username and assignment as text', () => {
     const { window } = loadFrontendEnv();
