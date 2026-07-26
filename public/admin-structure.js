@@ -70,9 +70,15 @@ function findAdminNode(tree, type, id){
   return null;
 }
 
+function structureCountLabel(count, unitLabel){
+  if(count === null || count === undefined) return '';
+  if(unitLabel === 'pinned') return `${count} pinned`;
+  return `${count} ${unitLabel}${count === 1 ? '' : 's'}`;
+}
+
 function ccRowHTML(type, id, label, count, unitLabel, depth, selection, expandable, expanded){
   const sel = selection && selection.type === type && selection.id === id ? ' is-selected' : '';
-  const countLabel = count === null || count === undefined ? '' : `${count} ${unitLabel}${count === 1 ? '' : 's'}`;
+  const countLabel = structureCountLabel(count, unitLabel);
   const c = countLabel ? `<span class="cc-count">${escapeHTML(countLabel)}</span>` : '';
   const key = `${type}:${id}`;
   const chevron = expandable
@@ -252,7 +258,10 @@ function renderAdminStructureSection(){
 }
 
 function renderAdminStructureBody(){
-  if(adminData.tree && !adminUI.structureExpanded.size) adminUI.structureExpanded = defaultExpandStructure(adminData.tree);
+  if(adminData.tree && !adminUI.structureInitialized){
+    adminUI.structureExpanded = defaultExpandStructure(adminData.tree);
+    adminUI.structureInitialized = true;
+  }
   const rail = document.getElementById('adminTreeRail');
   if(rail){
     rail.innerHTML = `

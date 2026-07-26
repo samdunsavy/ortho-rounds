@@ -409,6 +409,61 @@ describe('tree expansion', () => {
     const html = window.renderAdminTreeHTML(TREE, null, new Set(['hospital:h1', 'department:d1']));
     assert.match(html, /IV[\s\S]{0,40}4 patients/);
   });
+
+  test('ward pinned count is not pluralized to pinneds', () => {
+    const { window } = loadFrontendEnv();
+    const html = window.renderAdminTreeHTML(TREE, null, new Set(['hospital:h1', 'department:d1', 'unit:u1']));
+    assert.match(html, /7MOW[\s\S]{0,40}4 pinned/);
+    assert.ok(!html.includes('pinneds'));
+  });
+
+  test('fully collapsed expansion survives re-render and loadAdminView', async () => {
+    const { window, document } = loadFrontendEnv();
+    window.api = async (path) => path.startsWith('/api/admin/org') ? TREE : { users: [] };
+    await window.loadAdminView();
+    window.switchAdminSection('structure');
+    document.querySelector('[data-toggle-expand="hospital:h1"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+    document.querySelector('[data-toggle-expand="hospital:h1"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+    document.querySelector('[data-toggle-expand="department:d1"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+    document.querySelector('[data-toggle-expand="hospital:h1"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+    assert.ok(!document.querySelector('[data-node="department:d1"]'));
+    await window.loadAdminView();
+    window.switchAdminSection('structure');
+    assert.ok(!document.querySelector('[data-node="department:d1"]'), 'stayed fully collapsed after reload');
+    window.renderAdminStructureBody();
+    assert.ok(!document.querySelector('[data-node="department:d1"]'), 'stayed fully collapsed after re-render');
+  });
+});
+
+describe('structure UI persistence', () => {
+  test('structureFilter survives loadAdminView', async () => {
+    const { window, document } = loadFrontendEnv();
+    window.api = async (path) => path.startsWith('/api/admin/org') ? TREE : { users: [] };
+    await window.loadAdminView();
+    window.switchAdminSection('structure');
+    const filter = document.getElementById('adminStructureFilter');
+    filter.value = 'general';
+    filter.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await window.loadAdminView();
+    window.switchAdminSection('structure');
+    assert.equal(document.getElementById('adminStructureFilter').value, 'general');
+    assert.ok(document.querySelector('[data-node="unit:u2"]'));
+    assert.ok(!document.querySelector('[data-node="unit:u1"]'));
+  });
+
+  test('selectedNode survives loadAdminView', async () => {
+    const { window, document } = loadFrontendEnv();
+    window.api = async (path) => path.startsWith('/api/admin/org') ? TREE : { users: [] };
+    await window.loadAdminView();
+    window.switchAdminSection('structure');
+    document.querySelector('[data-node="unit:u1"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+    assert.ok(document.querySelector('[data-node="unit:u1"].is-selected'));
+    assert.ok(document.getElementById('adminDetailPane').innerHTML.includes('IV'));
+    await window.loadAdminView();
+    window.switchAdminSection('structure');
+    assert.ok(document.querySelector('[data-node="unit:u1"].is-selected'));
+    assert.ok(document.getElementById('adminDetailPane').innerHTML.includes('IV'));
+  });
 });
 
 describe('tree filter', () => {

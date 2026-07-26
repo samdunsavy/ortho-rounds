@@ -23,6 +23,7 @@ let adminUI = {
   allOrgs: [],                   // instance admin: every org, kept across a drill-in
   selectedNode: null,            // Structure: { type, id } | null
   structureExpanded: new Set(),  // Structure: "type:id" keys of expanded rows
+  structureInitialized: false,   // Structure: defaults applied once; empty Set is valid
   structureFilter: '',           // Structure: name filter text
   structureMobileDrilled: false, // Structure: phone drill-down flag
   peopleSearch: '',
