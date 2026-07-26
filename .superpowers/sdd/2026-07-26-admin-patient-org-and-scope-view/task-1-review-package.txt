@@ -1,0 +1,223 @@
+# Review package — Task 1
+## commits
+d6af7aa feat: admin bulk 'Move to unit' to reorganize patients into real units
+
+## diff --stat
+ public/app.js                    | 47 ++++++++++++++++++++++++++++
+ public/index.html                |  1 +
+ tests/frontend-bulk-move.test.js | 66 ++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 114 insertions(+)
+
+## diff -U10
+diff --git a/public/app.js b/public/app.js
+index 1f7a48c..e293d3e 100644
+--- a/public/app.js
++++ b/public/app.js
+@@ -3850,20 +3850,21 @@ function bindEvents(){
+   document.getElementById('darkModeBtn')?.addEventListener('click', toggleDarkMode);
+   document.getElementById('themeToggleBtn')?.addEventListener('click', toggleDarkMode);
+   document.getElementById('moreMenuBtn')?.addEventListener('click', (e)=>{
+     e.stopPropagation();
+     document.getElementById('moreMenuPanel')?.classList.toggle('open');
+   });
+   document.addEventListener('click', ()=> document.getElementById('moreMenuPanel')?.classList.remove('open'));
+   document.getElementById('pgScopeBtn')?.addEventListener('click', ()=> setPgScope(!isPgScopeMine()));
+   document.getElementById('pgScopeBtnMobile')?.addEventListener('click', ()=> setPgScope(!isPgScopeMine()));
+   document.getElementById('bulkBarApplyBtn')?.addEventListener('click', ()=> void applyBulkPlan());
++  document.getElementById('bulkBarMoveBtn')?.addEventListener('click', ()=> void bulkMoveToUnit());
+   document.getElementById('bulkBarCancelBtn')?.addEventListener('click', ()=>{
+     bulkSelectMode = false;
+     bulkSelectedIds.clear();
+     document.getElementById('bulkPlanBtn')?.classList.remove('active');
+     updateBulkBar();
+     renderRounds();
+   });
+   document.getElementById('presentUnpresentedOnly')?.addEventListener('change', (e)=>{
+     presentationUnpresentedOnly = e.target.checked;
+     localStorage.setItem(LS_PRESENT_UNPRESENTED, presentationUnpresentedOnly ? '1' : '0');
+@@ -6140,20 +6141,64 @@ async function loadScopeTree(){
+ 
+ // The scope tree is memoized for the page session. Anything that changes the
+ // hierarchy OUTSIDE the patient form (the admin console creating/renaming/
+ // deleting/moving a node) must call this so the next picker open refetches
+ // instead of serving a stale tree. (Inline ward creation updates the cached
+ // tree in place via injectWardIntoScopeTree and does not need this.)
+ function invalidateScopeTree(){
+   cachedScopeTree = null;
+ }
+ 
++function flatUnitsFromScopeTree(tree){
++  const out = [];
++  for(const dep of ((tree && tree.departments) || [])){
++    for(const u of (dep.units || [])){
++      out.push({ id: u.id, name: dep.name ? `${dep.name} · ${u.name}` : u.name });
++    }
++  }
++  return out;
++}
++
++function movePatientToUnit(p, unitId){
++  p.unitId = unitId;
++  // Moving units invalidates any ward; the server re-derives ward + ancestry
++  // labels from the new unitId on sync, so drop the stale ward locally.
++  delete p.wardId;
++  delete p.ward;
++  return p;
++}
++
++async function bulkMoveToUnit(){
++  if(!bulkSelectedIds.size){ showToast('Select patients first'); return; }
++  const { tree } = await loadScopeTree();
++  const units = flatUnitsFromScopeTree(tree);
++  if(!units.length){ showToast('No units yet — create one in the console'); return; }
++  const fields = await showPromptFields('Move to unit', [
++    { id: 'unit', label: `Move ${bulkSelectedIds.size} patient(s) to`, type: 'select', value: '',
++      options: [{ value: '', label: 'Select unit…' }].concat(units.map(u => ({ value: u.id, label: u.name }))) }
++  ]);
++  if(!fields || !fields.unit) return;
++  const count = bulkSelectedIds.size;
++  for(const id of bulkSelectedIds){
++    const p = patients.find(x => x.id === id);
++    if(!p) continue;
++    movePatientToUnit(p, fields.unit);
++    await savePatient(p);
++  }
++  bulkSelectMode = false;
++  bulkSelectedIds.clear();
++  document.getElementById('bulkPlanBtn')?.classList.remove('active');
++  updateBulkBar();
++  renderAll();
++  showToast(`Moved ${count} patient(s)`);
++}
++
+ function fillSelect(el, items, placeholder){
+   if(!el) return;
+   const opts = [`<option value="">${escapeHTML(placeholder)}</option>`]
+     .concat((items || []).map(it => `<option value="${escapeHTML(it.id)}">${escapeHTML(it.name)}</option>`));
+   el.innerHTML = opts.join('');
+ }
+ 
+ function populateUnitSelect(tree, departmentId, selectedUnitId, selectedWardId){
+   const unitEl = document.getElementById('f_unit');
+   const dep = (tree.departments || []).find(x => x.id === departmentId);
+@@ -8337,20 +8382,22 @@ function bindTemplateManagerEvents(){
+ 
+ function updateBulkBar(){
+   const bar = document.getElementById('bulkPlanBar');
+   if(!bar) return;
+   if(bulkSelectMode && bulkSelectedIds.size){
+     bar.classList.add('active');
+     bar.querySelector('.bulk-plan-count').textContent = String(bulkSelectedIds.size);
+   }else{
+     bar.classList.remove('active');
+   }
++  const moveBtn = document.getElementById('bulkBarMoveBtn');
++  if(moveBtn) moveBtn.hidden = !(isAdmin() && scopePickerActive());
+ }
+ 
+ function toggleBulkSelectMode(){
+   bulkSelectMode = !bulkSelectMode;
+   if(!bulkSelectMode) bulkSelectedIds.clear();
+   const btn = document.getElementById('bulkPlanBtn');
+   if(btn) btn.classList.toggle('active', bulkSelectMode);
+   updateBulkBar();
+   renderRounds();
+   if(bulkSelectMode) showToast('Tap patients to select, then Apply plan');
+diff --git a/public/index.html b/public/index.html
+index 6c23a0e..85c17bc 100644
+--- a/public/index.html
++++ b/public/index.html
+@@ -1851,20 +1851,21 @@
+     <input type="text" class="search" id="searchDischarged" placeholder="Search discharged patients...">
+   </div>
+   <div id="dischargedList"></div>
+ </div>
+ 
+ <button class="fab" id="addPatientFab" title="Add patient">+</button>
+ 
+ <div class="bulk-plan-bar" id="bulkPlanBar">
+   <span><strong class="bulk-plan-count">0</strong> selected</span>
+   <button type="button" class="btn primary pressable" id="bulkBarApplyBtn">Apply plan</button>
++  <button type="button" class="btn pressable" id="bulkBarMoveBtn" hidden>Move to unit</button>
+   <button type="button" class="btn pressable" id="bulkBarCancelBtn">Cancel</button>
+ </div>
+ 
+ <!-- FILTER BOTTOM SHEET -->
+ <div class="sheet-overlay" id="filterSheetOverlay">
+   <div class="bottom-sheet" role="dialog" aria-labelledby="filterSheetTitle">
+     <div class="sheet-handle" aria-hidden="true"></div>
+     <div class="sheet-head">
+       <h2 id="filterSheetTitle">Filter patients</h2>
+       <button type="button" class="modal-close" id="filterSheetClose">&times;</button>
+diff --git a/tests/frontend-bulk-move.test.js b/tests/frontend-bulk-move.test.js
+new file mode 100644
+index 0000000..eea98e1
+--- /dev/null
++++ b/tests/frontend-bulk-move.test.js
+@@ -0,0 +1,66 @@
++import { test, describe } from 'node:test';
++import assert from 'node:assert/strict';
++import { loadFrontendEnv } from './helpers/frontend-env.js';
++
++const INIT = [
++  'Object.defineProperty(window, "patients", { get: function(){ return patients; }, set: function(v){ patients = v; }, configurable: true });',
++  'Object.defineProperty(window, "bulkSelectedIds", { get: function(){ return bulkSelectedIds; }, configurable: true });'
++].join('\n');
++
++describe('flatUnitsFromScopeTree', () => {
++  test('flattens departments -> units into id/name pairs, dept-qualified', () => {
++    const { window } = loadFrontendEnv();
++    const tree = { departments: [
++      { id: 'dep1', name: 'Ortho', units: [{ id: 'u1', name: 'Unit One', wards: [] }, { id: 'u2', name: 'IV', wards: [] }] },
++      { id: 'dep2', name: 'Surgery', units: [{ id: 'u3', name: 'Gen', wards: [] }] }
++    ] };
++    const out = window.flatUnitsFromScopeTree(tree);
++    assert.deepEqual([...out.map(u => u.id)], ['u1', 'u2', 'u3']);
++    assert.equal(out[0].name, 'Ortho · Unit One');
++    assert.equal(out[2].name, 'Surgery · Gen');
++  });
++
++  test('empty / missing tree yields []', () => {
++    const { window } = loadFrontendEnv();
++    assert.deepEqual([...window.flatUnitsFromScopeTree(null)], []);
++    assert.deepEqual([...window.flatUnitsFromScopeTree({ departments: [] })], []);
++  });
++});
++
++describe('movePatientToUnit', () => {
++  test('sets unitId and clears stale ward fields (server re-derives ancestry on sync)', () => {
++    const { window } = loadFrontendEnv();
++    const p = { id: 'p1', unitId: 'u1', wardId: 'w1', ward: 'Ward One', unit: 'Unit One' };
++    window.movePatientToUnit(p, 'u2');
++    assert.equal(p.unitId, 'u2');
++    assert.equal('wardId' in p, false);
++    assert.equal('ward' in p, false);
++  });
++});
++
++describe('bulkMoveToUnit', () => {
++  test('moves every selected patient to the chosen unit and exits select mode', async () => {
++    const { window } = loadFrontendEnv({ initScript: INIT });
++    window.serverFlags = { MULTI_TENANT: true };
++    window.localStorage.setItem('ortho_role', 'admin');
++    window.fetch = async (url) => {
++      if(String(url).includes('/api/me/scope')){
++        return { ok: true, status: 200, json: async () => ({ assignment: null, tree: { departments: [
++          { id: 'dep1', name: 'Ortho', units: [{ id: 'u1', name: 'One', wards: [] }, { id: 'u2', name: 'IV', wards: [] }] }
++        ] } }) };
++      }
++      return { ok: true, status: 200, json: async () => ({ serverTime: 1, patients: [], apiVersion: 1, scoped: true, rejected: [] }) };
++    };
++    window.showPromptFields = async () => ({ unit: 'u2' });
++    window.patients = [{ id: 'a', unitId: 'u1' }, { id: 'b', unitId: 'u1' }, { id: 'c', unitId: 'u1' }];
++    window.bulkSelectedIds.add('a');
++    window.bulkSelectedIds.add('b');
++
++    await window.bulkMoveToUnit();
++
++    assert.equal(window.patients.find(p => p.id === 'a').unitId, 'u2');
++    assert.equal(window.patients.find(p => p.id === 'b').unitId, 'u2');
++    assert.equal(window.patients.find(p => p.id === 'c').unitId, 'u1', 'unselected patient untouched');
++    assert.equal(window.bulkSelectedIds.size, 0, 'selection cleared after move');
++  });
++});
