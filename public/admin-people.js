@@ -17,37 +17,52 @@ function peopleAssignmentDisplay(u, groups, orgs, unscoped){
   return { text: 'Assigned to a place that no longer exists', readOnly: true, enterOrgId: null };
 }
 
-function renderAdminUsersPanelHTML(state){
+function renderAdminPeopleRowHTML(u, state){
+  state = state || adminData;
   const narrow = adminIsNarrow();
   const unscoped = adminNeedsOrgChoice();
   const groups = buildAssignNodeGroups(state.tree, state.orgs);
-  const rows = (state.users || []).map(u => {
-    const selType = u.assignmentType || null, selId = u.assignmentId || null;
-    const prev = selType && selId ? `${selType}:${selId}` : '';
-    const actions = narrow ? '' : `
-          <button class="btn" data-user-toggle="${escapeHTML(u.id)}">${u.active ? 'Disable' : 'Enable'}</button>
-          <button class="btn" data-user-reset="${escapeHTML(u.id)}">Reset password</button>`;
-    const checkCell = (narrow || unscoped) ? '<td></td>' : `<td><input type="checkbox" data-user-check="${escapeHTML(u.id)}"></td>`;
-    const placement = peopleAssignmentDisplay(u, groups, state.orgs, unscoped);
-    let assignCell;
-    if(narrow || placement.readOnly){
-      const editBtn = placement.enterOrgId && !narrow
-        ? ` <button type="button" class="btn" data-enter-user-org="${escapeHTML(placement.enterOrgId)}">Edit in org</button>`
-        : '';
-      assignCell = `<td>${escapeHTML(placement.text)}${editBtn}</td>`;
-    }else{
-      assignCell = `<td><select data-assign-user="${escapeHTML(u.id)}" data-prev="${escapeHTML(prev)}">${renderAssignSelectOptionsHTML(groups, selType, selId)}</select></td>`;
-    }
-    return `
-      <tr data-user-row="${escapeHTML(u.id)}" data-username="${escapeHTML((u.username || '').toLowerCase())}">
-        ${checkCell}
+  const selType = u.assignmentType || null, selId = u.assignmentId || null;
+  const prev = selType && selId ? `${selType}:${selId}` : '';
+  const actions = narrow ? '' : `
+        <button class="btn" data-user-toggle="${escapeHTML(u.id)}">${u.active ? 'Disable' : 'Enable'}</button>
+        <button class="btn" data-user-reset="${escapeHTML(u.id)}">Reset password</button>`;
+  const checkCell = (narrow || unscoped) ? '<td></td>' : `<td><input type="checkbox" data-user-check="${escapeHTML(u.id)}"${adminUI.peopleChecked.has(u.id) ? ' checked' : ''}></td>`;
+  const placement = peopleAssignmentDisplay(u, groups, state.orgs, unscoped);
+  let assignCell;
+  if(narrow || placement.readOnly){
+    const editBtn = placement.enterOrgId && !narrow
+      ? ` <button type="button" class="btn" data-enter-user-org="${escapeHTML(placement.enterOrgId)}">Edit in org</button>`
+      : '';
+    assignCell = `<td>${escapeHTML(placement.text)}${editBtn}</td>`;
+  }else{
+    assignCell = `<td><select data-assign-user="${escapeHTML(u.id)}" data-prev="${escapeHTML(prev)}">${renderAssignSelectOptionsHTML(groups, selType, selId)}</select></td>`;
+  }
+  return `${checkCell}
         <td>${escapeHTML(u.username)}</td>
         <td>${u.role === 'admin' ? '<span class="spec-badge">admin</span>' : 'member'}</td>
         ${assignCell}
         <td>${u.active ? 'active' : 'disabled'}${actions}
-        </td>
-      </tr>`;
-  }).join('');
+        </td>`;
+}
+
+/** Repaints exactly one row in place, so a status/placement change on one
+    person doesn't wipe the search box or every other row's checkbox state
+    the way a full loadAdminView() repaint would. */
+function renderAdminPeopleRow(userId){
+  const esc = (typeof CSS !== 'undefined' && CSS.escape) ? CSS.escape : s => String(s);
+  const row = document.querySelector(`[data-user-row="${esc(userId)}"]`);
+  const u = (adminData.users || []).find(x => x.id === userId);
+  if(!row || !u) return;
+  row.innerHTML = renderAdminPeopleRowHTML(u);
+}
+
+function renderAdminUsersPanelHTML(state){
+  const narrow = adminIsNarrow();
+  const unscoped = adminNeedsOrgChoice();
+  const rows = (state.users || []).map(u =>
+    `<tr data-user-row="${escapeHTML(u.id)}" data-username="${escapeHTML((u.username || '').toLowerCase())}">${renderAdminPeopleRowHTML(u, state)}</tr>`
+  ).join('');
   const narrowNote = narrow ? '<div class="small-muted">Open on a larger screen to edit</div>' : '';
   const createUserForm = narrow ? '' : unscoped ? `
     <div class="small-muted">Choose an organization on the Organizations tab to create users.</div>
@@ -71,9 +86,28 @@ function renderAdminUsersPanelHTML(state){
     </table>`;
 }
 
+function applyAdminPeopleSearch(){
+  const q = adminUI.peopleSearch.trim().toLowerCase();
+  document.querySelectorAll('[data-user-row]').forEach(tr => {
+    tr.style.display = !q || tr.dataset.username.includes(q) ? '' : 'none';
+  });
+}
+
+function applyAdminPeopleChecked(){
+  document.querySelectorAll('[data-user-check]').forEach(cb => {
+    cb.checked = adminUI.peopleChecked.has(cb.dataset.userCheck);
+  });
+}
+
 function renderAdminPeopleSection(){
   const el = document.getElementById('adminPeopleSection');
-  if(el) el.innerHTML = renderAdminUsersPanelHTML(adminData);
+  if(!el) return;
+  el.innerHTML = renderAdminUsersPanelHTML(adminData);
+  const search = document.getElementById('adminUserSearch');
+  if(search) search.value = adminUI.peopleSearch;
+  applyAdminPeopleSearch();
+  applyAdminPeopleChecked();
+  refreshAdminBulkBar();
 }
 
 function selectedAdminUserIds(){
@@ -97,10 +131,8 @@ function refreshAdminBulkBar(){
 
 document.getElementById('adminPeopleSection')?.addEventListener('input', (e) => {
   if(e.target.id !== 'adminUserSearch') return;
-  const q = e.target.value.trim().toLowerCase();
-  document.querySelectorAll('[data-user-row]').forEach(tr => {
-    tr.style.display = !q || tr.dataset.username.includes(q) ? '' : 'none';
-  });
+  adminUI.peopleSearch = e.target.value;
+  applyAdminPeopleSearch();
 });
 
 document.getElementById('adminPeopleSection')?.addEventListener('click', (e) => {
@@ -133,10 +165,17 @@ document.getElementById('adminPeopleSection')?.addEventListener('click', (e) => 
     const id = toggleBtn.dataset.userToggle;
     const user = (adminData.users || []).find(u => u.id === id);
     const path = user && user.active ? 'disable' : 'enable';
-    if(path === 'disable' && !window.confirm('Disable this user? They will be signed out.')) return;
-    api(`/api/admin/users/${encodeURIComponent(id)}/${path}`, { method: 'POST' })
-      .then(() => loadAdminView())
-      .catch(err => showToast(err.message));
+    (async () => {
+      if(path === 'disable' && !(await showConfirm('Disable this person?', 'They will be signed out.', { confirmLabel: 'Disable', danger: true }))) return;
+      try{
+        await api(`/api/admin/users/${encodeURIComponent(id)}/${path}`, { method: 'POST' });
+        const usersRes = await api('/api/admin/users');
+        adminData.users = isInstanceAdminUser() && adminUI.viewedOrgId
+          ? usersRes.users.filter(u => u.orgId === adminUI.viewedOrgId)
+          : usersRes.users;
+        renderAdminPeopleRow(id);
+      }catch(err){ showToast(err.message); }
+    })();
     return;
   }
   const resetBtn = e.target.closest('[data-user-reset]');
@@ -167,7 +206,12 @@ document.getElementById('adminPeopleSection')?.addEventListener('click', (e) => 
 });
 
 document.getElementById('adminPeopleSection')?.addEventListener('change', async (e) => {
-  if(e.target.matches('[data-user-check]')){ refreshAdminBulkBar(); return; }
+  if(e.target.matches('[data-user-check]')){
+    const id = e.target.dataset.userCheck;
+    if(e.target.checked) adminUI.peopleChecked.add(id); else adminUI.peopleChecked.delete(id);
+    refreshAdminBulkBar();
+    return;
+  }
   const sel = e.target.closest('[data-assign-user]');
   if(!sel) return;
   const raw = sel.value;

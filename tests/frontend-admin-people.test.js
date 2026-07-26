@@ -266,6 +266,80 @@ describe('unscoped instance-admin People (Task 1 review fixes)', () => {
   });
 });
 
+describe('search and selection survive a mutation (defect 1)', () => {
+  test('typing a search term, then disabling a different user, keeps the search box value and the filtered rows', async () => {
+    const { window, document } = loadFrontendEnv();
+    window.api = async (path, opts) => {
+      if(path.startsWith('/api/admin/org')) return TREE;
+      if(path === '/api/admin/users') return { users: CC_USERS };
+      if(opts && opts.method === 'POST') return { ok: true };
+      return {};
+    };
+    window.showConfirm = () => Promise.resolve(true);
+    await window.loadAdminView();
+    window.switchAdminSection('people');
+
+    const search = document.getElementById('adminUserSearch');
+    search.value = 'amit';
+    search.dispatchEvent(new window.Event('input', { bubbles: true }));
+    assert.equal(document.querySelector('[data-user-row="usr1"]').style.display, 'none');
+    assert.equal(document.querySelector('[data-user-row="usr2"]').style.display, '');
+
+    document.querySelector('[data-user-toggle="usr1"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 0));
+
+    assert.equal(document.getElementById('adminUserSearch').value, 'amit');
+    assert.equal(document.querySelector('[data-user-row="usr1"]').style.display, 'none');
+    assert.equal(document.querySelector('[data-user-row="usr2"]').style.display, '');
+  });
+
+  test('checking a row, then disabling a different user, keeps the checkbox checked', async () => {
+    const { window, document } = loadFrontendEnv();
+    window.api = async (path, opts) => {
+      if(path.startsWith('/api/admin/org')) return TREE;
+      if(path === '/api/admin/users') return { users: CC_USERS };
+      if(opts && opts.method === 'POST') return { ok: true };
+      return {};
+    };
+    window.showConfirm = () => Promise.resolve(true);
+    await window.loadAdminView();
+    window.switchAdminSection('people');
+
+    document.querySelector('[data-user-check="usr2"]').checked = true;
+    document.querySelector('[data-user-check="usr2"]').dispatchEvent(new window.Event('change', { bubbles: true }));
+
+    document.querySelector('[data-user-toggle="usr1"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 0));
+
+    assert.equal(document.querySelector('[data-user-check="usr2"]').checked, true);
+    assert.equal(document.getElementById('adminBulkBar').hasAttribute('hidden'), false);
+  });
+
+  test('disabling a user repaints only that row (other rows untouched)', async () => {
+    const { window, document } = loadFrontendEnv();
+    let users = CC_USERS.map(u => Object.assign({}, u));
+    window.api = async (path, opts) => {
+      if(path.startsWith('/api/admin/org')) return TREE;
+      if(path === '/api/admin/users') return { users };
+      if(opts && opts.method === 'POST' && /\/disable$/.test(path)){
+        users = users.map(u => u.id === 'usr2' ? Object.assign({}, u, { active: false }) : u);
+        return { ok: true };
+      }
+      return {};
+    };
+    window.showConfirm = () => Promise.resolve(true);
+    await window.loadAdminView();
+    window.switchAdminSection('people');
+    const otherRowBefore = document.querySelector('[data-user-row="usr1"]').outerHTML;
+
+    document.querySelector('[data-user-toggle="usr2"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 0));
+
+    assert.equal(document.querySelector('[data-user-row="usr1"]').outerHTML, otherRowBefore);
+    assert.match(document.querySelector('[data-user-row="usr2"]').innerHTML, /data-user-toggle="usr2"[^>]*>Enable</);
+  });
+});
+
 describe('mobile read-only (removed in Task 11 — still gates today)', () => {
   test('narrow users panel has no live write path: no checkbox, no assign select, but still shows username and assignment as text', () => {
     const { window } = loadFrontendEnv();
