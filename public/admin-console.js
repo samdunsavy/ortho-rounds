@@ -217,26 +217,37 @@ function invalidateHierarchyCaches(){
   if(typeof invalidateScopeTree === 'function') invalidateScopeTree();
 }
 
+// Concurrent loadAdminView() calls (e.g. rapid org switches) are unordered;
+// only the latest completion may replace adminData and re-render.
+let adminLoadSeq = 0;
+
 async function loadAdminView(){
+  const loadToken = ++adminLoadSeq;
   const instAdmin = isInstanceAdminUser();
+  const viewedOrgId = adminUI.viewedOrgId;
   try{
     let tree, users, orgs;
     if(instAdmin){
       const [usersRes, orgsRes] = await Promise.all([api('/api/admin/users'), api('/api/admin/orgs')]);
-      adminUI.allOrgs = orgsRes.orgs;
-      orgs = adminUI.allOrgs;
-      users = adminUI.viewedOrgId ? usersRes.users.filter(u => u.orgId === adminUI.viewedOrgId) : usersRes.users;
-      tree = adminUI.viewedOrgId ? await api(`/api/admin/org?orgId=${encodeURIComponent(adminUI.viewedOrgId)}`) : null;
+      if(loadToken !== adminLoadSeq) return;
+      orgs = orgsRes.orgs;
+      users = viewedOrgId ? usersRes.users.filter(u => u.orgId === viewedOrgId) : usersRes.users;
+      tree = viewedOrgId ? await api(`/api/admin/org?orgId=${encodeURIComponent(viewedOrgId)}`) : null;
+      if(loadToken !== adminLoadSeq) return;
+      adminUI.allOrgs = orgs;
     }else{
       const [usersRes, treeRes] = await Promise.all([api('/api/admin/users'), api('/api/admin/org')]);
+      if(loadToken !== adminLoadSeq) return;
       users = usersRes.users;
       tree = treeRes;
       orgs = tree.org ? [tree.org] : [];
     }
     adminData = { tree, users, orgs };
   }catch(err){
+    if(loadToken !== adminLoadSeq) return;
     throw err;
   }
+  if(loadToken !== adminLoadSeq) return;
   if(instAdmin) renderAdminOrgsSection();
   renderAdminSection();
 }

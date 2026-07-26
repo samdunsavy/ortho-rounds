@@ -20,4 +20,17 @@ describe('orgs section rendering', () => {
     assert.match(cards[0].textContent, /Pilot Org/);
     assert.match(cards[0].textContent, /7/);
   });
+
+  test('new organization name input has maxlength 80', async () => {
+    const { window, document } = loadFrontendEnv();
+    window.localStorage.setItem('ortho_role', 'admin');
+    window.api = async (path) => {
+      if(path === '/api/admin/orgs') return { orgs: [] };
+      if(path === '/api/admin/users') return { users: [] };
+      return {};
+    };
+    await window.loadAdminView();
+    window.switchAdminSection('orgs');
+    assert.equal(document.getElementById('adminNewOrgName').getAttribute('maxlength'), '80');
+  });
 });

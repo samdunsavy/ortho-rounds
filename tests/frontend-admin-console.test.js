@@ -166,4 +166,44 @@ describe('loadAdminView atomic adminData (Task 1 review fixes)', () => {
     await assert.rejects(() => window.loadAdminView(), /tree fetch failed/);
     assert.equal(document.getElementById('adminPeopleSection').innerHTML, before);
   });
+
+  test('stale loadAdminView completion is ignored when a newer load finishes first', async () => {
+    const { window, document } = loadFrontendEnv();
+    window.localStorage.setItem('ortho_role', 'admin');
+    let resolveTreeA;
+    const treeAPending = new Promise(r => { resolveTreeA = r; });
+    const TREE_A = {
+      org: { id: 'o1', name: 'Org Alpha', stats: { livePatients: 1, byStatus: {}, users: 0, lastActivity: null } },
+      totals: { departments: 0, usersActive: 0, livePatients: 1 },
+      hospitals: [{ id: 'h-alpha', name: 'Alpha Hospital', stats: { livePatients: 1, byStatus: {}, users: 0, lastActivity: null }, departments: [] }]
+    };
+    const TREE_B = {
+      org: { id: 'o2', name: 'Org Beta', stats: { livePatients: 2, byStatus: {}, users: 0, lastActivity: null } },
+      totals: { departments: 0, usersActive: 0, livePatients: 2 },
+      hospitals: [{ id: 'h-beta', name: 'Beta Hospital', stats: { livePatients: 2, byStatus: {}, users: 0, lastActivity: null }, departments: [] }]
+    };
+    window.api = async (path) => {
+      if(path === '/api/admin/orgs') return { orgs: [
+        { id: 'o1', name: 'Org Alpha', plan: 'free', stats: { hospitals: 1, departments: 0, users: 0, livePatients: 1 } },
+        { id: 'o2', name: 'Org Beta', plan: 'free', stats: { hospitals: 1, departments: 0, users: 0, livePatients: 2 } }
+      ] };
+      if(path === '/api/admin/users') return { users: [] };
+      if(path === '/api/admin/org?orgId=o1'){ await treeAPending; return TREE_A; }
+      if(path === '/api/admin/org?orgId=o2') return TREE_B;
+      return {};
+    };
+    await window.loadAdminView();
+    window.enterAdminOrgContext('o1');
+    await new Promise(r => setTimeout(r, 0));
+    window.enterAdminOrgContext('o2');
+    await new Promise(r => setTimeout(r, 0));
+    window.switchAdminSection('structure');
+    const rail = () => document.getElementById('adminTreeRail').innerHTML;
+    assert.ok(rail().includes('Beta Hospital'));
+    assert.ok(!rail().includes('Alpha Hospital'));
+    resolveTreeA(TREE_A);
+    await new Promise(r => setTimeout(r, 0));
+    assert.ok(rail().includes('Beta Hospital'));
+    assert.ok(!rail().includes('Alpha Hospital'));
+  });
 });

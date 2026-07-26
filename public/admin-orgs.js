@@ -16,7 +16,7 @@ function renderAdminOrgsSection(){
       </div>
     </div>`).join('') + `
     <div class="admin-inline-form">
-      <input placeholder="New organization name" id="adminNewOrgName">
+      <input placeholder="New organization name" id="adminNewOrgName" maxlength="80">
       <button class="btn" id="adminAddOrgBtn">Create organization</button>
     </div>`;
 }
