@@ -389,8 +389,14 @@ async function handleApi(req, res, pathname){
     if(!isEnabled('MULTI_TENANT')) return sendJSON(res, 404, { error: 'Unknown endpoint' });
     // Same node resolution scope.js's resolveScope uses for non-admins
     // (actor.assignment) and org admins (their org), so this always matches
-    // what the caller can actually read/write via /api/sync.
-    const node = actor.assignment || (actor.role === 'admin' && actor.orgId ? { type: 'org', id: actor.orgId } : null);
+    // what the caller can actually read/write via /api/sync. The unrestricted
+    // instance admin (admin, no orgId, no assignment) is unrestricted for
+    // patient read/write, so its picker spans the whole instance rather than
+    // coming back empty.
+    let node = actor.assignment || null;
+    if(!node && actor.role === 'admin'){
+      node = actor.orgId ? { type: 'org', id: actor.orgId } : { type: 'instance' };
+    }
     const tree = await buildScopeTree(store, node);
     return sendJSON(res, 200, { assignment: actor.assignment || null, tree });
   }
@@ -791,6 +797,11 @@ async function handleApi(req, res, pathname){
     const changes = Array.isArray(body.changes) ? body.changes : [];
     const now = Date.now();
     const scope = isEnabled('MULTI_TENANT') ? await resolveScope(actor, store) : null;
+    // Ids the caller submitted that scoping refused — echoed back so the
+    // client can EVICT them from its cache instead of retrying forever (a
+    // silent `continue` leaves the record permanently _dirty). Scope refusals
+    // only; LWW losers are legitimately stored and never listed here.
+    const rejected = [];
 
     await store.begin();
     try{
@@ -808,7 +819,7 @@ async function handleApi(req, res, pathname){
         let decision = null;
         if(scope){
           decision = await decideWrite({ incoming: p, existing: existingObj, actor, scope, store });
-          if(!decision.allow) continue;
+          if(!decision.allow){ rejected.push(p.id); continue; }
         }
         stampAttribution(p, existingObj, actor);
         if(!existing || incomingUpdated >= existing.updatedAt){
@@ -847,7 +858,16 @@ async function handleApi(req, res, pathname){
     // version of the sync contract they expect.
     let outPatients = rows.map(rowToPatient);
     if(scope) outPatients = outPatients.filter(p => canRead(p, scope));
-    return sendJSON(res, 200, { serverTime: now, patients: outPatients, apiVersion: SYNC_API_VERSION });
+    const responseBody = { serverTime: now, patients: outPatients, apiVersion: SYNC_API_VERSION };
+    if(scope){
+      // Additive, flag-on only (a flag-off server sends neither key, keeping the
+      // golden flag-off contract byte-identical). `scoped` lets the client tell
+      // "missing from a full snapshot = out of my scope, evict" apart from the
+      // unrestricted case "missing = server lost its data, resurrect".
+      responseBody.rejected = rejected;
+      responseBody.scoped = !scope.unrestricted;
+    }
+    return sendJSON(res, 200, responseBody);
   }
 
   if(pathname === '/api/backup' && req.method === 'GET'){

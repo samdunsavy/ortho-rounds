@@ -90,6 +90,13 @@ function addChildRouteFor(type){
   }[type] || null;
 }
 
+// A hierarchy edit here changes what the patient-form unit picker should show.
+// That picker (in app.js) memoizes the scope tree per page session, so drop its
+// cache on any node create/rename/delete/move to force a refetch on next open.
+function invalidateHierarchyCaches(){
+  if(typeof invalidateScopeTree === 'function') invalidateScopeTree();
+}
+
 function childListOf(type, node){
   if(type === 'org') return node.hospitals || [];
   if(type === 'hospital') return node.departments || [];
@@ -313,7 +320,7 @@ document.getElementById('adminView')?.addEventListener('click', (e) => {
     if(!route) return;
     const body = route.parentKey ? { [route.parentKey]: parentId, name } : { name };
     api(route.path, { method: 'POST', body: JSON.stringify(body) })
-      .then(() => loadAdminView())
+      .then(() => { invalidateHierarchyCaches(); return loadAdminView(); })
       .catch(err => showToast(err.message));
     return;
   }
@@ -329,7 +336,7 @@ document.getElementById('adminView')?.addEventListener('click', (e) => {
     const name = next.trim();
     if(!name || name.length > 80){ showToast('Name required (max 80 chars)'); return; }
     api(`/api/admin/nodes/${encodeURIComponent(type)}/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ name }) })
-      .then(() => loadAdminView())
+      .then(() => { invalidateHierarchyCaches(); return loadAdminView(); })
       .catch(err => showToast(err.message));
     return;
   }
@@ -342,7 +349,7 @@ document.getElementById('adminView')?.addEventListener('click', (e) => {
     const type = raw.slice(0, i), id = raw.slice(i + 1);
     if(!window.confirm(`Delete this ${type}? This cannot be undone.`)) return;
     api(`/api/admin/nodes/${encodeURIComponent(type)}/${encodeURIComponent(id)}`, { method: 'DELETE' })
-      .then(() => { adminState.selection = { type: 'users' }; return loadAdminView(); })
+      .then(() => { invalidateHierarchyCaches(); adminState.selection = { type: 'users' }; return loadAdminView(); })
       .catch(err => showToast(err.message));
     return;
   }
@@ -557,7 +564,7 @@ document.getElementById('adminView')?.addEventListener('change', async (e) => {
     const i = raw.indexOf(':');
     const type = raw.slice(0, i), id = raw.slice(i + 1);
     api(`/api/admin/nodes/${encodeURIComponent(type)}/${encodeURIComponent(id)}/move`, { method: 'POST', body: JSON.stringify({ newParentId }) })
-      .then(() => loadAdminView())
+      .then(() => { invalidateHierarchyCaches(); return loadAdminView(); })
       .catch(err => { showToast(err.message); loadAdminView(); });
     return;
   }

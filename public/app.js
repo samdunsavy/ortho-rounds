@@ -1807,7 +1807,9 @@ function notifyNextSyncConflict(){
 }
 
 // Drop local cache rows that no longer exist on the server (unless still dirty).
-async function reconcileWithSnapshot(serverRecords){
+// `scoped` (from the sync response) is true when the caller is scope-restricted
+// under MULTI_TENANT — it changes what "missing from the snapshot" means.
+async function reconcileWithSnapshot(serverRecords, scoped){
   const serverById = new Map();
   for(const rec of serverRecords){
     if(rec && typeof rec.id === 'string') serverById.set(rec.id, rec);
@@ -1823,13 +1825,23 @@ async function reconcileWithSnapshot(serverRecords){
 
     const serverRec = serverById.get(localRec.id);
     if(!serverRec){
-      // The server has no row for this id at all. Because the app only ever
-      // soft-deletes (an intentionally removed patient stays in the snapshot
-      // flagged deleted=true), a record that is *missing* from a full snapshot
-      // means the server lost its database — e.g. a redeploy without a
-      // persistent disk. Re-upload our local copy instead of deleting it, so
-      // the first device to sync repopulates the server rather than every
-      // device wiping its own records to match an empty server.
+      if(scoped){
+        // Scope-restricted caller: a full snapshot is already filtered to what
+        // we may see, so "missing" means this row is OUTSIDE our scope now
+        // (e.g. the patient was reassigned to another unit), NOT that the
+        // server lost data. Evict it — a scoped device can never be the
+        // authority that repopulates a wiped server, so the resurrect path
+        // below must not fire for us.
+        await cacheDelete(localRec.id);
+        continue;
+      }
+      // Unrestricted caller: because the app only ever soft-deletes (an
+      // intentionally removed patient stays in the snapshot flagged
+      // deleted=true), a record that is *missing* from a full snapshot means
+      // the server lost its database — e.g. a redeploy without a persistent
+      // disk. Re-upload our local copy instead of deleting it, so the first
+      // device to sync repopulates the server rather than every device wiping
+      // its own records to match an empty server.
       localRec._dirty = true;
       await cachePutRaw(localRec);
       resurrected++;
@@ -1875,11 +1887,20 @@ async function syncNow(opts){
         await cachePutRaw(local);
       }
     }
+    // Scoping (MULTI_TENANT) refused these ids: the record is not ours to hold.
+    // Evict rather than leave it _dirty and re-push it forever (silent-drop
+    // ghost). Flag-off servers never send `rejected`, so this is a no-op there.
+    if(Array.isArray(res.rejected) && res.rejected.length){
+      for(const id of res.rejected) await cacheDelete(id);
+      showToast(res.rejected.length === 1
+        ? 'A patient left your access and was removed from this device'
+        : `${res.rejected.length} patients left your access and were removed from this device`);
+    }
     localStorage.setItem(LS_LASTSYNC, String(res.serverTime));
 
     if(shouldFullReconcile(!!opts.fullReconcile)){
       const snap = await api('/api/sync', { method:'POST', body: JSON.stringify({ since: 0, changes: [] }) });
-      await reconcileWithSnapshot(snap.patients || []);
+      await reconcileWithSnapshot(snap.patients || [], snap.scoped);
       localStorage.setItem(LS_LASTSYNC, String(snap.serverTime));
     }
 
@@ -6115,6 +6136,15 @@ async function loadScopeTree(){
     cachedScopeTree = { assignment: null, tree: { departments: [] } };
   }
   return cachedScopeTree;
+}
+
+// The scope tree is memoized for the page session. Anything that changes the
+// hierarchy OUTSIDE the patient form (the admin console creating/renaming/
+// deleting/moving a node) must call this so the next picker open refetches
+// instead of serving a stale tree. (Inline ward creation updates the cached
+// tree in place via injectWardIntoScopeTree and does not need this.)
+function invalidateScopeTree(){
+  cachedScopeTree = null;
 }
 
 function fillSelect(el, items, placeholder){

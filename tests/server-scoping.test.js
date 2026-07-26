@@ -212,6 +212,42 @@ describe('MULTI_TENANT sync scoping (unit-based)', () => {
       assert.notEqual(rootRes.status, 403, `instance admin ${path} must not be 403`);
     }
   });
+
+  test('scoped signal: a scope-restricted member is scoped, the instance admin is not', async () => {
+    const m = await syncPost(srv.baseUrl, tokens.pg1, { since: 0, changes: [] });
+    assert.equal(m.json.scoped, true);
+    const a = await syncPost(srv.baseUrl, tokens.root, { since: 0, changes: [] });
+    assert.equal(a.json.scoped, false);
+  });
+
+  test('rejected echoes back out-of-scope write ids so the client can evict them', async () => {
+    // pat-wx lives in a different org entirely and is never moved by any test,
+    // so it is reliably outside pg1's scope.
+    const r = await syncPost(srv.baseUrl, tokens.pg1, {
+      since: 0, changes: [{ id: 'pat-wx', name: 'HIJACKED', updatedAt: Date.now() + 999999 }]
+    });
+    assert.equal(r.status, 200); // contract unchanged: no error
+    assert.deepEqual(r.json.rejected, ['pat-wx']);
+  });
+
+  test('an unassigned member creating a patient gets it rejected (nowhere to pin it)', async () => {
+    const r = await syncPost(srv.baseUrl, tokens.lost, {
+      since: 0, changes: [{ id: 'pat-ghost', name: 'Ghost', updatedAt: Date.now() }]
+    });
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.json.rejected, ['pat-ghost']);
+  });
+
+  test('an in-scope write is never listed in rejected, even a stale last-write-wins loser', async () => {
+    // pg1 owns pat-w1; a write with an ancient timestamp is a legitimate
+    // in-scope change that simply loses LWW at storage — it is NOT a scope
+    // refusal and must not be evicted from the client's cache.
+    const r = await syncPost(srv.baseUrl, tokens.pg1, {
+      since: 0, changes: [{ id: 'pat-w1', name: 'stale', updatedAt: 1 }]
+    });
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.json.rejected, []);
+  });
 });
 
 describe('GET /api/me/scope', () => {
@@ -238,10 +274,25 @@ describe('GET /api/me/scope', () => {
     tokens = {
       pg1: await tok(srv.baseUrl, 'pg1', 'pw-pg1'),
       boss1: await tok(srv.baseUrl, 'boss1', 'pw-boss1'),
-      lost: await tok(srv.baseUrl, 'lost', 'pw-lost')
+      lost: await tok(srv.baseUrl, 'lost', 'pw-lost'),
+      root: await tok(srv.baseUrl, 'admin', 'test-admin-pass')
     };
   });
   after(async () => { await srv.stop(); });
+
+  test('the unrestricted instance admin gets the whole instance tree, so its patient-form unit picker is not empty', async () => {
+    const res = await fetch(`${srv.baseUrl}/api/me/scope`, { headers: { Authorization: `Bearer ${tokens.root}` } });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.assignment, null);
+    // Every department + unit in the instance is offered (this is the fix for
+    // the empty add-patient unit selector when logged in as the bootstrap admin).
+    assert.deepEqual(body.tree.departments.map(d => d.id).sort(), ['dep1', 'dep2']);
+    const dep1 = body.tree.departments.find(d => d.id === 'dep1');
+    assert.deepEqual(dep1.units.map(u => u.id).sort(), ['unit1', 'unit1b']);
+    const dep2 = body.tree.departments.find(d => d.id === 'dep2');
+    assert.deepEqual(dep2.units.map(u => u.id), ['unit2']);
+  });
 
   test('a single-unit member gets exactly their one-unit branch; sibling/out-of-scope units absent', async () => {
     const res = await fetch(`${srv.baseUrl}/api/me/scope`, { headers: { Authorization: `Bearer ${tokens.pg1}` } });

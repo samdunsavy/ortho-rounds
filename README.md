@@ -211,6 +211,16 @@ an install that already has patient data:
    back off — the backfilled ancestry is already stamped, so a wrong
    assignment is a config fix, not a data problem.
 
+> **Disaster recovery changes once scoping is on.** The "any device
+> re-uploads its cache to repopulate the server" safety net only covers
+> patients within that device's scope — a scoped clinician's device can
+> never repopulate patients outside its own subtree. If the server database
+> is lost, recover from a device logged in as the **unrestricted instance
+> admin** (no org assignment), whose cache spans everything and whose sync
+> reconcile still re-uploads missing records. Scoped devices instead evict
+> records that fall outside their scope rather than fighting the recovery by
+> re-pushing fragments they don't own.
+
 ## AI assistants (optional)
 
 The app can draft daily plans, polish presentation scripts, and generate unit

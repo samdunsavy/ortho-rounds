@@ -138,6 +138,20 @@ async function departmentBranch(store, dep, onlyUnitId, onlyWardId){
 
 export async function buildScopeTree(store, node){
   const empty = { departments: [] };
+  // The unrestricted instance admin (role admin, no orgId) has no assignment
+  // node, but it can read/write every patient — so its picker must span the
+  // whole instance, not come back empty. This is the one node without an id.
+  if(node && node.type === 'instance'){
+    const out = [];
+    for(const org of await store.listOrganizations()){
+      for(const h of await store.listHospitalsByOrg(org.id)){
+        for(const dep of await store.listDepartmentsByHospital(h.id)){
+          out.push(await departmentBranch(store, dep, null, null));
+        }
+      }
+    }
+    return { departments: out };
+  }
   if(!node || !node.id) return empty;
   switch(node.type){
     case 'ward': {

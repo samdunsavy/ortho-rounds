@@ -121,6 +121,36 @@ describe('patient form dept/unit/ward picker (MULTI_TENANT on)', () => {
     assert.equal(saved.unitId, 'u1');
     assert.equal(saved.wardId, 'ward1');
   });
+
+  test('invalidateScopeTree() forces the next picker open to refetch, so a unit created in the console appears without a page reload', async () => {
+    const { window, document } = loadFrontendEnv({ initScript: MODAL_FLOW_INIT_SCRIPT });
+    window.serverFlags = { MULTI_TENANT: true };
+    let calls = 0;
+    const treeBefore = { departments: [{ id: 'dep1', name: 'Ortho', units: [{ id: 'u1', name: 'Unit One', wards: [] }] }] };
+    const treeAfter = { departments: [{ id: 'dep1', name: 'Ortho', units: [{ id: 'u1', name: 'Unit One', wards: [] }, { id: 'u2', name: 'IV', wards: [] }] }] };
+    window.fetch = async (url) => {
+      if(String(url).includes('/api/me/scope')){
+        calls++;
+        return { ok: true, status: 200, json: async () => ({ assignment: null, tree: calls === 1 ? treeBefore : treeAfter }) };
+      }
+      return { ok: false, status: 404, json: async () => ({ error: 'not mocked' }) };
+    };
+
+    await window.openPatientModal(window.blankPatient());
+    assert.equal(calls, 1);
+    assert.deepEqual([...document.getElementById('f_unit').options].map(o => o.value).filter(Boolean), ['u1']);
+
+    // Reopen WITHOUT invalidating — served from the session cache, no refetch, IV still absent.
+    await window.openPatientModal(window.blankPatient());
+    assert.equal(calls, 1, 'cache hit — must not refetch');
+    assert.deepEqual([...document.getElementById('f_unit').options].map(o => o.value).filter(Boolean), ['u1']);
+
+    // Invalidate (as the admin console does after creating a unit), then reopen.
+    window.invalidateScopeTree();
+    await window.openPatientModal(window.blankPatient());
+    assert.equal(calls, 2, 'invalidation must force a refetch');
+    assert.deepEqual([...document.getElementById('f_unit').options].map(o => o.value).filter(Boolean).sort(), ['u1', 'u2'], 'the newly-created unit now appears in the picker');
+  });
 });
 
 describe('patient form dept/unit/ward picker (MULTI_TENANT off — legacy behavior unchanged)', () => {
