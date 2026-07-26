@@ -111,13 +111,84 @@ function adminOrgChooserHTML(){
 
 function renderAdminOverviewSection(){
   const chooser = document.getElementById('adminOverviewChooser');
-  const tiles = document.getElementById('adminStatTiles');
+  const body = document.getElementById('adminOverviewBody');
   const needsOrg = adminNeedsOrgChoice();
   if(chooser) chooser.hidden = !needsOrg;
-  if(tiles) tiles.hidden = needsOrg;
-  if(needsOrg){ if(tiles) tiles.innerHTML = ''; return; }
+  if(body) body.hidden = needsOrg;
+  if(needsOrg) return;
   renderAdminStatTilesInto(adminData.tree);
+  const attn = document.getElementById('adminNeedsAttention');
+  if(attn) attn.innerHTML = renderAdminNeedsAttentionHTML(computeAdminNeedsAttention(adminData.tree, adminData.users));
 }
+
+/** Four Needs-attention categories. A unit is "empty" when it has no wards,
+    no live patients and no assigned users — migration debris. */
+function computeAdminNeedsAttention(tree, users){
+  const groups = buildAssignNodeGroups(tree, []);
+  const unassigned = [], stale = [], disabled = [];
+  for(const u of users || []){
+    if(!u.active){ disabled.push(u); continue; }
+    if(!u.assignmentType || !u.assignmentId){ unassigned.push(u); continue; }
+    if(!assignLabelFor(groups, u.assignmentType, u.assignmentId)) stale.push(u);
+  }
+  const emptyUnits = [];
+  for(const h of (tree && tree.hospitals) || []){
+    for(const dep of h.departments || []){
+      for(const unit of dep.units || []){
+        const noWards = !(unit.wards || []).length;
+        const noPatients = !unit.stats || !unit.stats.livePatients;
+        const noUsers = !unit.stats || !unit.stats.users;
+        if(noWards && noPatients && noUsers) emptyUnits.push({ id: unit.id, name: unit.name });
+      }
+    }
+  }
+  return { unassigned, stale, emptyUnits, disabled };
+}
+
+function renderAdminNeedsAttentionHTML(cats){
+  const groups = [];
+  if(cats.unassigned.length) groups.push({ title: `${cats.unassigned.length} ${cats.unassigned.length === 1 ? 'person has' : 'people have'} no assignment`,
+    rows: cats.unassigned.map(u => `<button type="button" class="admin-attention-row" data-attention-people="unassigned">${escapeHTML(u.username)} — no assignment</button>`).join('') });
+  if(cats.stale.length) groups.push({ title: `${cats.stale.length} ${cats.stale.length === 1 ? 'person is' : 'people are'} assigned to a place that no longer exists`,
+    rows: cats.stale.map(u => `<button type="button" class="admin-attention-row" data-attention-people="stale">${escapeHTML(u.username)} — assigned to a place that no longer exists</button>`).join('') });
+  if(cats.emptyUnits.length) groups.push({ title: `${cats.emptyUnits.length} empty unit${cats.emptyUnits.length === 1 ? '' : 's'} (no wards, patients or staff)`,
+    rows: cats.emptyUnits.map(u => `<button type="button" class="admin-attention-row" data-attention-unit="${escapeHTML(u.id)}">${escapeHTML(u.name)}</button>`).join('') });
+  if(cats.disabled.length) groups.push({ title: `${cats.disabled.length} disabled account${cats.disabled.length === 1 ? '' : 's'}`,
+    rows: cats.disabled.map(u => `<button type="button" class="admin-attention-row" data-attention-people="disabled">${escapeHTML(u.username)} — disabled</button>`).join('') });
+  if(!groups.length) return '';
+  return `<h3>Needs attention</h3>` + groups.map(g => `<div class="admin-attention-group"><h4>${escapeHTML(g.title)}</h4>${g.rows}</div>`).join('');
+}
+
+/** Selects the first unit found in the tree and focuses its add-ward input.
+    With no units anywhere yet, asks the admin to add a department first. */
+function quickActionAddWard(){
+  switchAdminSection('structure');
+  const firstUnit = (adminData.tree && adminData.tree.hospitals || [])
+    .flatMap(h => h.departments || []).flatMap(dep => dep.units || [])[0];
+  if(!firstUnit){ showToast('Add a department first, then a unit'); return; }
+  selectAdminNode('unit', firstUnit.id);
+  document.querySelector(`[data-new-child-name="unit:${firstUnit.id}"]`)?.focus();
+}
+
+function quickActionAddPerson(){
+  switchAdminSection('people');
+  document.getElementById('adminNewUsername')?.focus();
+}
+
+function quickActionFixAssignment(){
+  adminUI.peopleFilter = 'unassigned';
+  switchAdminSection('people');
+}
+
+document.getElementById('adminOverviewBody')?.addEventListener('click', (e) => {
+  if(e.target.id === 'adminQuickAddPerson') return quickActionAddPerson();
+  if(e.target.id === 'adminQuickAddWard') return quickActionAddWard();
+  if(e.target.id === 'adminQuickFixAssignment') return quickActionFixAssignment();
+  const unitRow = e.target.closest('[data-attention-unit]');
+  if(unitRow){ switchAdminSection('structure'); selectAdminNode('unit', unitRow.dataset.attentionUnit); return; }
+  const peopleRow = e.target.closest('[data-attention-people]');
+  if(peopleRow){ adminUI.peopleFilter = peopleRow.dataset.attentionPeople; switchAdminSection('people'); return; }
+});
 
 function renderAdminStatTiles(tree){
   const postop = tree.hospitals.flatMap(h => h.departments).reduce((n, dep) => n + (dep.stats.byStatus.postop || 0), 0);

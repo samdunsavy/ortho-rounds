@@ -152,6 +152,83 @@ describe('Overview section', () => {
   });
 });
 
+describe('Overview: computeAdminNeedsAttention', () => {
+  const users = [
+    { id: 'u1', username: 'unassigned1', active: true, role: 'member', assignmentType: null, assignmentId: null },
+    { id: 'u2', username: 'stale1', active: true, role: 'member', assignmentType: 'unit', assignmentId: 'gone' },
+    { id: 'u3', username: 'fine1', active: true, role: 'member', assignmentType: 'unit', assignmentId: 'u1' },
+    { id: 'u4', username: 'off1', active: false, role: 'member', assignmentType: 'unit', assignmentId: 'u1' }
+  ];
+  const withEmptyUnit = JSON.parse(JSON.stringify(TREE));
+  withEmptyUnit.hospitals[0].departments[0].units.push({ id: 'u-empty', name: 'Empty Unit', stats: { livePatients: 0, byStatus: { postop: 0, preop: 0, conservative: 0, fordischarge: 0 }, users: 0, lastActivity: null }, wards: [] });
+
+  test('categorizes unassigned, stale, empty-unit and disabled', () => {
+    const { window } = loadFrontendEnv();
+    const cats = window.computeAdminNeedsAttention(withEmptyUnit, users);
+    assert.deepEqual([...cats.unassigned.map(u => u.id)], ['u1']);
+    assert.deepEqual([...cats.stale.map(u => u.id)], ['u2']);
+    assert.deepEqual([...cats.emptyUnits.map(u => u.id)], ['u-empty']);
+    assert.deepEqual([...cats.disabled.map(u => u.id)], ['u4']);
+  });
+
+  test('a unit with wards, patients or users is not "empty"', () => {
+    const { window } = loadFrontendEnv();
+    const cats = window.computeAdminNeedsAttention(TREE, []);
+    assert.deepEqual([...cats.emptyUnits], []); // u1 has patients+wards, u2 has a user
+  });
+
+  test('renderAdminNeedsAttentionHTML omits a category with zero entries', () => {
+    const { window } = loadFrontendEnv();
+    const html = window.renderAdminNeedsAttentionHTML({ unassigned: [], stale: [], emptyUnits: [], disabled: [] });
+    assert.equal(html, '');
+  });
+
+  test('renderAdminNeedsAttentionHTML lists a populated category', () => {
+    const { window } = loadFrontendEnv();
+    const html = window.renderAdminNeedsAttentionHTML({ unassigned: [{ id: 'u1', username: 'unassigned1' }], stale: [], emptyUnits: [], disabled: [] });
+    assert.ok(html.includes('unassigned1'));
+    assert.ok(html.includes('data-attention-people="unassigned"'));
+  });
+});
+
+describe('Overview: quick actions', () => {
+  test('Add person switches to People and focuses the create form', async () => {
+    const { window, document } = orgAdminEnv();
+    await window.loadAdminView();
+    document.getElementById('adminQuickAddPerson').dispatchEvent(new window.Event('click', { bubbles: true }));
+    assert.equal(document.getElementById('adminPeopleSection').hidden, false);
+    assert.equal(document.activeElement.id, 'adminNewUsername');
+  });
+
+  test('Fix an assignment switches to People with the Unassigned filter active', async () => {
+    const { window, document } = orgAdminEnv();
+    await window.loadAdminView();
+    document.getElementById('adminQuickFixAssignment').dispatchEvent(new window.Event('click', { bubbles: true }));
+    assert.equal(document.getElementById('adminPeopleSection').hidden, false);
+    assert.equal(document.getElementById('adminPeopleSection').dataset.peopleFilter, 'unassigned');
+  });
+
+  test('Add ward switches to Structure and selects the first unit', async () => {
+    const { window, document } = orgAdminEnv();
+    await window.loadAdminView();
+    document.getElementById('adminQuickAddWard').dispatchEvent(new window.Event('click', { bubbles: true }));
+    assert.equal(document.getElementById('adminStructureSection').hidden, false);
+    assert.equal(document.querySelector('[data-node="unit:u1"]').classList.contains('is-selected'), true);
+    assert.ok(document.querySelector('[data-new-child-name="unit:u1"]'));
+  });
+
+  test('a category entry navigates and filters: an empty-unit entry selects that unit in Structure', async () => {
+    const { window, document } = orgAdminEnv();
+    const withEmptyUnit = JSON.parse(JSON.stringify(TREE));
+    withEmptyUnit.hospitals[0].departments[0].units.push({ id: 'u-empty', name: 'Empty Unit', stats: { livePatients: 0, byStatus: { postop: 0, preop: 0, conservative: 0, fordischarge: 0 }, users: 0, lastActivity: null }, wards: [] });
+    window.api = async (path) => path.startsWith('/api/admin/org') ? withEmptyUnit : { users: [] };
+    await window.loadAdminView();
+    document.querySelector('[data-attention-unit="u-empty"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+    assert.equal(document.getElementById('adminStructureSection').hidden, false);
+    assert.equal(document.querySelector('[data-node="unit:u-empty"]').classList.contains('is-selected'), true);
+  });
+});
+
 describe('loadAdminView atomic adminData (Task 1 review fixes)', () => {
   test('failed tree fetch leaves prior DOM unchanged', async () => {
     const { window, document } = orgAdminEnv();

@@ -721,6 +721,12 @@
   .admin-stat-tile{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;text-align:center;}
   .admin-stat-tile .n{font-size:28px;font-weight:700;color:var(--ink);}
   .admin-stat-tile .l{font-size:12px;color:var(--ink-soft);margin-top:2px;}
+  .admin-quick-actions{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0;}
+  .admin-attention-group{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:10px;}
+  .admin-attention-group h4{margin:0 0 6px;font-size:13px;color:var(--ink-soft);}
+  .admin-attention-row{display:block;width:100%;text-align:left;background:none;border:0;border-top:1px solid var(--line-soft, var(--line));padding:8px 2px;color:var(--ink);cursor:pointer;font:inherit;min-height:44px;}
+  .admin-attention-row:first-of-type{border-top:0;}
+  .admin-attention-row:hover{background:var(--accent-soft);}
   .spec-badge{font-size:11px;border:1px solid var(--line);border-radius:10px;padding:1px 8px;color:var(--ink-soft);}
   .admin-status-bar{display:flex;height:8px;border-radius:4px;overflow:hidden;background:var(--line);margin:8px 0;}
   .admin-status-bar span{display:block;height:100%;}
@@ -2026,7 +2032,15 @@
 
   <div class="admin-section" id="adminOverviewSection">
     <div class="small-muted" id="adminOverviewChooser" hidden>Choose an organization on the Organizations tab first.</div>
-    <div class="admin-stat-tiles" id="adminStatTiles"></div>
+    <div id="adminOverviewBody">
+      <div class="admin-stat-tiles" id="adminStatTiles"></div>
+      <div class="admin-quick-actions">
+        <button class="btn" id="adminQuickAddPerson">Add person</button>
+        <button class="btn" id="adminQuickAddWard">Add ward</button>
+        <button class="btn" id="adminQuickFixAssignment">Fix an assignment</button>
+      </div>
+      <div id="adminNeedsAttention"></div>
+    </div>
   </div>
 
   <div class="admin-section" id="adminPeopleSection" hidden></div>
