@@ -707,4 +707,27 @@ describe('instance-admin org context', () => {
     await new Promise(r => setTimeout(r, 0));
     assert.deepEqual([...toasts], ['Enter an organization name']);
   });
+
+  test('creating a user while drilled into an org includes that org id (instance admin)', async () => {
+    const { window, document } = instanceAdminEnv();
+    const calls = [];
+    const baseApi = window.api;
+    window.api = async (path, opts) => {
+      calls.push({ path, opts });
+      if(opts && opts.method === 'POST' && path === '/api/admin/users') return { temporaryPassword: 'bone-plate-5678' };
+      return baseApi(path, opts);
+    };
+    window.alert = () => {};
+    await window.loadAdminView();
+    document.querySelector('[data-view-org="o1"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 0));
+
+    document.getElementById('adminNewUsername').value = 'drilledin';
+    document.getElementById('adminCreateUser').dispatchEvent(new window.Event('click', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 0));
+
+    const call = calls.find(c => c.path === '/api/admin/users' && c.opts && c.opts.method === 'POST');
+    assert.ok(call, 'expected a POST to /api/admin/users');
+    assert.deepEqual(JSON.parse(call.opts.body), { username: 'drilledin', role: 'member', orgId: 'o1' });
+  });
 });

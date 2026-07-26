@@ -726,11 +726,12 @@ async function handleApi(req, res, pathname){
         // resolveScope() grants any admin lacking an orgId unrestricted access
         // to every org's patients — so this must be a hard requirement, not a
         // client-side convention.
-        if(!body.orgId) return sendJSON(res, 400, { error: 'orgId required' });
-        if(!(await store.getOrganization(body.orgId))) return sendJSON(res, 404, { error: 'Organization not found' });
-        newUser.orgId = body.orgId;
+        const orgId = typeof body.orgId === 'string' ? body.orgId : '';
+        if(!orgId) return sendJSON(res, 400, { error: 'orgId required' });
+        if(!(await store.getOrganization(orgId))) return sendJSON(res, 404, { error: 'Organization not found' });
+        newUser.orgId = orgId;
         if(body.wardId){
-          if(!(await departmentInOrg(String(body.wardId), body.orgId))) return sendJSON(res, 403, { error: 'Department is not in this organization' });
+          if(!(await departmentInOrg(String(body.wardId), orgId))) return sendJSON(res, 403, { error: 'Department is not in this organization' });
           newUser.wardId = String(body.wardId);
         }
       }
@@ -795,6 +796,9 @@ async function handleApi(req, res, pathname){
     const body = await readBody(req) || {};
     const role = body.role === 'admin' || body.role === 'member' ? body.role : null;
     if(!role) return sendJSON(res, 400, { error: 'Role must be admin or member' });
+    if(isEnabled('MULTI_TENANT') && role === 'admin' && !target.orgId){
+      return sendJSON(res, 400, { error: 'Give this user an organization before making them an admin' });
+    }
     if(role === 'member' && target.role === 'admin'){
       // Demoting the only remaining admin would leave the org (or, for an
       // org-less instance admin, the whole instance) with nobody able to

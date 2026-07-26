@@ -1,6 +1,7 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { startServer, login, syncPost } from './helpers/server-harness.js';
+import { hashPassword } from '../auth.js';
 
 async function api(baseUrl, token, path, opts = {}){
   const res = await fetch(`${baseUrl}${path}`, {
@@ -201,6 +202,17 @@ describe('admin console — end-to-end provisioning flow (flag on)', () => {
     const bad = await api(srv.baseUrl, root, '/api/admin/users', { method: 'POST', body: { username: 'nowhere1', orgId: 'no-such-org' } });
     assert.equal(bad.status, 404);
   });
+
+  test('a non-string orgId on instance-admin create is rejected, not coerced', async () => {
+    // A crafted body like { orgId: { $ne: null } } must not slip past a
+    // truthiness check the way it would past a naive `if(!body.orgId)`.
+    const weird = await api(srv.baseUrl, root, '/api/admin/users', { method: 'POST', body: { username: 'objorg', orgId: { $ne: null } } });
+    assert.equal(weird.status, 400);
+    assert.equal(weird.json.error, 'orgId required');
+
+    const after = await api(srv.baseUrl, root, '/api/admin/users', { method: 'GET' });
+    assert.equal(after.json.users.some(u => u.username === 'objorg'), false);
+  });
 });
 
 describe('admin console — flag OFF: new routes do not exist', () => {
@@ -309,5 +321,42 @@ describe('user role changes (flag on)', () => {
   test('an unknown user is a 404', async () => {
     const missing = await api(srv.baseUrl, bossToken, '/api/admin/users/no-such-user/role', { method: 'POST', body: { role: 'admin' } });
     assert.equal(missing.status, 404);
+  });
+});
+
+describe('user role changes cannot re-create an org-less admin (flag on)', () => {
+  let srv, root;
+  before(async () => {
+    // Create isn't the only path to an org-less user (Task 1 closed create,
+    // but legacy/pre-existing rows can still have orgId: null) — seed one
+    // directly via the store to prove the /role route itself is guarded.
+    srv = await startServer({
+      multiTenant: true,
+      seed: async (store) => {
+        await store.createUser({
+          id: 'legacy-orphaned',
+          username: 'legacyorphan',
+          passwordHash: hashPassword('x', 's'),
+          passwordSalt: 's',
+          role: 'member',
+          orgId: null,
+          wardId: null,
+          active: true,
+          tokenVersion: 0,
+          createdAt: Date.now()
+        });
+      }
+    });
+    root = (await login(srv.baseUrl)).json.token;
+  });
+  after(async () => { await srv.stop(); });
+
+  test('promoting an org-less member to admin is refused, not silently unrestricted', async () => {
+    const promote = await api(srv.baseUrl, root, '/api/admin/users/legacy-orphaned/role', { method: 'POST', body: { role: 'admin' } });
+    assert.equal(promote.status, 400);
+    assert.equal(promote.json.error, 'Give this user an organization before making them an admin');
+
+    const listed = (await api(srv.baseUrl, root, '/api/admin/users', { method: 'GET' })).json.users;
+    assert.equal(listed.find(u => u.username === 'legacyorphan').role, 'member');
   });
 });
