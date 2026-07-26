@@ -3349,6 +3349,7 @@ function isPresented(id){
 function getFilteredRoundsItems(){
   const search = (document.getElementById('searchInput').value||'').toLowerCase();
   let items = patients.filter(p=>p.status!=='discharged');
+  items = filterByUnit(items, currentUnitFilter);
 
   if(currentFilter==='preop') items = items.filter(p=>p.status==='preop');
   if(currentFilter==='conservative') items = items.filter(p=>p.status==='conservative');
@@ -4272,6 +4273,7 @@ function bindSheets(){
       else if(a === 'otdoctors') void editDefaultOtDoctors();
       else if(a === 'pgroster') editPgRoster();
       else if(a === 'bulk') toggleBulkSelectMode();
+      else if(a === 'organize'){ if(!bulkSelectMode) toggleBulkSelectMode(); showToast('Select patients, then tap Move to unit'); }
       else if(a === 'bulkapply') applyBulkPlan();
       else if(a === 'consultant') setConsultantMode(!isConsultantMode());
       else if(a === 'darkmode') toggleDarkMode();
@@ -6199,6 +6201,39 @@ function flatUnitsFromScopeTree(tree){
   return out;
 }
 
+function moveCapableFromTree(tree){
+  return flatUnitsFromScopeTree(tree).length >= 2;
+}
+function filterByUnit(items, unitFilter){
+  if(!unitFilter) return items;
+  if(unitFilter === '__unsorted__') return items.filter(p => !p.unitId);
+  return items.filter(p => p.unitId === unitFilter);
+}
+let canMovePatients = false;
+let currentUnitFilter = '';
+async function refreshMoveCapability(){
+  if(!scopePickerActive()){ canMovePatients = false; }
+  else {
+    const { tree } = await loadScopeTree();
+    canMovePatients = moveCapableFromTree(tree);
+    renderUnitFilter(tree);
+  }
+  updateBulkBar();
+}
+
+function renderUnitFilter(tree){
+  const el = document.getElementById('unitFilter');
+  if(!el) return;
+  if(!canMovePatients){ el.hidden = true; return; }
+  el.hidden = false;
+  const units = flatUnitsFromScopeTree(tree);
+  const opts = ['<option value="">All units</option>', '<option value="__unsorted__">Unsorted (General)</option>']
+    .concat(units.map(u => `<option value="${escapeHTML(u.id)}">${escapeHTML(u.name)}</option>`));
+  el.innerHTML = opts.join('');
+  el.value = currentUnitFilter;
+  el.onchange = () => { currentUnitFilter = el.value || ''; renderRounds(); };
+}
+
 function movePatientToUnit(p, unitId){
   p.unitId = unitId;
   // Moving units invalidates any ward; the server re-derives ward + ancestry
@@ -7792,6 +7827,7 @@ async function refreshServerFlags(){
   }catch{ /* offline — leave as-is */ }
   updateAccountUI();
   void renderScopeSelector();
+  void refreshMoveCapability();
 }
 
 function openPresentationMode(){
@@ -8432,7 +8468,7 @@ function updateBulkBar(){
     bar.classList.remove('active');
   }
   const moveBtn = document.getElementById('bulkBarMoveBtn');
-  if(moveBtn) moveBtn.hidden = !(isAdmin() && scopePickerActive());
+  if(moveBtn) moveBtn.hidden = !canMovePatients;
 }
 
 function toggleBulkSelectMode(){
