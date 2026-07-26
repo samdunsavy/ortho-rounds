@@ -337,11 +337,9 @@ describe('admin soft busy state', () => {
 
   test('a failed loadAdminView clears busy and still surfaces the error', async () => {
     const { window, document } = loadFrontendEnv();
-    const toasts = [];
-    window.showToast = (m) => toasts.push(m);
     window.api = async () => { throw new window.Error('network down'); };
     document.getElementById('adminView').hidden = false;
-    await window.loadAdminView().catch(() => {});
+    await assert.rejects(() => window.loadAdminView(), /network down/);
     assert.equal(document.getElementById('adminView').classList.contains('is-busy'), false);
     assert.equal(document.getElementById('adminBusyStatus').hidden, true);
   });
@@ -351,6 +349,8 @@ describe('admin soft busy state', () => {
     window.localStorage.setItem('ortho_role', 'admin'); // instance admin
     let resolveUsersA;
     const usersAPending = new Promise(r => { resolveUsersA = r; });
+    let resolveUsersB;
+    const usersBPending = new Promise(r => { resolveUsersB = r; });
     let call = 0;
     window.api = async (path) => {
       if(path === '/api/admin/orgs') return { orgs: [
@@ -359,6 +359,7 @@ describe('admin soft busy state', () => {
       if(path === '/api/admin/users'){
         call += 1;
         if(call === 1){ await usersAPending; return { users: [] }; }
+        await usersBPending;
         return { users: [] };
       }
       return {};
@@ -367,13 +368,20 @@ describe('admin soft busy state', () => {
     const pA = window.loadAdminView();
     await new Promise(r => setTimeout(r, 0));
     const pB = window.loadAdminView();
-    await pB;
-    assert.equal(document.getElementById('adminView').classList.contains('is-busy'), false,
-      'B finished — should not be busy');
     resolveUsersA({ users: [] });
     await pA;
-    assert.equal(document.getElementById('adminView').classList.contains('is-busy'), false,
-      'stale A finishing must not leave busy stuck, and must not re-busy');
+    const view = document.getElementById('adminView');
+    const status = document.getElementById('adminBusyStatus');
+    assert.equal(view.classList.contains('is-busy'), true,
+      'stale A finished while B is pending — busy must remain set');
+    assert.equal(status.hidden, false,
+      'stale A finished while B is pending — busy status must remain visible');
+    resolveUsersB({ users: [] });
+    await pB;
+    assert.equal(view.classList.contains('is-busy'), false,
+      'B finished — busy must clear');
+    assert.equal(status.hidden, true,
+      'B finished — busy status must hide');
   });
 
   test('switching sections without loadAdminView does not flash busy', async () => {
@@ -422,13 +430,13 @@ describe('admin visual polish hooks', () => {
     const tile = document.querySelector('#adminStatTiles .admin-stat-tile');
     assert.ok(tile);
     const tileShadow = window.getComputedStyle(tile).boxShadow;
-    assert.notEqual(tileShadow, 'none');
+    assert.equal(tileShadow, 'var(--shadow-sm)');
     window.switchAdminSection('structure');
     window.selectAdminNode('unit', 'u1');
     const rail = document.getElementById('adminTreeRail');
     const detail = document.getElementById('adminDetailPane');
-    assert.notEqual(window.getComputedStyle(rail).boxShadow, 'none');
-    assert.notEqual(window.getComputedStyle(detail).boxShadow, 'none');
+    assert.equal(window.getComputedStyle(rail).boxShadow, 'var(--shadow-sm)');
+    assert.equal(window.getComputedStyle(detail).boxShadow, 'var(--shadow-sm)');
   });
 
   test('selected section tab uses accent-soft fill', async () => {
