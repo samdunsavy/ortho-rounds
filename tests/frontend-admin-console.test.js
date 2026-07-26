@@ -616,3 +616,95 @@ describe('409 blockedBy reaches the UI', () => {
     assert.deepEqual([...toasts], ["Can't delete — still has 2 patients"]);
   });
 });
+
+describe('instance-admin org context', () => {
+  const ORGS = [
+    { id: 'o1', name: 'Org One', plan: 'free', stats: { hospitals: 1, departments: 1, users: 2, livePatients: 3 } },
+    { id: 'o2', name: 'Org Two', plan: 'paid', stats: { hospitals: 0, departments: 0, users: 0, livePatients: 0 } }
+  ];
+  const ORG_ONE_TREE = {
+    org: { id: 'o1', name: 'Org One', stats: { livePatients: 3, byStatus: { postop: 3, preop: 0, conservative: 0, fordischarge: 0 }, users: 2, lastActivity: null } },
+    totals: { departments: 0, usersActive: 2, livePatients: 3 },
+    hospitals: []
+  };
+
+  function instanceAdminEnv(){
+    const env = loadFrontendEnv();
+    env.window.localStorage.setItem('ortho_role', 'admin'); // isAdmin() && no org id => instance admin
+    const paths = [];
+    env.window.api = async (path) => {
+      paths.push(path);
+      if(path === '/api/admin/orgs') return { orgs: ORGS };
+      if(path.startsWith('/api/admin/org')) return ORG_ONE_TREE;
+      if(path === '/api/admin/users') return { users: [
+        { id: 'usr2', username: 'Amit', role: 'member', active: true, orgId: 'o1', assignmentType: 'org', assignmentId: 'o1' }
+      ] };
+      return {};
+    };
+    return Object.assign({ paths }, env);
+  }
+
+  test('viewing an org loads that org tree; leaving it returns to the org cards', async () => {
+    const { window, document, paths } = instanceAdminEnv();
+    await window.loadAdminView();
+    assert.ok(document.getElementById('adminOrgsTab').innerHTML.includes('Org Two'));
+
+    document.querySelector('[data-view-org="o1"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 0));
+    assert.ok(paths.includes('/api/admin/org?orgId=o1'), 'expected the org tree to load for o1');
+
+    paths.length = 0;
+    document.getElementById('adminOrgsTab').innerHTML = ''; // prove it gets repainted
+    window.exitAdminOrgContext();
+    await new Promise(r => setTimeout(r, 0));
+    assert.deepEqual([...paths], ['/api/admin/orgs'], 'leaving must refetch the org list, not the hidden org tree');
+    assert.ok(document.getElementById('adminOrgsTab').innerHTML.includes('Org Two'));
+  });
+
+  test('the assignment picker still lists every org after drilling into one', async () => {
+    const { window, document } = instanceAdminEnv();
+    await window.loadAdminView();
+    document.querySelector('[data-view-org="o1"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 0));
+    const html = document.getElementById('adminDetailPane').innerHTML;
+    assert.ok(html.includes('value="org:o1"'));
+    assert.ok(html.includes('value="org:o2"'), 'the other org must remain assignable');
+  });
+
+  test('switching org drops the previous org selection', async () => {
+    const { window, document } = instanceAdminEnv();
+    await window.loadAdminView();
+    document.querySelector('[data-view-org="o1"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 0));
+    window.selectAdminNode('unit', 'gone-in-the-next-org');
+    assert.ok(document.getElementById('adminDetailPane').innerHTML.includes('no longer exists'));
+
+    window.exitAdminOrgContext();
+    await new Promise(r => setTimeout(r, 0));
+    document.querySelector('[data-view-org="o2"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 0));
+    assert.ok(!document.getElementById('adminDetailPane').innerHTML.includes('no longer exists'));
+  });
+
+  test('the Organization tab prompts for an org instead of sitting on Loading', async () => {
+    const { window, document } = instanceAdminEnv();
+    await window.loadAdminView();
+    document.getElementById('adminDetailPane').innerHTML = '<div class="small-muted">Loading…</div>';
+    document.querySelector('.admin-tab[data-admin-tab="org"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 0));
+    const html = document.getElementById('adminDetailPane').innerHTML;
+    assert.ok(!html.includes('Loading'));
+    assert.ok(html.includes('Choose an organization'));
+  });
+
+  test('creating an organization with a blank name says so instead of doing nothing', async () => {
+    const { window, document } = instanceAdminEnv();
+    const toasts = [];
+    window.showToast = (m) => toasts.push(m);
+    await window.loadAdminView();
+    document.getElementById('adminNewOrgName').value = '   ';
+    document.getElementById('adminAddOrgBtn').dispatchEvent(new window.Event('click', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 0));
+    assert.deepEqual([...toasts], ['Enter an organization name']);
+  });
+});

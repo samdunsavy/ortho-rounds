@@ -3612,33 +3612,6 @@ function bindAuthEvents(){
     openAdminView();
   });
   document.getElementById('desktopAdminBtn')?.addEventListener('click', openAdminView);
-  document.getElementById('adminView')?.addEventListener('click', async (e) => {
-    const tab = e.target.closest('[data-admin-tab]');
-    if(tab){ switchAdminTab(tab.dataset.adminTab); return; }
-    const addOrg = e.target.closest('#adminAddOrgBtn');
-    if(addOrg){
-      const name = document.getElementById('adminNewOrgName')?.value.trim();
-      if(!name) return;
-      try{ await api('/api/admin/orgs', { method: 'POST', body: JSON.stringify({ name }) }); await loadAdminView(); }
-      catch(err){ showToast(err.message); }
-      return;
-    }
-    const mkAdmin = e.target.closest('[data-create-org-admin]');
-    if(mkAdmin){
-      const oid = mkAdmin.dataset.createOrgAdmin;
-      const input = document.querySelector(`[data-new-org-admin="${oid}"]`);
-      const username = input?.value.trim();
-      if(!username) return;
-      try{
-        const r = await api(`/api/admin/orgs/${oid}/admin`, { method: 'POST', body: JSON.stringify({ username }) });
-        await showConfirm('Org admin created', `Temporary password for ${r.username}: ${r.temporaryPassword}\nIt is not shown again.`, { confirmLabel: 'Done' });
-        await loadAdminView();
-      }catch(err){ showToast(err.message); }
-      return;
-    }
-    const viewOrg = e.target.closest('[data-view-org]');
-    if(viewOrg){ adminViewOrgId = viewOrg.dataset.viewOrg; switchAdminTab('org'); loadAdminView().catch(err => showToast(err.message)); return; }
-  });
 }
 
 function isAdmin(){

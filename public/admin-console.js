@@ -59,11 +59,15 @@ function renderAdminTreeHTML(tree, selection){
 }
 
 function selectAdminNode(type, id){
-  adminState.selection = id ? { type, id } : { type };
   // The Organizations row isn't part of the org tree/detail pane — selecting
-  // it navigates to the separate all-orgs tab instead of rendering a detail
-  // panel for a "node" that doesn't exist in the tree.
-  if(type === 'orgs') switchAdminTab('orgs');
+  // it leaves any drilled-in org entirely and returns to the all-orgs list,
+  // rather than rendering a detail panel for a "node" that doesn't exist.
+  if(type === 'orgs'){
+    adminState.selection = { type };
+    exitAdminOrgContext();
+    return;
+  }
+  adminState.selection = id ? { type, id } : { type };
   renderAdminCommandCenter();
 }
 
@@ -329,6 +333,43 @@ document.getElementById('adminView')?.addEventListener('input', (e) => {
 });
 
 document.getElementById('adminView')?.addEventListener('click', (e) => {
+  const tabBtn = e.target.closest('[data-admin-tab]');
+  if(tabBtn){
+    e.stopPropagation();
+    if(tabBtn.dataset.adminTab === 'orgs'){ exitAdminOrgContext(); return; }
+    switchAdminTab('org');
+    if(isInstanceAdminUser() && !adminViewOrgId) showAdminOrgChooser();
+    return;
+  }
+  const viewOrgBtn = e.target.closest('[data-view-org]');
+  if(viewOrgBtn){
+    e.stopPropagation();
+    enterAdminOrgContext(viewOrgBtn.dataset.viewOrg);
+    return;
+  }
+  if(e.target.id === 'adminAddOrgBtn'){
+    e.stopPropagation();
+    const input = document.getElementById('adminNewOrgName');
+    const name = (input && input.value || '').trim();
+    if(!name){ showToast('Enter an organization name'); return; }
+    api('/api/admin/orgs', { method: 'POST', body: JSON.stringify({ name }) })
+      .then(() => { input.value = ''; return loadAdminView(); })
+      .catch(err => showToast(err.message));
+    return;
+  }
+  const mkOrgAdmin = e.target.closest('[data-create-org-admin]');
+  if(mkOrgAdmin){
+    e.stopPropagation();
+    const oid = mkOrgAdmin.dataset.createOrgAdmin;
+    const input = document.querySelector(`[data-new-org-admin="${oid}"]`);
+    const username = (input && input.value || '').trim();
+    if(!username){ showToast('Enter a username'); return; }
+    api(`/api/admin/orgs/${encodeURIComponent(oid)}/admin`, { method: 'POST', body: JSON.stringify({ username }) })
+      .then(r => showConfirm('Org admin created', `Temporary password for ${r.username}: ${r.temporaryPassword}\nIt is not shown again.`, { confirmLabel: 'Done' }))
+      .then(() => loadAdminView())
+      .catch(err => showToast(err.message));
+    return;
+  }
   const addBtn = e.target.closest('[data-add-child]');
   if(addBtn){
     e.stopPropagation();
@@ -503,6 +544,7 @@ function renderAssignSelectOptionsHTML(groups, selType, selId){
 
 function renderAdminOrgsTab(orgs){
   const el = document.getElementById('adminOrgsTab');
+  if(!el) return;
   el.innerHTML = `<h3>Organizations</h3>` + orgs.map(o => `
     <div class="admin-org-card" data-org-id="${escapeHTML(o.id)}">
       <strong>${escapeHTML(o.name)}</strong> <span class="spec-badge">${escapeHTML(o.plan)}</span>
@@ -519,25 +561,60 @@ function renderAdminOrgsTab(orgs){
     </div>`;
 }
 
-let adminViewOrgId = null; // instance admin: which org's tree is loaded
+let adminViewOrgId = null;  // instance admin: which org's tree is loaded
+let adminAllOrgs = [];      // instance admin: every org, kept across a drill-in
+
+/** Leave a drilled-in org and go back to the all-orgs list. Clearing the id
+    is what makes the next loadAdminView() take the orgs branch — without it
+    every later reload silently refreshed the hidden org tree instead. */
+function exitAdminOrgContext(){
+  adminViewOrgId = null;
+  adminState.tree = null;
+  adminState.selection = null;
+  switchAdminTab('orgs');
+  loadAdminView().catch(err => showToast(err.message || 'Could not load admin data'));
+}
+
+/** Enter an org's tree. Selection and tree are dropped so a node picked in
+    the previous org cannot render as "That item no longer exists" here. */
+function enterAdminOrgContext(orgId){
+  adminViewOrgId = orgId;
+  adminState.tree = null;
+  adminState.selection = null;
+  switchAdminTab('org');
+  loadAdminView().catch(err => showToast(err.message || 'Could not load admin data'));
+}
+
+/** The Organization tab is meaningless for an instance admin until they pick
+    an org; without this it kept whatever was last painted, which on a fresh
+    open is the "Loading…" placeholder. */
+function showAdminOrgChooser(){
+  const rail = document.getElementById('adminTreeRail');
+  if(rail) rail.innerHTML = '';
+  const detail = document.getElementById('adminDetailPane');
+  if(detail) detail.innerHTML = '<div class="small-muted">Choose an organization on the Organizations tab first.</div>';
+  const tiles = document.getElementById('adminStatTiles');
+  if(tiles) tiles.innerHTML = '';
+}
 
 async function loadAdminView(){
   const qs = isInstanceAdminUser() && adminViewOrgId ? `?orgId=${encodeURIComponent(adminViewOrgId)}` : '';
   if(isInstanceAdminUser() && !adminViewOrgId){
-    document.getElementById('adminTabs').style.display = '';
+    const tabs = document.getElementById('adminTabs');
+    if(tabs) tabs.style.display = '';
     switchAdminTab('orgs');
-    adminState.orgs = (await api('/api/admin/orgs')).orgs;
-    renderAdminOrgsTab(adminState.orgs);
+    adminAllOrgs = (await api('/api/admin/orgs')).orgs;
+    adminState.orgs = adminAllOrgs;
+    renderAdminOrgsTab(adminAllOrgs);
     return;
   }
   const [tree, usersRes] = await Promise.all([api('/api/admin/org' + qs), api('/api/admin/users')]);
   adminState.tree = tree;
-  // Org admins (and an instance admin drilled into one org) have exactly one
-  // org in scope: the one buildOrgTree just resolved. Without this, the
-  // assignment picker's Organizations optgroup is always empty for them —
-  // GET /api/admin/orgs is instance-admin-only, so there's no other client
-  // source for this org's identity.
-  adminState.orgs = tree.org ? [tree.org] : [];
+  // An instance admin keeps the full list they already fetched, so drilling
+  // into one org doesn't strip every other org out of the assignment picker.
+  // An org admin has exactly one org in scope: the one buildOrgTree resolved
+  // (GET /api/admin/orgs is instance-admin-only, so there is no other source).
+  adminState.orgs = adminAllOrgs.length ? adminAllOrgs : (tree.org ? [tree.org] : []);
   adminState.users = isInstanceAdminUser() && adminViewOrgId
     ? usersRes.users.filter(u => u.orgId === adminViewOrgId)
     : usersRes.users;
@@ -552,8 +629,10 @@ function renderAdminStatTilesInto(tree){
 }
 
 function switchAdminTab(tab){
-  document.getElementById('adminOrgPane').style.display = tab === 'org' ? '' : 'none';
-  document.getElementById('adminOrgsTab').style.display = tab === 'orgs' ? '' : 'none';
+  const orgPane = document.getElementById('adminOrgPane');
+  if(orgPane) orgPane.style.display = tab === 'org' ? '' : 'none';
+  const orgsPane = document.getElementById('adminOrgsTab');
+  if(orgsPane) orgsPane.style.display = tab === 'orgs' ? '' : 'none';
   document.querySelectorAll('.admin-tab').forEach(b => b.classList.toggle('active', b.dataset.adminTab === tab));
   // The stat tiles are only ever painted by the 'org' branch of
   // loadAdminView(); leaving them showing a stale "Loading…" (or a stale
@@ -568,6 +647,10 @@ function switchAdminTab(tab){
 function openAdminView(){
   document.getElementById('adminView').hidden = false;
   adminViewOrgId = null;
+  adminAllOrgs = [];
+  // A stale selection or tree from the previous session would render as
+  // "That item no longer exists" before the first fetch resolves.
+  adminState = { tree: null, users: [], orgs: [], selection: null };
   for(const id of ['adminStatTiles', 'adminTreeRail', 'adminDetailPane']){
     const el = document.getElementById(id);
     if(el) el.innerHTML = '<div class="small-muted">Loading…</div>';
