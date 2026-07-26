@@ -73,9 +73,17 @@ export function loadFrontendEnv(options){
 
   const appJs = readFileSync(path.join(PUBLIC_DIR, 'app.js'), 'utf8');
   const milestonesJs = readFileSync(path.join(PUBLIC_DIR, 'milestones.js'), 'utf8');
-  const adminConsoleJs = readFileSync(path.join(PUBLIC_DIR, 'admin-console.js'), 'utf8');
+  // The four admin-*.js files are separate <script> tags in index.html, so
+  // in a real browser they share one top-level lexical scope (the same
+  // realm's global environment record covers let/const across every classic
+  // script). This jsdom harness's separate window.eval() calls do NOT share
+  // that scope with each other (see this file's own header note) — so they
+  // must be joined into a single eval() to see each other's top-level
+  // `adminData`/`adminUI`, exactly like appJs+initScript already are below.
+  const adminFiles = ['admin-console.js', 'admin-people.js', 'admin-structure.js', 'admin-orgs.js']
+    .map(f => readFileSync(path.join(PUBLIC_DIR, f), 'utf8'));
   window.eval(milestonesJs);
-  window.eval(adminConsoleJs);
+  window.eval(adminFiles.join('\n'));
   window.eval(initScript ? `${appJs}\n${initScript}` : appJs);
 
   return { dom, window, document: window.document };
