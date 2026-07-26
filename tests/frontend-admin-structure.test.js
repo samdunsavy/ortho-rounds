@@ -95,7 +95,7 @@ describe('structural actions', () => {
   test('unit offers rename, move (to other departments) and delete', () => {
     const { window } = loadFrontendEnv();
     const html = window.renderAdminDetailHTML({ tree: TREE, users: [], orgs: [], selection: { type: 'unit', id: 'u1' } });
-    assert.ok(html.includes('data-rename-node="unit:u1"'));
+    assert.ok(html.includes('data-rename-target="unit:u1"'));
     assert.ok(html.includes('data-move-node="unit:u1"'));
     assert.ok(html.includes('data-delete-node="unit:u1"'));
   });
@@ -179,10 +179,12 @@ describe('request-level coverage: structural actions (wrong parentKey corrupts d
     const { window, document } = loadFrontendEnv();
     const calls = [];
     window.api = mockAdminApi(calls);
-    window.prompt = () => 'Renamed Unit';
     document.getElementById('adminDetailPane').innerHTML =
       window.renderAdminDetailHTML({ tree: TREE, users: [], orgs: [], selection: { type: 'unit', id: 'u1' } });
-    document.querySelector('[data-rename-node="unit:u1"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+    document.querySelector('[data-rename-target="unit:u1"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+    const input = document.querySelector('[data-rename-input="unit:u1"]');
+    input.value = 'Renamed Unit';
+    input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     await new Promise(r => setTimeout(r, 0));
     const call = calls.find(c => c.path === '/api/admin/nodes/unit/u1');
     assert.ok(call, 'expected a PATCH to /api/admin/nodes/unit/u1');
@@ -209,19 +211,22 @@ describe('request-level coverage: structural actions (wrong parentKey corrupts d
 });
 
 describe('mobile read-only (removed in Task 11 — still gates today)', () => {
-  test('narrow viewport hides editing controls and shows a note', () => {
+  test('narrow viewport hides move/delete controls and shows a note', () => {
     const { window } = loadFrontendEnv();
     Object.defineProperty(window, 'innerWidth', { value: 500, configurable: true });
     const html = window.renderAdminDetailHTML({ tree: TREE, users: [], orgs: [], selection: { type: 'unit', id: 'u1' } });
-    assert.ok(!html.includes('data-rename-node='));
-    assert.ok(!html.includes('data-add-child='));
+    assert.ok(html.includes('data-rename-target='));
+    assert.ok(html.includes('data-add-child='));
+    assert.ok(!html.includes('data-move-node='));
+    assert.ok(!html.includes('data-delete-node='));
     assert.ok(html.includes('larger screen'));
   });
   test('wide viewport keeps the controls', () => {
     const { window } = loadFrontendEnv();
     Object.defineProperty(window, 'innerWidth', { value: 1200, configurable: true });
     const html = window.renderAdminDetailHTML({ tree: TREE, users: [], orgs: [], selection: { type: 'unit', id: 'u1' } });
-    assert.ok(html.includes('data-rename-node='));
+    assert.ok(html.includes('data-rename-target='));
+    assert.ok(html.includes('data-move-node='));
   });
 });
 
@@ -489,5 +494,124 @@ describe('tree filter', () => {
     filter.dispatchEvent(new window.Event('input', { bubbles: true }));
     assert.ok(document.querySelector('[data-node="unit:u2"]')); // "General" — matches, and its ancestors auto-expand
     assert.ok(!document.querySelector('[data-node="unit:u1"]')); // "IV" — does not match, hidden
+  });
+});
+
+describe('people assigned here', () => {
+  const USERS = [
+    { id: 'u1', username: 'alice', assignmentType: 'unit', assignmentId: 'u1' },
+    { id: 'u2', username: 'bob', assignmentType: 'ward', assignmentId: 'w1' }
+  ];
+
+  test('usersAssignedTo returns exactly the users assigned to that node', () => {
+    const { window } = loadFrontendEnv();
+    assert.deepEqual(window.usersAssignedTo('unit', 'u1', USERS).map(u => u.username), ['alice']);
+    assert.deepEqual(window.usersAssignedTo('ward', 'w1', USERS).map(u => u.username), ['bob']);
+    assert.deepEqual(window.usersAssignedTo('unit', 'u2', USERS), []);
+  });
+
+  test('the detail panel lists people assigned here, linking into People', () => {
+    const { window } = loadFrontendEnv();
+    const html = window.renderAdminDetailHTML({ tree: TREE, users: USERS, orgs: [], selection: { type: 'unit', id: 'u1' } });
+    assert.ok(html.includes('alice'));
+    assert.ok(html.includes('data-attention-people="node:unit:u1"'));
+  });
+
+  test('a node with nobody assigned says so', () => {
+    const { window } = loadFrontendEnv();
+    const html = window.renderAdminDetailHTML({ tree: TREE, users: [], orgs: [], selection: { type: 'unit', id: 'u1' } });
+    assert.ok(html.includes('Nobody is assigned here yet'));
+  });
+});
+
+describe('department specialty', () => {
+  test('department detail shows a specialty field', () => {
+    const { window } = loadFrontendEnv();
+    const html = window.renderAdminDetailHTML({ tree: TREE, users: [], orgs: [], selection: { type: 'department', id: 'd1' } });
+    assert.match(html, /data-specialty-node="d1"[^>]*value="ortho"/);
+  });
+
+  test('changing the specialty field patches the department', async () => {
+    const { window, document } = loadFrontendEnv();
+    const calls = [];
+    window.api = async (path, opts) => { calls.push({ path, opts }); return {}; };
+    document.getElementById('adminDetailPane').innerHTML =
+      window.renderAdminDetailHTML({ tree: TREE, users: [], orgs: [], selection: { type: 'department', id: 'd1' } });
+    const input = document.querySelector('[data-specialty-node="d1"]');
+    input.value = 'trauma';
+    input.dispatchEvent(new window.Event('change', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 0));
+    const call = calls.find(c => c.path === '/api/admin/nodes/department/d1');
+    assert.ok(call);
+    assert.deepEqual(JSON.parse(call.opts.body), { name: 'Ortho', specialty: 'trauma' });
+  });
+});
+
+describe('inline rename', () => {
+  test('clicking the name reveals an editable input with the current name', async () => {
+    const { window, document } = loadFrontendEnv();
+    window.api = async (path) => path.startsWith('/api/admin/org') ? TREE : { users: [] };
+    await window.loadAdminView();
+    window.switchAdminSection('structure');
+    window.selectAdminNode('unit', 'u1');
+    document.querySelector('[data-rename-target="unit:u1"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+    const input = document.querySelector('[data-rename-input="unit:u1"]');
+    assert.equal(input.value, 'IV');
+  });
+
+  test('Enter saves; Escape cancels without a request', async () => {
+    const { window, document } = loadFrontendEnv();
+    const calls = [];
+    window.api = async (path, opts) => { calls.push({ path, opts }); return path.startsWith('/api/admin/org') ? TREE : { users: [] }; };
+    await window.loadAdminView();
+    window.switchAdminSection('structure');
+    window.selectAdminNode('unit', 'u1');
+    document.querySelector('[data-rename-target="unit:u1"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+    let input = document.querySelector('[data-rename-input="unit:u1"]');
+    input.value = 'IV Ward';
+    input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await new Promise(r => setTimeout(r, 0));
+    const patchCall = calls.find(c => c.path === '/api/admin/nodes/unit/u1' && c.opts.method === 'PATCH');
+    assert.ok(patchCall);
+    assert.deepEqual(JSON.parse(patchCall.opts.body), { name: 'IV Ward' });
+
+    calls.length = 0;
+    document.querySelector('[data-rename-target="unit:u1"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+    input = document.querySelector('[data-rename-input="unit:u1"]');
+    input.value = 'Should not save';
+    input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    assert.ok(!document.querySelector('[data-rename-input="unit:u1"]'));
+    assert.equal(calls.filter(c => c.opts && c.opts.method === 'PATCH').length, 0);
+  });
+
+  test('a name over 80 characters shows an inline message and does not save', async () => {
+    const { window, document } = loadFrontendEnv();
+    const calls = [];
+    window.api = async (path, opts) => { calls.push({ path, opts }); return {}; };
+    document.getElementById('adminDetailPane').innerHTML =
+      window.renderAdminDetailHTML({ tree: TREE, users: [], orgs: [], selection: { type: 'unit', id: 'u1' } });
+    document.querySelector('[data-rename-target="unit:u1"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+    const input = document.querySelector('[data-rename-input="unit:u1"]');
+    input.value = 'x'.repeat(81);
+    input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await new Promise(r => setTimeout(r, 0));
+    assert.equal(calls.filter(c => c.opts && c.opts.method === 'PATCH').length, 0);
+    assert.ok(document.getElementById('adminDetailPane').textContent.includes('80'));
+  });
+});
+
+describe('add-child in-flight guard', () => {
+  test('the add button and input disable while the request is in flight, and clear on success', async () => {
+    const { window, document } = loadFrontendEnv();
+    let resolveApi;
+    window.api = () => new Promise(r => { resolveApi = r; });
+    document.getElementById('adminDetailPane').innerHTML =
+      window.renderAdminDetailHTML({ tree: TREE, users: [], orgs: [], selection: { type: 'unit', id: 'u1' } });
+    document.querySelector('[data-new-child-name="unit:u1"]').value = 'New Ward';
+    document.querySelector('[data-add-child="unit:u1"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 0));
+    assert.equal(document.querySelector('[data-add-child="unit:u1"]').disabled, true);
+    assert.equal(document.querySelector('[data-new-child-name="unit:u1"]').disabled, true);
+    resolveApi({ id: 'w9', unitId: 'u1', name: 'New Ward' });
   });
 });

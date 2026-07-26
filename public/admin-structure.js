@@ -148,6 +148,10 @@ function childListOf(type, node){
   return [];
 }
 
+function usersAssignedTo(type, id, users){
+  return (users || []).filter(u => u.assignmentType === type && u.assignmentId === id);
+}
+
 function nodeStatsHTML(node, type){
   const s = node.stats;
   if(!s) return '';
@@ -177,18 +181,32 @@ function renderAdminDetailHTML(state){
   const kidsHTML = kids.length
     ? kids.map(k => `<button type="button" class="admin-cc-row" data-node="${escapeHTML(childType)}:${escapeHTML(k.id)}">${escapeHTML(k.name)}<span class="cc-count">${k.stats ? k.stats.livePatients : ''}</span></button>`).join('')
     : (childType ? `<div class="small-muted">No ${childType}s yet.</div>` : `<div class="small-muted">No contents.</div>`);
-  const addChild = (childType && !adminIsNarrow()) ? `
+  const addChild = childType ? `
     <div class="admin-inline-form">
-      <input placeholder="New ${escapeHTML(childType)} name" maxlength="80" data-new-child-name="${escapeHTML(sel.type)}:${escapeHTML(sel.id)}">
+      <label for="adminNewChildName-${escapeHTML(sel.id)}" class="sr-only">New ${escapeHTML(childType)} name</label>
+      <input id="adminNewChildName-${escapeHTML(sel.id)}" placeholder="New ${escapeHTML(childType)} name" maxlength="80" data-new-child-name="${escapeHTML(sel.type)}:${escapeHTML(sel.id)}">
       <button class="btn" data-add-child="${escapeHTML(sel.type)}:${escapeHTML(sel.id)}">Add ${escapeHTML(childType)}</button>
     </div>` : '';
+  const specialtyHTML = sel.type === 'department' ? `
+    <div class="admin-inline-form">
+      <label for="adminSpecialty-${escapeHTML(sel.id)}">Specialty</label>
+      <input id="adminSpecialty-${escapeHTML(sel.id)}" data-specialty-node="${escapeHTML(sel.id)}" value="${escapeHTML(node.specialty || '')}">
+    </div>` : '';
+  const assignedUsers = sel.type === 'org' ? [] : usersAssignedTo(sel.type, sel.id, state.users);
+  const peopleHTML = sel.type === 'org' ? '' : `
+    <h4>People assigned here</h4>
+    ${assignedUsers.length
+      ? `<div class="admin-cc-children">${assignedUsers.map(u => `<button type="button" class="admin-attention-row" data-attention-people="node:${escapeHTML(sel.type)}:${escapeHTML(sel.id)}">${escapeHTML(u.username)}</button>`).join('')}</div>`
+      : '<div class="small-muted">Nobody is assigned here yet.</div>'}`;
   return `
     <div class="admin-detail-head">
-      <h3>${escapeHTML(node.name)}</h3>
+      <h3><span data-rename-target="${escapeHTML(sel.type)}:${escapeHTML(sel.id)}">${escapeHTML(node.name)}</span></h3>
       <span class="spec-badge">${escapeHTML(humanNodeType(sel.type))}</span>
       ${renderAdminNodeActionsHTML(state, sel, hit)}
     </div>
+    ${specialtyHTML}
     ${nodeStatsHTML(node, sel.type)}
+    ${peopleHTML}
     <h4>${childType ? childType[0].toUpperCase() + childType.slice(1) + 's' : 'Contents'}</h4>
     <div class="admin-cc-children">${kidsHTML}</div>
     ${addChild}`;
@@ -226,11 +244,9 @@ function adminIsNarrow(){
 }
 
 function renderAdminNodeActionsHTML(state, sel, hit){
-  if(adminIsNarrow()) return '<span class="small-muted">Open on a larger screen to edit</span>';
   const key = `${sel.type}:${sel.id}`;
-  if(sel.type === 'org'){
-    return `<span class="admin-node-actions"><button class="btn" data-rename-node="${escapeHTML(key)}">Rename</button></span>`;
-  }
+  if(sel.type === 'org') return '';
+  if(adminIsNarrow()) return '<span class="small-muted">Open on a larger screen to move or delete</span>';
   const blocked = deleteBlockedReason(hit.node, sel.type);
   const parents = validMoveParents(state.tree, sel.type, hit.parentId);
   const moveHTML = MOVE_PARENT_TYPE[sel.type] ? `
@@ -241,7 +257,6 @@ function renderAdminNodeActionsHTML(state, sel, hit){
   const deleteLabel = blocked ? `Can't delete — ${escapeHTML(blocked)}` : 'Delete';
   return `
     <span class="admin-node-actions">
-      <button class="btn" data-rename-node="${escapeHTML(key)}">Rename</button>
       ${moveHTML}
       <button class="btn" data-delete-node="${escapeHTML(key)}"${blocked ? ' disabled' : ''} title="${escapeHTML(deleteLabel)}">${escapeHTML(deleteLabel)}</button>
     </span>`;
@@ -284,6 +299,7 @@ document.getElementById('adminStructureSection')?.addEventListener('click', (e) 
   const addBtn = e.target.closest('[data-add-child]');
   if(addBtn){
     e.stopPropagation();
+    if(addBtn.disabled) return;
     const raw = addBtn.dataset.addChild;
     const i = raw.indexOf(':');
     const parentType = raw.slice(0, i), parentId = raw.slice(i + 1);
@@ -293,25 +309,31 @@ document.getElementById('adminStructureSection')?.addEventListener('click', (e) 
     const route = addChildRouteFor(parentType);
     if(!route) return;
     const body = route.parentKey ? { [route.parentKey]: parentId, name } : { name };
+    addBtn.disabled = true;
+    if(input) input.disabled = true;
     api(route.path, { method: 'POST', body: JSON.stringify(body) })
       .then(() => { invalidateHierarchyCaches(); return loadAdminView(); })
-      .catch(err => showToast(err.message));
+      .catch(err => {
+        showToast(err.message);
+        addBtn.disabled = false;
+        if(input) input.disabled = false;
+      });
     return;
   }
-  const renameBtn = e.target.closest('[data-rename-node]');
-  if(renameBtn){
+  const renameTarget = e.target.closest('[data-rename-target]');
+  if(renameTarget){
     e.stopPropagation();
-    const raw = renameBtn.dataset.renameNode;
-    const i = raw.indexOf(':');
-    const type = raw.slice(0, i), id = raw.slice(i + 1);
-    const hit = findAdminNode(adminData.tree, type, id);
-    const next = window.prompt('New name', hit ? hit.node.name : '');
-    if(next === null) return;
-    const name = next.trim();
-    if(!name || name.length > 80){ showToast('Name required (max 80 chars)'); return; }
-    api(`/api/admin/nodes/${encodeURIComponent(type)}/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ name }) })
-      .then(() => { invalidateHierarchyCaches(); return loadAdminView(); })
-      .catch(err => showToast(err.message));
+    const key = renameTarget.dataset.renameTarget;
+    const i = key.indexOf(':');
+    const type = key.slice(0, i), id = key.slice(i + 1);
+    const hitNode = type === 'org' ? (adminData.tree && adminData.tree.org) : (findAdminNode(adminData.tree, type, id) || {}).node;
+    const input = document.createElement('input');
+    input.value = hitNode ? hitNode.name : renameTarget.textContent;
+    input.dataset.renameInput = key;
+    input.maxLength = 80;
+    renameTarget.replaceWith(input);
+    input.focus();
+    input.select();
     return;
   }
   const delBtn = e.target.closest('[data-delete-node]');
@@ -363,6 +385,18 @@ document.getElementById('adminStructureSection')?.addEventListener('input', (e) 
 });
 
 document.getElementById('adminStructureSection')?.addEventListener('change', async (e) => {
+  const specialty = e.target.closest('[data-specialty-node]');
+  if(specialty){
+    const id = specialty.dataset.specialtyNode;
+    const hit = findAdminNode(adminData.tree, 'department', id);
+    const nameEl = document.querySelector(`[data-rename-target="department:${id}"]`);
+    const name = hit ? hit.node.name : (nameEl && nameEl.textContent.trim());
+    if(!name) return;
+    api(`/api/admin/nodes/department/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ name, specialty: specialty.value.trim() || 'ortho' }) })
+      .then(() => loadAdminView())
+      .catch(err => showToast(err.message));
+    return;
+  }
   const moveSel = e.target.closest('[data-move-node]');
   if(moveSel){
     const newParentId = moveSel.value;
@@ -374,4 +408,28 @@ document.getElementById('adminStructureSection')?.addEventListener('change', asy
       .then(() => { invalidateHierarchyCaches(); return loadAdminView(); })
       .catch(err => { showToast(err.message); loadAdminView(); });
   }
+});
+
+document.getElementById('adminStructureSection')?.addEventListener('keydown', (e) => {
+  const input = e.target.closest('[data-rename-input]');
+  if(!input) return;
+  const key = input.dataset.renameInput;
+  const i = key.indexOf(':');
+  const type = key.slice(0, i), id = key.slice(i + 1);
+  if(e.key === 'Escape'){
+    renderAdminStructureBody();
+    return;
+  }
+  if(e.key !== 'Enter') return;
+  const name = input.value.trim();
+  if(!name || name.length > 80){
+    const msg = document.createElement('div');
+    msg.className = 'small-muted admin-rename-error';
+    msg.textContent = 'Name required (max 80 characters)';
+    input.after(msg);
+    return;
+  }
+  api(`/api/admin/nodes/${encodeURIComponent(type)}/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ name }) })
+    .then(() => { invalidateHierarchyCaches(); return loadAdminView(); })
+    .catch(err => showToast(err.message));
 });

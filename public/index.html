@@ -771,6 +771,10 @@
   .admin-cc-sep{height:1px;background:var(--line);margin:8px 4px;}
   .admin-detail-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;}
   .admin-detail-head h3{margin:0;}
+  .admin-detail-head h3 span[data-rename-target]{cursor:text;border-bottom:1px dashed transparent;}
+  .admin-detail-head h3 span[data-rename-target]:hover{border-bottom-color:var(--line);}
+  .admin-detail-head input[data-rename-input]{font-size:inherit;font-weight:700;width:100%;}
+  .admin-rename-error{color:#b23c3c;}
   .admin-cc-children{display:flex;flex-direction:column;gap:2px;margin-bottom:8px;}
   .admin-node-actions{display:flex;gap:6px;align-items:center;margin-left:auto;flex-wrap:wrap;}
   .admin-node-actions .btn[disabled]{opacity:.55;cursor:not-allowed;}
