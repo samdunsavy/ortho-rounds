@@ -151,3 +151,19 @@ describe('Overview section', () => {
     assert.match(tiles.map(t => t.textContent).join(' '), /5/); // live patients
   });
 });
+
+describe('loadAdminView atomic adminData (Task 1 review fixes)', () => {
+  test('failed tree fetch leaves prior DOM unchanged', async () => {
+    const { window, document } = orgAdminEnv();
+    await window.loadAdminView();
+    window.switchAdminSection('people');
+    const before = document.getElementById('adminPeopleSection').innerHTML;
+    window.api = async (path) => {
+      if(path === '/api/admin/users') return { users: [{ id: 'new1', username: 'should-not-render', role: 'member', active: true, orgId: null, assignmentType: null, assignmentId: null }] };
+      if(path.startsWith('/api/admin/org')) throw new Error('tree fetch failed');
+      return {};
+    };
+    await assert.rejects(() => window.loadAdminView(), /tree fetch failed/);
+    assert.equal(document.getElementById('adminPeopleSection').innerHTML, before);
+  });
+});

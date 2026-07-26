@@ -165,6 +165,107 @@ describe('user lifecycle', () => {
   });
 });
 
+describe('unscoped instance-admin People (Task 1 review fixes)', () => {
+  function instanceAdminEnv(apiFn){
+    const env = loadFrontendEnv();
+    env.window.localStorage.setItem('ortho_role', 'admin');
+    if(apiFn) env.window.api = apiFn;
+    return env;
+  }
+
+  test('detailed assignment shows Within org name, not stale, with edit-in-org action', () => {
+    const { window } = instanceAdminEnv();
+    const users = [
+      { id: 'u1', username: 'pat', role: 'member', active: true, orgId: 'o1', assignmentType: 'unit', assignmentId: 'u1' }
+    ];
+    const orgs = [{ id: 'o1', name: 'Pilot Org', plan: 'free', stats: { hospitals: 0, departments: 0, users: 1, livePatients: 0 } }];
+    const html = window.renderAdminUsersPanelHTML({ tree: null, users, orgs });
+    assert.ok(html.includes('Within Pilot Org'));
+    assert.ok(!html.includes('no longer exists'));
+    assert.ok(!html.includes('data-assign-user'));
+    assert.ok(html.includes('data-enter-user-org="o1"'));
+  });
+
+  test('org-level assignment still resolves by name in unscoped view', () => {
+    const { window } = instanceAdminEnv();
+    const users = [
+      { id: 'u2', username: 'amy', role: 'member', active: true, orgId: 'o1', assignmentType: 'org', assignmentId: 'o1' }
+    ];
+    const orgs = [{ id: 'o1', name: 'Pilot Org', plan: 'free', stats: { hospitals: 0, departments: 0, users: 1, livePatients: 0 } }];
+    const html = window.renderAdminUsersPanelHTML({ tree: null, users, orgs });
+    assert.ok(html.includes('Pilot Org'));
+    assert.ok(!html.includes('no longer exists'));
+    assert.ok(html.includes('data-enter-user-org="o1"'));
+  });
+
+  test('edit-in-org enters that organization context', async () => {
+    const paths = [];
+    const { window, document } = instanceAdminEnv(async (path) => {
+      paths.push(path);
+      if(path === '/api/admin/orgs') return { orgs: [{ id: 'o1', name: 'Pilot Org', plan: 'free', stats: { hospitals: 0, departments: 0, users: 0, livePatients: 0 } }] };
+      if(path === '/api/admin/users') return { users: [
+        { id: 'u1', username: 'pat', role: 'member', active: true, orgId: 'o1', assignmentType: 'unit', assignmentId: 'u1' }
+      ] };
+      if(path.startsWith('/api/admin/org')) return TREE;
+      return {};
+    });
+    await window.loadAdminView();
+    window.switchAdminSection('people');
+    document.querySelector('[data-enter-user-org="o1"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 0));
+    assert.ok(paths.includes('/api/admin/org?orgId=o1'));
+    assert.equal(document.getElementById('adminStructureSection').hidden, false);
+  });
+
+  test('drilled-in instance admin keeps the assign select for resolved placements', async () => {
+    const { window, document } = instanceAdminEnv(async (path) => {
+      if(path === '/api/admin/orgs') return { orgs: [{ id: 'bfv2-org', name: 'Default', plan: 'free', stats: { hospitals: 1, departments: 1, users: 2, livePatients: 5 } }] };
+      if(path === '/api/admin/users') return { users: CC_USERS };
+      if(path.startsWith('/api/admin/org')) return TREE;
+      return {};
+    });
+    await window.loadAdminView();
+    document.querySelector('[data-view-org="bfv2-org"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 0));
+    window.switchAdminSection('people');
+    const html = document.getElementById('adminPeopleSection').innerHTML;
+    assert.ok(html.includes('data-assign-user="usr2"'));
+    assert.match(html, /value="org:bfv2-org"\s+selected/);
+  });
+
+  test('create form hidden in unscoped view; Go to Organizations shown instead', async () => {
+    const { window, document } = instanceAdminEnv(async (path) => {
+      if(path === '/api/admin/orgs') return { orgs: [{ id: 'o1', name: 'Pilot Org', plan: 'free', stats: { hospitals: 0, departments: 0, users: 0, livePatients: 0 } }] };
+      if(path === '/api/admin/users') return { users: [] };
+      return {};
+    });
+    await window.loadAdminView();
+    window.switchAdminSection('people');
+    assert.equal(document.getElementById('adminCreateUser'), null);
+    assert.ok(document.getElementById('adminPeoplePickOrg'));
+    assert.ok(document.getElementById('adminPeopleSection').textContent.includes('Choose an organization'));
+  });
+
+  test('Go to Organizations switches to the orgs section', async () => {
+    const { window, document } = instanceAdminEnv(async (path) => {
+      if(path === '/api/admin/orgs') return { orgs: [{ id: 'o1', name: 'Pilot Org', plan: 'free', stats: { hospitals: 0, departments: 0, users: 0, livePatients: 0 } }] };
+      if(path === '/api/admin/users') return { users: [] };
+      return {};
+    });
+    await window.loadAdminView();
+    window.switchAdminSection('people');
+    document.getElementById('adminPeoplePickOrg').dispatchEvent(new window.Event('click', { bubbles: true }));
+    assert.equal(document.getElementById('adminOrgsSection').hidden, false);
+  });
+
+  test('username input has maxlength 32', () => {
+    const { window } = loadFrontendEnv();
+    Object.defineProperty(window, 'innerWidth', { value: 1200, configurable: true });
+    const html = window.renderAdminUsersPanelHTML({ tree: TREE, users: CC_USERS, orgs: [] });
+    assert.match(html, /id="adminNewUsername"[^>]*maxlength="32"/);
+  });
+});
+
 describe('mobile read-only (removed in Task 11 — still gates today)', () => {
   test('narrow users panel has no live write path: no checkbox, no assign select, but still shows username and assignment as text', () => {
     const { window } = loadFrontendEnv();

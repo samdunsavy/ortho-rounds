@@ -10,7 +10,7 @@ function renderAdminOrgsSection(){
       <strong>${escapeHTML(o.name)}</strong> <span class="spec-badge">${escapeHTML(o.plan)}</span>
       <div class="small-muted">${o.stats.hospitals} hospitals · ${o.stats.departments} departments · ${o.stats.users} users · ${o.stats.livePatients} live patients</div>
       <div class="admin-inline-form">
-        <input placeholder="New org admin username" data-new-org-admin="${escapeHTML(o.id)}">
+        <input placeholder="New org admin username" maxlength="32" data-new-org-admin="${escapeHTML(o.id)}">
         <button class="btn" data-create-org-admin="${escapeHTML(o.id)}">Create org admin</button>
         <button class="btn" data-view-org="${escapeHTML(o.id)}">View</button>
       </div>

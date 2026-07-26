@@ -52,6 +52,7 @@ describe('detail panel', () => {
     assert.ok(html.includes('7MOW'));
     assert.ok(html.includes('data-add-child="unit:u1"'));
     assert.ok(html.includes('>Unit<'));
+    assert.ok(html.includes('maxlength="80"') && html.includes('data-new-child-name="unit:u1"'));
   });
   test('department detail lists its units and offers add-unit', () => {
     const { window } = loadFrontendEnv();

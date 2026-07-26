@@ -102,7 +102,7 @@ function renderAdminDetailHTML(state){
     : (childType ? `<div class="small-muted">No ${childType}s yet.</div>` : `<div class="small-muted">No contents.</div>`);
   const addChild = (childType && !adminIsNarrow()) ? `
     <div class="admin-inline-form">
-      <input placeholder="New ${escapeHTML(childType)} name" data-new-child-name="${escapeHTML(sel.type)}:${escapeHTML(sel.id)}">
+      <input placeholder="New ${escapeHTML(childType)} name" maxlength="80" data-new-child-name="${escapeHTML(sel.type)}:${escapeHTML(sel.id)}">
       <button class="btn" data-add-child="${escapeHTML(sel.type)}:${escapeHTML(sel.id)}">Add ${escapeHTML(childType)}</button>
     </div>` : '';
   return `

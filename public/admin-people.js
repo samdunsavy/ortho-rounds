@@ -3,8 +3,23 @@
    task ports the old users-table code over unchanged in behaviour, reading
    adminData/adminUI instead of adminState. */
 
+function orgNameForUser(user, orgs){
+  const hit = (orgs || []).find(o => o.id === user.orgId);
+  return hit ? hit.name : (user.orgId || 'their organization');
+}
+
+function peopleAssignmentDisplay(u, groups, orgs, unscoped){
+  const selType = u.assignmentType || null, selId = u.assignmentId || null;
+  if(!selType || !selId) return { text: '—', readOnly: true, enterOrgId: null };
+  const label = assignLabelFor(groups, selType, selId);
+  if(label) return { text: label, readOnly: unscoped, enterOrgId: unscoped && u.orgId ? u.orgId : null };
+  if(unscoped) return { text: `Within ${orgNameForUser(u, orgs)}`, readOnly: true, enterOrgId: u.orgId || null };
+  return { text: 'Assigned to a place that no longer exists', readOnly: true, enterOrgId: null };
+}
+
 function renderAdminUsersPanelHTML(state){
   const narrow = adminIsNarrow();
+  const unscoped = adminNeedsOrgChoice();
   const groups = buildAssignNodeGroups(state.tree, state.orgs);
   const rows = (state.users || []).map(u => {
     const selType = u.assignmentType || null, selId = u.assignmentId || null;
@@ -12,12 +27,17 @@ function renderAdminUsersPanelHTML(state){
     const actions = narrow ? '' : `
           <button class="btn" data-user-toggle="${escapeHTML(u.id)}">${u.active ? 'Disable' : 'Enable'}</button>
           <button class="btn" data-user-reset="${escapeHTML(u.id)}">Reset password</button>`;
-    const checkCell = narrow ? '<td></td>' : `<td><input type="checkbox" data-user-check="${escapeHTML(u.id)}"></td>`;
-    const label = assignLabelFor(groups, selType, selId);
-    const assignText = label || (selType && selId ? 'Assigned to a place that no longer exists' : '—');
-    const assignCell = narrow
-      ? `<td>${escapeHTML(assignText)}</td>`
-      : `<td><select data-assign-user="${escapeHTML(u.id)}" data-prev="${escapeHTML(prev)}">${renderAssignSelectOptionsHTML(groups, selType, selId)}</select></td>`;
+    const checkCell = (narrow || unscoped) ? '<td></td>' : `<td><input type="checkbox" data-user-check="${escapeHTML(u.id)}"></td>`;
+    const placement = peopleAssignmentDisplay(u, groups, state.orgs, unscoped);
+    let assignCell;
+    if(narrow || placement.readOnly){
+      const editBtn = placement.enterOrgId && !narrow
+        ? ` <button type="button" class="btn" data-enter-user-org="${escapeHTML(placement.enterOrgId)}">Edit in org</button>`
+        : '';
+      assignCell = `<td>${escapeHTML(placement.text)}${editBtn}</td>`;
+    }else{
+      assignCell = `<td><select data-assign-user="${escapeHTML(u.id)}" data-prev="${escapeHTML(prev)}">${renderAssignSelectOptionsHTML(groups, selType, selId)}</select></td>`;
+    }
     return `
       <tr data-user-row="${escapeHTML(u.id)}" data-username="${escapeHTML((u.username || '').toLowerCase())}">
         ${checkCell}
@@ -29,9 +49,11 @@ function renderAdminUsersPanelHTML(state){
       </tr>`;
   }).join('');
   const narrowNote = narrow ? '<div class="small-muted">Open on a larger screen to edit</div>' : '';
-  const createUserForm = narrow ? '' : `
+  const createUserForm = narrow ? '' : unscoped ? `
+    <div class="small-muted">Choose an organization on the Organizations tab to create users.</div>
+    <button type="button" class="btn" id="adminPeoplePickOrg">Go to Organizations</button>` : `
     <div class="admin-inline-form">
-      <input id="adminNewUsername" placeholder="New username">
+      <input id="adminNewUsername" placeholder="New username" maxlength="32">
       <label class="scribe-check"><input type="checkbox" id="adminNewUserAdmin"> Admin</label>
       <button class="btn" id="adminCreateUser">Create user</button>
     </div>`;
@@ -63,7 +85,7 @@ function selectedAdminUserIds(){
 function refreshAdminBulkBar(){
   const bar = document.getElementById('adminBulkBar');
   if(!bar) return;
-  if(adminIsNarrow()){ bar.hidden = true; bar.innerHTML = ''; return; }
+  if(adminIsNarrow() || adminNeedsOrgChoice()){ bar.hidden = true; bar.innerHTML = ''; return; }
   const ids = selectedAdminUserIds();
   if(!ids.length){ bar.hidden = true; bar.innerHTML = ''; return; }
   const groups = buildAssignNodeGroups(adminData.tree, adminData.orgs);
@@ -82,6 +104,17 @@ document.getElementById('adminPeopleSection')?.addEventListener('input', (e) => 
 });
 
 document.getElementById('adminPeopleSection')?.addEventListener('click', (e) => {
+  const enterOrgBtn = e.target.closest('[data-enter-user-org]');
+  if(enterOrgBtn){
+    e.stopPropagation();
+    enterAdminOrgContext(enterOrgBtn.dataset.enterUserOrg);
+    return;
+  }
+  if(e.target.id === 'adminPeoplePickOrg'){
+    e.stopPropagation();
+    switchAdminSection('orgs');
+    return;
+  }
   if(e.target.id === 'adminBulkApply'){
     e.stopPropagation();
     const ids = selectedAdminUserIds();
@@ -117,13 +150,15 @@ document.getElementById('adminPeopleSection')?.addEventListener('click', (e) => 
   }
   if(e.target.id === 'adminCreateUser'){
     e.stopPropagation();
+    if(adminNeedsOrgChoice()){ showToast('Choose an organization first'); return; }
     const nameEl = document.getElementById('adminNewUsername');
     const username = (nameEl.value || '').trim();
     if(!username){ showToast('Enter a username'); return; }
     const role = document.getElementById('adminNewUserAdmin').checked ? 'admin' : 'member';
     const body = { username, role };
     const orgId = adminUI.viewedOrgId || (adminData.tree && adminData.tree.org && adminData.tree.org.id) || null;
-    if(orgId) body.orgId = orgId;
+    if(!orgId){ showToast('Choose an organization first'); return; }
+    body.orgId = orgId;
     api('/api/admin/users', { method: 'POST', body: JSON.stringify(body) })
       .then(res => { window.alert(`User created. Temporary password (shown once): ${res.temporaryPassword}`); nameEl.value = ''; return loadAdminView(); })
       .catch(err => showToast(err.message));

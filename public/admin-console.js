@@ -219,18 +219,23 @@ function invalidateHierarchyCaches(){
 
 async function loadAdminView(){
   const instAdmin = isInstanceAdminUser();
-  const usersPromise = api('/api/admin/users');
-  if(instAdmin){
-    const [usersRes, orgsRes] = await Promise.all([usersPromise, api('/api/admin/orgs')]);
-    adminUI.allOrgs = orgsRes.orgs;
-    adminData.orgs = adminUI.allOrgs;
-    adminData.users = adminUI.viewedOrgId ? usersRes.users.filter(u => u.orgId === adminUI.viewedOrgId) : usersRes.users;
-    adminData.tree = adminUI.viewedOrgId ? await api(`/api/admin/org?orgId=${encodeURIComponent(adminUI.viewedOrgId)}`) : null;
-  }else{
-    const [usersRes, tree] = await Promise.all([usersPromise, api('/api/admin/org')]);
-    adminData.users = usersRes.users;
-    adminData.tree = tree;
-    adminData.orgs = tree.org ? [tree.org] : [];
+  try{
+    let tree, users, orgs;
+    if(instAdmin){
+      const [usersRes, orgsRes] = await Promise.all([api('/api/admin/users'), api('/api/admin/orgs')]);
+      adminUI.allOrgs = orgsRes.orgs;
+      orgs = adminUI.allOrgs;
+      users = adminUI.viewedOrgId ? usersRes.users.filter(u => u.orgId === adminUI.viewedOrgId) : usersRes.users;
+      tree = adminUI.viewedOrgId ? await api(`/api/admin/org?orgId=${encodeURIComponent(adminUI.viewedOrgId)}`) : null;
+    }else{
+      const [usersRes, treeRes] = await Promise.all([api('/api/admin/users'), api('/api/admin/org')]);
+      users = usersRes.users;
+      tree = treeRes;
+      orgs = tree.org ? [tree.org] : [];
+    }
+    adminData = { tree, users, orgs };
+  }catch(err){
+    throw err;
   }
   if(instAdmin) renderAdminOrgsSection();
   renderAdminSection();
