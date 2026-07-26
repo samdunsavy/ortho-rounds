@@ -548,6 +548,17 @@ describe('department specialty', () => {
 });
 
 describe('inline rename', () => {
+  test('the rename target is a focusable button', () => {
+    const { window, document } = loadFrontendEnv();
+    document.getElementById('adminDetailPane').innerHTML =
+      window.renderAdminDetailHTML({ tree: TREE, users: [], orgs: [], selection: { type: 'unit', id: 'u1' } });
+    const btn = document.querySelector('[data-rename-target="unit:u1"]');
+    assert.equal(btn.tagName, 'BUTTON');
+    assert.equal(btn.type, 'button');
+    btn.focus();
+    assert.equal(document.activeElement, btn);
+  });
+
   test('clicking the name reveals an editable input with the current name', async () => {
     const { window, document } = loadFrontendEnv();
     window.api = async (path) => path.startsWith('/api/admin/org') ? TREE : { users: [] };

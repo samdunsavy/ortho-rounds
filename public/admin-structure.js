@@ -200,7 +200,7 @@ function renderAdminDetailHTML(state){
       : '<div class="small-muted">Nobody is assigned here yet.</div>'}`;
   return `
     <div class="admin-detail-head">
-      <h3><span data-rename-target="${escapeHTML(sel.type)}:${escapeHTML(sel.id)}">${escapeHTML(node.name)}</span></h3>
+      <h3><button type="button" class="admin-rename-target" data-rename-target="${escapeHTML(sel.type)}:${escapeHTML(sel.id)}">${escapeHTML(node.name)}</button></h3>
       <span class="spec-badge">${escapeHTML(humanNodeType(sel.type))}</span>
       ${renderAdminNodeActionsHTML(state, sel, hit)}
     </div>
@@ -411,6 +411,12 @@ document.getElementById('adminStructureSection')?.addEventListener('change', asy
 });
 
 document.getElementById('adminStructureSection')?.addEventListener('keydown', (e) => {
+  const renameTrigger = e.target.closest('[data-rename-target]');
+  if(renameTrigger && !e.target.closest('[data-rename-input]') && (e.key === 'Enter' || e.key === ' ')){
+    e.preventDefault();
+    renameTrigger.click();
+    return;
+  }
   const input = e.target.closest('[data-rename-input]');
   if(!input) return;
   const key = input.dataset.renameInput;
