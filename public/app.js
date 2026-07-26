@@ -3849,6 +3849,11 @@ function bindEvents(){
     void editDefaultOtDoctors();
   });
   document.getElementById('bulkPlanBtn')?.addEventListener('click', toggleBulkSelectMode);
+  document.getElementById('organizePatientsBtn')?.addEventListener('click', ()=>{
+    document.getElementById('moreMenuPanel')?.classList.remove('open');
+    if(!bulkSelectMode) toggleBulkSelectMode();
+    showToast('Select patients, then tap Move to unit');
+  });
   document.getElementById('bulkPlanApplyBtn')?.addEventListener('click', applyBulkPlan);
   document.getElementById('whatsappHandoverBtn')?.addEventListener('click', copyHandoverWhatsApp);
   document.getElementById('consultantModeBtn')?.addEventListener('click', ()=> setConsultantMode(!isConsultantMode()));

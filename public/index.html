@@ -407,6 +407,7 @@
   .more-menu-wrap{position:relative;}
   .more-menu-panel{
     display:none;position:absolute;right:0;top:calc(100% + 6px);min-width:180px;
+    max-height:min(70vh, 520px);overflow-y:auto;
     background:var(--chrome);border:1px solid rgba(255,255,255,0.15);border-radius:var(--radius-sm);
     padding:6px;z-index:60;box-shadow:var(--shadow-lg);
   }
@@ -1750,6 +1751,7 @@
         <button class="ibtn" id="defaultOtDoctorsBtn">Default OT doctors</button>
         <button class="ibtn" id="pgRosterBtn">PG roster</button>
         <button class="ibtn" id="bulkPlanBtn">Bulk plan</button>
+        <button class="ibtn" id="organizePatientsBtn">Organize patients</button>
         <button class="ibtn" id="bulkPlanApplyBtn">Apply bulk plan</button>
         <button class="ibtn" id="consultantModeBtn">Consultant mode</button>
         <button class="ibtn" id="darkModeBtn">Dark mode</button>
