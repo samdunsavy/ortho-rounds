@@ -391,6 +391,29 @@ describe('filter chips', () => {
     assert.equal(document.querySelector('[data-people-filter="admins"]').classList.contains('is-active'), true);
     assert.equal(document.querySelector('[data-user-row="b"]').style.display, 'none');
   });
+
+  test('assigning a user while Unassigned filter is active hides that row', async () => {
+    const { window, document } = loadFrontendEnv();
+    Object.defineProperty(window, 'innerWidth', { value: 1200, configurable: true });
+    const users = [
+      { id: 'u1', username: 'pat', role: 'member', active: true, orgId: 'bfv2-org', assignmentType: null, assignmentId: null }
+    ];
+    window.api = async (path, opts) => {
+      if(path.startsWith('/api/admin/org')) return TREE;
+      if(path === '/api/admin/users') return { users };
+      if(opts && opts.method === 'POST') return { ok: true };
+      return {};
+    };
+    await window.loadAdminView();
+    window.switchAdminSection('people');
+    document.querySelector('[data-people-filter="unassigned"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+    assert.equal(document.querySelector('[data-user-row="u1"]').style.display, '');
+    const sel = document.querySelector('[data-assign-user="u1"]');
+    sel.value = 'unit:u1';
+    sel.dispatchEvent(new window.Event('change', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 0));
+    assert.equal(document.querySelector('[data-user-row="u1"]').style.display, 'none');
+  });
 });
 
 describe('own-row and last-admin disabled states', () => {
@@ -411,6 +434,40 @@ describe('own-row and last-admin disabled states', () => {
     assert.equal(window.isLastActiveAdmin(SOLE_ADMIN[0], SOLE_ADMIN), true);
     const twoAdmins = [SOLE_ADMIN[0], Object.assign({}, SOLE_ADMIN[1], { role: 'admin' })];
     assert.equal(window.isLastActiveAdmin(twoAdmins[0], twoAdmins), false);
+  });
+
+  test('isLastActiveAdmin is false for inactive admins', () => {
+    const { window } = loadFrontendEnv();
+    const inactive = { id: 'x', role: 'admin', active: false, orgId: 'bfv2-org' };
+    assert.equal(window.isLastActiveAdmin(inactive, [inactive]), false);
+  });
+
+  test('disabling one of two active admins refreshes last-admin guard on the survivor', async () => {
+    const { window, document } = loadFrontendEnv();
+    window.localStorage.setItem('ortho_username', 'otheradmin');
+    let users = [
+      { id: 'a1', username: 'admin1', role: 'admin', active: true, orgId: 'bfv2-org', assignmentType: null, assignmentId: null },
+      { id: 'a2', username: 'admin2', role: 'admin', active: true, orgId: 'bfv2-org', assignmentType: null, assignmentId: null }
+    ];
+    window.api = async (path, opts) => {
+      if(path.startsWith('/api/admin/org')) return TREE;
+      if(path === '/api/admin/users') return { users };
+      if(opts && opts.method === 'POST' && /\/disable$/.test(path)){
+        const id = path.match(/\/users\/([^/]+)\/disable/)[1];
+        users = users.map(u => u.id === id ? Object.assign({}, u, { active: false }) : u);
+        return { ok: true };
+      }
+      return {};
+    };
+    window.showConfirm = () => Promise.resolve(true);
+    await window.loadAdminView();
+    window.switchAdminSection('people');
+    assert.equal(document.querySelector('[data-user-toggle="a2"]').disabled, false);
+    document.querySelector('[data-user-toggle="a1"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 0));
+    const survivorBtn = document.querySelector('[data-user-toggle="a2"]');
+    assert.equal(survivorBtn.disabled, true);
+    assert.match(survivorBtn.title, /last active admin/i);
   });
 
   test('your own row disables the Disable button with a reason', () => {

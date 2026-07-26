@@ -10,7 +10,7 @@ function isSelfUser(u){
 /** Mirrors the server's own last-admin check in POST .../role (server.js)
     so the client never offers a click that can only 400. */
 function isLastActiveAdmin(user, users){
-  if(user.role !== 'admin') return false;
+  if(user.role !== 'admin' || !user.active) return false;
   return !(users || []).some(u => u.id !== user.id && u.role === 'admin' && u.active && (u.orgId || null) === (user.orgId || null));
 }
 
@@ -33,7 +33,7 @@ function orgNameForUser(user, orgs){
 
 function peopleAssignmentDisplay(u, groups, orgs, unscoped){
   const selType = u.assignmentType || null, selId = u.assignmentId || null;
-  if(!selType || !selId) return { text: '—', readOnly: true, enterOrgId: null };
+  if(!selType || !selId) return { text: '—', readOnly: unscoped, enterOrgId: null };
   const label = assignLabelFor(groups, selType, selId);
   if(label) return { text: label, readOnly: unscoped, enterOrgId: unscoped && u.orgId ? u.orgId : null };
   if(unscoped) return { text: `Within ${orgNameForUser(u, orgs)}`, readOnly: true, enterOrgId: u.orgId || null };
@@ -68,7 +68,7 @@ function renderAdminPeopleRowHTML(u, state){
   const nameCell = self ? `${escapeHTML(u.username)} <span class="spec-badge">You</span>` : escapeHTML(u.username);
   return `${checkCell}
         <td>${nameCell}</td>
-        <td>${u.role === 'admin' ? '<span class="spec-badge">admin</span>' : 'member'}</td>
+        <td>${u.role === 'admin' ? '<span class="spec-badge">Admin</span>' : 'Member'}</td>
         ${assignCell}
         <td>${u.active ? 'active' : 'disabled'}${actions}
         </td>`;
@@ -83,6 +83,24 @@ function renderAdminPeopleRow(userId){
   const u = (adminData.users || []).find(x => x.id === userId);
   if(!row || !u) return;
   row.innerHTML = renderAdminPeopleRowHTML(u);
+}
+
+/** Keeps Disable disabled/title in sync when the user list changes (e.g. one
+    of two org admins was disabled — the survivor becomes last active admin). */
+function refreshAdminPeopleRowGuards(){
+  const users = adminData.users || [];
+  document.querySelectorAll('[data-user-row]').forEach(tr => {
+    const u = users.find(x => x.id === tr.dataset.userRow);
+    const btn = tr.querySelector('[data-user-toggle]');
+    if(!u || !btn) return;
+    const self = isSelfUser(u);
+    const lastAdmin = isLastActiveAdmin(u, users);
+    const guard = self || (u.active && lastAdmin);
+    const disableTitle = self ? 'You cannot disable your own account' : (u.active && lastAdmin ? 'This is the last active admin — promote someone else first' : '');
+    btn.disabled = guard;
+    if(guard) btn.title = disableTitle;
+    else btn.removeAttribute('title');
+  });
 }
 
 function renderAdminUsersPanelHTML(state){
@@ -217,6 +235,7 @@ document.getElementById('adminPeopleSection')?.addEventListener('click', (e) => 
           ? usersRes.users.filter(u => u.orgId === adminUI.viewedOrgId)
           : usersRes.users;
         renderAdminPeopleRow(id);
+        refreshAdminPeopleRowGuards();
         applyAdminPeopleFilters();
       }catch(err){ showToast(err.message); }
     })();
@@ -264,7 +283,15 @@ document.getElementById('adminPeopleSection')?.addEventListener('change', async 
   const nodeId = sepIdx === -1 ? null : raw.slice(sepIdx + 1);
   try{
     await api(`/api/admin/users/${sel.dataset.assignUser}/assign`, { method: 'POST', body: JSON.stringify({ nodeType, nodeId }) });
+    const userId = sel.dataset.assignUser;
+    const u = (adminData.users || []).find(x => x.id === userId);
+    if(u){
+      u.assignmentType = nodeType;
+      u.assignmentId = nodeId;
+    }
     sel.dataset.prev = raw;
+    renderAdminPeopleRow(userId);
+    applyAdminPeopleFilters();
     showToast('Assignment updated');
   }catch(err){
     sel.value = sel.dataset.prev || '';
