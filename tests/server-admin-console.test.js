@@ -237,3 +237,77 @@ describe('admin console — flag OFF: new routes do not exist', () => {
     assert.ok(u.json.temporaryPassword);
   });
 });
+
+describe('user role changes (flag on)', () => {
+  let srv, root, orgId, bossToken, bossId, memberId, memberToken;
+
+  before(async () => {
+    srv = await startServer({ multiTenant: true, seed: async () => {} });
+    root = (await login(srv.baseUrl)).json.token;
+    const org = await api(srv.baseUrl, root, '/api/admin/orgs', { method: 'POST', body: { name: 'Role Org' } });
+    orgId = org.json.id;
+    const boss = await api(srv.baseUrl, root, `/api/admin/orgs/${orgId}/admin`, { method: 'POST', body: { username: 'roleboss' } });
+    bossId = boss.json.id;
+    bossToken = (await login(srv.baseUrl, 'roleboss', boss.json.temporaryPassword)).json.token;
+    const m = await api(srv.baseUrl, bossToken, '/api/admin/users', { method: 'POST', body: { username: 'rolemember' } });
+    memberId = m.json.id;
+    memberToken = (await login(srv.baseUrl, 'rolemember', m.json.temporaryPassword)).json.token;
+  });
+  after(async () => { await srv.stop(); });
+
+  test('an invalid role value is rejected', async () => {
+    const bad = await api(srv.baseUrl, bossToken, `/api/admin/users/${memberId}/role`, { method: 'POST', body: { role: 'superuser' } });
+    assert.equal(bad.status, 400);
+    assert.equal(bad.json.error, 'Role must be admin or member');
+  });
+
+  test('you cannot change your own role', async () => {
+    const self = await api(srv.baseUrl, bossToken, `/api/admin/users/${bossId}/role`, { method: 'POST', body: { role: 'member' } });
+    assert.equal(self.status, 400);
+    assert.equal(self.json.error, 'You cannot change your own role');
+  });
+
+  test('demoting the last active admin of an org is refused', async () => {
+    // rolemember is still a member, so roleboss is the org's only admin.
+    const only = await api(srv.baseUrl, root, `/api/admin/users/${bossId}/role`, { method: 'POST', body: { role: 'member' } });
+    assert.equal(only.status, 400);
+    assert.equal(only.json.error, 'This is the last active admin of the organization');
+  });
+
+  test('promoting a member works and signs them out', async () => {
+    const before = await syncPost(srv.baseUrl, memberToken, { since: 0, changes: [] });
+    assert.equal(before.status, 200);
+
+    const up = await api(srv.baseUrl, bossToken, `/api/admin/users/${memberId}/role`, { method: 'POST', body: { role: 'admin' } });
+    assert.equal(up.status, 200);
+    assert.deepEqual(up.json, { ok: true, role: 'admin' });
+
+    const listed = (await api(srv.baseUrl, bossToken, '/api/admin/users', { method: 'GET' })).json.users;
+    assert.equal(listed.find(u => u.id === memberId).role, 'admin');
+
+    // tokenVersion was bumped, so the token issued before the change is dead.
+    const after = await syncPost(srv.baseUrl, memberToken, { since: 0, changes: [] });
+    assert.equal(after.status, 401);
+  });
+
+  test('demoting works once another admin exists', async () => {
+    // rolemember is an admin now, so roleboss is no longer the only one.
+    const down = await api(srv.baseUrl, bossToken, `/api/admin/users/${memberId}/role`, { method: 'POST', body: { role: 'member' } });
+    assert.equal(down.status, 200);
+    const listed = (await api(srv.baseUrl, bossToken, '/api/admin/users', { method: 'GET' })).json.users;
+    assert.equal(listed.find(u => u.id === memberId).role, 'member');
+  });
+
+  test('an org admin cannot change a role in another org', async () => {
+    const org2 = await api(srv.baseUrl, root, '/api/admin/orgs', { method: 'POST', body: { name: 'Other Role Org' } });
+    const boss2 = await api(srv.baseUrl, root, `/api/admin/orgs/${org2.json.id}/admin`, { method: 'POST', body: { username: 'roleboss2' } });
+    const cross = await api(srv.baseUrl, bossToken, `/api/admin/users/${boss2.json.id}/role`, { method: 'POST', body: { role: 'member' } });
+    assert.equal(cross.status, 403);
+    assert.equal(cross.json.error, 'Not your organization');
+  });
+
+  test('an unknown user is a 404', async () => {
+    const missing = await api(srv.baseUrl, bossToken, '/api/admin/users/no-such-user/role', { method: 'POST', body: { role: 'admin' } });
+    assert.equal(missing.status, 404);
+  });
+});

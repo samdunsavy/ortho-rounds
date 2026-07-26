@@ -781,6 +781,40 @@ async function handleApi(req, res, pathname){
     return sendJSON(res, 200, { ok: true, temporaryPassword: password });
   }
 
+  const roleMatch = pathname.match(/^\/api\/admin\/users\/([^/]+)\/role$/);
+  if(roleMatch && req.method === 'POST'){
+    if(actor.role !== 'admin') return sendJSON(res, 403, { error: 'Admin only' });
+    const target = await store.getUserById(roleMatch[1]);
+    if(!target) return sendJSON(res, 404, { error: 'User not found' });
+    if(isEnabled('MULTI_TENANT') && !isInstanceAdmin(actor) && target.orgId !== actor.orgId){
+      return sendJSON(res, 403, { error: 'Not your organization' });
+    }
+    if(target.id === actor.id){
+      return sendJSON(res, 400, { error: 'You cannot change your own role' });
+    }
+    const body = await readBody(req) || {};
+    const role = body.role === 'admin' || body.role === 'member' ? body.role : null;
+    if(!role) return sendJSON(res, 400, { error: 'Role must be admin or member' });
+    if(role === 'member' && target.role === 'admin'){
+      // Demoting the only remaining admin would leave the org (or, for an
+      // org-less instance admin, the whole instance) with nobody able to
+      // administer it. Peers are compared within the same org bucket, with
+      // null orgId — the instance-admin bucket — treated as its own scope.
+      const peers = (await store.getAllUsers()).filter(u =>
+        u.id !== target.id && u.role === 'admin' && u.active && (u.orgId || null) === (target.orgId || null));
+      if(!peers.length){
+        const scopeLabel = target.orgId ? 'organization' : 'instance';
+        return sendJSON(res, 400, { error: `This is the last active admin of the ${scopeLabel}` });
+      }
+    }
+    // The token carries only sub/username/tokenVersion and the actor is
+    // re-read per request, so the server side takes effect immediately — but
+    // the client caches its role in localStorage at login. Bumping the
+    // version signs the target out so their UI cannot disagree.
+    await store.updateUser(target.id, { role, tokenVersion: (target.tokenVersion || 0) + 1 });
+    return sendJSON(res, 200, { ok: true, role });
+  }
+
   if(pathname === '/api/diag' && req.method === 'GET'){
     if(isEnabled('MULTI_TENANT') && !isInstanceAdmin(actor)){
       return sendJSON(res, 403, { error: 'Instance admin only' });
