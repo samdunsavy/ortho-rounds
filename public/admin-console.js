@@ -28,7 +28,8 @@ let adminUI = {
   structureMobileDrilled: false, // Structure: phone drill-down flag
   peopleSearch: '',
   peopleFilter: 'all',           // 'all' | 'unassigned' | 'disabled' | 'admins' | 'stale' | 'node:<type>:<id>'
-  peopleChecked: new Set()       // checked user ids, bulk assign
+  peopleChecked: new Set(),      // checked user ids, bulk assign
+  busy: false
 };
 
 const ADMIN_SECTIONS = [
@@ -328,15 +329,27 @@ function restoreAdminFocus(selector, repaint, alwaysRefocus){
 // only the latest completion may replace adminData and re-render.
 let adminLoadSeq = 0;
 
+function setAdminBusy(on){
+  adminUI.busy = !!on;
+  const view = document.getElementById('adminView');
+  if(view){
+    view.classList.toggle('is-busy', adminUI.busy);
+    view.setAttribute('aria-busy', adminUI.busy ? 'true' : 'false');
+  }
+  const status = document.getElementById('adminBusyStatus');
+  if(status) status.hidden = !adminUI.busy;
+}
+
 async function loadAdminView(){
   const loadToken = ++adminLoadSeq;
   const instAdmin = isInstanceAdminUser();
   const viewedOrgId = adminUI.viewedOrgId;
+  setAdminBusy(true);
   try{
     let tree, users, orgs;
     if(instAdmin){
       const [usersRes, orgsRes] = await Promise.all([api('/api/admin/users'), api('/api/admin/orgs')]);
-      if(loadToken !== adminLoadSeq) return;
+      if(loadToken !== adminLoadSeq) return; // stale: leave busy for the newer load
       orgs = orgsRes.orgs;
       users = viewedOrgId ? usersRes.users.filter(u => u.orgId === viewedOrgId) : usersRes.users;
       tree = viewedOrgId ? await api(`/api/admin/org?orgId=${encodeURIComponent(viewedOrgId)}`) : null;
@@ -352,9 +365,11 @@ async function loadAdminView(){
     adminData = { tree, users, orgs };
   }catch(err){
     if(loadToken !== adminLoadSeq) return;
+    setAdminBusy(false);
     throw err;
   }
   if(loadToken !== adminLoadSeq) return;
+  setAdminBusy(false);
   if(instAdmin) renderAdminOrgsSection();
   renderAdminSection();
 }

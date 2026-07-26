@@ -303,3 +303,94 @@ describe('loadAdminView atomic adminData (Task 1 review fixes)', () => {
     assert.ok(!rail().includes('Alpha Hospital'));
   });
 });
+
+describe('admin soft busy state', () => {
+  test('loadAdminView sets is-busy and shows Updating… until the fetch finishes', async () => {
+    const { window, document } = loadFrontendEnv();
+    let resolveUsers;
+    const usersPending = new Promise(r => { resolveUsers = r; });
+    window.api = async (path) => {
+      if(path === '/api/admin/users'){ await usersPending; return { users: [] }; }
+      if(path.startsWith('/api/admin/org')) return {
+        org: { id: 'bfv2-org', name: 'Default', stats: { livePatients: 0, byStatus: {}, users: 0, lastActivity: null } },
+        totals: { hospitals: 0, departments: 0, units: 0, wards: 0, usersActive: 0, usersDisabled: 0, livePatients: 0 },
+        hospitals: []
+      };
+      return {};
+    };
+    document.getElementById('adminView').hidden = false;
+    const p = window.loadAdminView();
+    await new Promise(r => setTimeout(r, 0));
+    const view = document.getElementById('adminView');
+    assert.equal(view.classList.contains('is-busy'), true);
+    assert.equal(view.getAttribute('aria-busy'), 'true');
+    const status = document.getElementById('adminBusyStatus');
+    assert.ok(status);
+    assert.equal(status.hidden, false);
+    assert.match(status.textContent, /Updating/);
+    resolveUsers({ users: [] });
+    await p;
+    assert.equal(view.classList.contains('is-busy'), false);
+    assert.equal(view.getAttribute('aria-busy'), 'false');
+    assert.equal(status.hidden, true);
+  });
+
+  test('a failed loadAdminView clears busy and still surfaces the error', async () => {
+    const { window, document } = loadFrontendEnv();
+    const toasts = [];
+    window.showToast = (m) => toasts.push(m);
+    window.api = async () => { throw new window.Error('network down'); };
+    document.getElementById('adminView').hidden = false;
+    await window.loadAdminView().catch(() => {});
+    assert.equal(document.getElementById('adminView').classList.contains('is-busy'), false);
+    assert.equal(document.getElementById('adminBusyStatus').hidden, true);
+  });
+
+  test('a stale overlapping load does not clear a newer load\'s busy flag', async () => {
+    const { window, document } = loadFrontendEnv();
+    window.localStorage.setItem('ortho_role', 'admin'); // instance admin
+    let resolveUsersA;
+    const usersAPending = new Promise(r => { resolveUsersA = r; });
+    let call = 0;
+    window.api = async (path) => {
+      if(path === '/api/admin/orgs') return { orgs: [
+        { id: 'o1', name: 'Org One', plan: 'free', stats: { hospitals: 0, departments: 0, users: 0, livePatients: 0 } }
+      ] };
+      if(path === '/api/admin/users'){
+        call += 1;
+        if(call === 1){ await usersAPending; return { users: [] }; }
+        return { users: [] };
+      }
+      return {};
+    };
+    document.getElementById('adminView').hidden = false;
+    const pA = window.loadAdminView();
+    await new Promise(r => setTimeout(r, 0));
+    const pB = window.loadAdminView();
+    await pB;
+    assert.equal(document.getElementById('adminView').classList.contains('is-busy'), false,
+      'B finished — should not be busy');
+    resolveUsersA({ users: [] });
+    await pA;
+    assert.equal(document.getElementById('adminView').classList.contains('is-busy'), false,
+      'stale A finishing must not leave busy stuck, and must not re-busy');
+  });
+
+  test('switching sections without loadAdminView does not flash busy', async () => {
+    const { window, document } = loadFrontendEnv();
+    window.api = async (path) => {
+      if(path.startsWith('/api/admin/org')) return {
+        org: { id: 'bfv2-org', name: 'Default', stats: { livePatients: 0, byStatus: {}, users: 0, lastActivity: null } },
+        totals: { hospitals: 0, departments: 0, units: 0, wards: 0, usersActive: 0, usersDisabled: 0, livePatients: 0 },
+        hospitals: []
+      };
+      if(path === '/api/admin/users') return { users: [] };
+      return {};
+    };
+    await window.loadAdminView();
+    assert.equal(document.getElementById('adminView').classList.contains('is-busy'), false);
+    window.switchAdminSection('people');
+    assert.equal(document.getElementById('adminView').classList.contains('is-busy'), false);
+    assert.equal(document.getElementById('adminBusyStatus').hidden, true);
+  });
+});
