@@ -546,15 +546,17 @@ describe('department specialty', () => {
 });
 
 describe('inline rename', () => {
-  test('the rename target is a focusable button with a 44px minimum touch target', () => {
+  test('the rename target is a focusable button with a 44×44px minimum touch target', () => {
     const { window, document } = loadFrontendEnv();
     document.getElementById('adminDetailPane').innerHTML =
       window.renderAdminDetailHTML({ tree: TREE, users: [], orgs: [], selection: { type: 'unit', id: 'u1' } });
     const btn = document.querySelector('[data-rename-target="unit:u1"]');
     assert.equal(btn.tagName, 'BUTTON');
     assert.equal(btn.type, 'button');
+    assert.equal(btn.textContent.trim(), 'IV');
     assert.equal(window.getComputedStyle(btn).display, 'inline-flex');
     assert.ok(parseInt(window.getComputedStyle(btn).minHeight, 10) >= 44);
+    assert.ok(parseInt(window.getComputedStyle(btn).minWidth, 10) >= 44);
     btn.focus();
     assert.equal(document.activeElement, btn);
   });
