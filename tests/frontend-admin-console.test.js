@@ -524,3 +524,37 @@ describe('ward empty-state label (Finding 6a fix)', () => {
     assert.ok(!html.toLowerCase().includes('childrens'));
   });
 });
+
+describe('hospital and org rows show their counts', () => {
+  const STATS = (n) => ({ livePatients: n, byStatus: { postop: n, preop: 0, conservative: 0, fordischarge: 0 }, users: 1, lastActivity: null });
+  const ROLLED = Object.assign({}, TREE, {
+    org: { id: 'bfv2-org', name: 'Default', stats: STATS(5) },
+    hospitals: [Object.assign({}, TREE.hospitals[0], { stats: STATS(5) })]
+  });
+
+  test('the tree rail renders a count on the org and hospital rows', () => {
+    const { window } = loadFrontendEnv();
+    const html = window.renderAdminTreeHTML(ROLLED, null);
+    assert.match(html, /data-node="org:bfv2-org"[^>]*>[^<]*<span class="cc-count">5<\/span>/);
+    assert.match(html, /data-node="hospital:h1"[^>]*>[^<]*<span class="cc-count">5<\/span>/);
+  });
+
+  test('the org detail panel renders its stats block', () => {
+    const { window } = loadFrontendEnv();
+    const html = window.renderAdminDetailHTML({ tree: ROLLED, users: [], orgs: [], selection: { type: 'org', id: 'bfv2-org' } });
+    assert.ok(html.includes('5 live patient'));
+    assert.ok(html.includes('admin-status-bar'));
+  });
+
+  test('a hospital with assigned users cannot be deleted and says why', () => {
+    const { window } = loadFrontendEnv();
+    Object.defineProperty(window, 'innerWidth', { value: 1200, configurable: true });
+    const emptied = JSON.parse(JSON.stringify(ROLLED));
+    emptied.hospitals[0].departments = [];
+    emptied.hospitals[0].stats.livePatients = 0;
+    emptied.hospitals[0].stats.users = 2;
+    const html = window.renderAdminDetailHTML({ tree: emptied, users: [], orgs: [], selection: { type: 'hospital', id: 'h1' } });
+    assert.match(html, /data-delete-node="hospital:h1"[^>]*disabled/);
+    assert.ok(html.includes('2 users'));
+  });
+});

@@ -41,10 +41,10 @@ function renderAdminTreeHTML(tree, selection){
   }
   out += '<div class="admin-cc-sep"></div>';
   if(tree && tree.org){
-    out += ccRowHTML('org', tree.org.id, tree.org.name || 'Organization', null, 0, selection);
+    out += ccRowHTML('org', tree.org.id, tree.org.name || 'Organization', tree.org.stats ? tree.org.stats.livePatients : null, 0, selection);
   }
   for(const h of (tree && tree.hospitals) || []){
-    out += ccRowHTML('hospital', h.id, h.name, null, 0, selection);
+    out += ccRowHTML('hospital', h.id, h.name, h.stats ? h.stats.livePatients : null, 0, selection);
     for(const dep of h.departments || []){
       out += ccRowHTML('department', dep.id, dep.name, dep.stats.livePatients, 1, selection);
       for(const u of dep.units || []){
@@ -129,7 +129,7 @@ function renderAdminDetailHTML(state){
     // walks — its identity + hospital list come straight off the tree
     // payload (see buildOrgTree's `org` field).
     if(!state.tree || !state.tree.org) return `<div class="small-muted">That item no longer exists.</div>`;
-    hit = { node: { id: state.tree.org.id, name: state.tree.org.name || 'Organization', hospitals: state.tree.hospitals || [] }, parentType: null, parentId: null };
+    hit = { node: { id: state.tree.org.id, name: state.tree.org.name || 'Organization', stats: state.tree.org.stats, hospitals: state.tree.hospitals || [] }, parentType: null, parentId: null };
   } else {
     hit = findAdminNode(state.tree, sel.type, sel.id);
     if(!hit) return `<div class="small-muted">That item no longer exists.</div>`;

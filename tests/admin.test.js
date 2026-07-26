@@ -46,7 +46,9 @@ describe('admin tree/stats builders', () => {
 
   test('buildOrgTree computes totals, per-department/unit/ward stats, lastActivity', async () => {
     const tree = await buildOrgTree(store, 'o1');
-    assert.deepEqual(tree.org, { id: 'o1', name: 'Org One' });
+    assert.equal(tree.org.id, 'o1');
+    assert.equal(tree.org.name, 'Org One');
+    assert.equal(tree.org.stats.livePatients, 5); // every live patient in the org
     assert.deepEqual(tree.totals, {
       hospitals: 1, departments: 2, wards: 2, units: 2, usersActive: 2, usersDisabled: 1, livePatients: 5
     });
@@ -92,7 +94,9 @@ describe('admin tree/stats builders', () => {
   test('empty org tree is well-formed', async () => {
     await store.createOrganization({ id: 'o3', name: 'Empty', plan: 'free' });
     const tree = await buildOrgTree(store, 'o3');
-    assert.deepEqual(tree.org, { id: 'o3', name: 'Empty' });
+    assert.equal(tree.org.id, 'o3');
+    assert.equal(tree.org.name, 'Empty');
+    assert.equal(tree.org.stats.livePatients, 0);
     assert.deepEqual(tree.totals, { hospitals: 0, departments: 0, wards: 0, units: 0, usersActive: 0, usersDisabled: 0, livePatients: 0 });
     assert.deepEqual(tree.hospitals, []);
   });
@@ -104,5 +108,67 @@ describe('admin tree/stats builders', () => {
     assert.equal(o1.plan, 'free');
     const o2 = rollups.find(r => r.id === 'o2');
     assert.deepEqual(o2.stats, { hospitals: 0, departments: 0, users: 1, livePatients: 0 });
+  });
+});
+
+describe('buildOrgTree counting corrections', () => {
+  let dataDir, store;
+  before(async () => {
+    dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ortho-admin-counts-'));
+    store = await createStore({ dataDir });
+    await store.init();
+    await store.createOrganization({ id: 'c-org', name: 'Counts Org', plan: 'free' });
+    await store.createHospital({ id: 'c-h1', orgId: 'c-org', name: 'Hospital One' });
+    await store.createDepartment({ id: 'c-d1', hospitalId: 'c-h1', name: 'Ortho', specialty: 'ortho' });
+    await store.createUnit({ id: 'c-uA', departmentId: 'c-d1', name: 'Unit A' });
+    await store.createUnit({ id: 'c-uB', departmentId: 'c-d1', name: 'Unit B' });
+    await store.createWard({ id: 'c-wA', unitId: 'c-uA', name: 'Ward A' });
+    await store.createWard({ id: 'c-wB', unitId: 'c-uB', name: 'Ward B' });
+
+    const mkUser = (id, patch) => store.createUser(Object.assign({
+      id, username: id, passwordHash: 'h', passwordSalt: 's', role: 'member',
+      active: true, tokenVersion: 0, createdAt: Date.now(), orgId: 'c-org', wardId: null
+    }, patch));
+    // Carries BOTH the legacy department pin and a matching node assignment.
+    await mkUser('c-dual', { wardId: 'c-d1', assignmentType: 'department', assignmentId: 'c-d1' });
+    // Assigned above the department, at levels the old loop ignored entirely.
+    await mkUser('c-hosp', { assignmentType: 'hospital', assignmentId: 'c-h1' });
+    await mkUser('c-orgu', { assignmentType: 'org', assignmentId: 'c-org' });
+
+    const put = (id, unitId, wardId, status, updatedAt) => store.upsertPatient(
+      id, updatedAt, 0, JSON.stringify({ id, unitId, wardId, status, updatedAt })
+    );
+    await put('c-p1', 'c-uA', 'c-wA', 'postop', 1000);  // ward matches its unit
+    await put('c-p2', 'c-uA', 'c-wB', 'preop', 2000);   // stale ward under a DIFFERENT unit
+  });
+  after(async () => { await store.close(); fs.rmSync(dataDir, { recursive: true, force: true }); });
+
+  test('a user with both a legacy wardId and a matching assignment counts once', async () => {
+    const tree = await buildOrgTree(store, 'c-org');
+    const dep = tree.hospitals[0].departments[0];
+    assert.equal(dep.stats.users, 1);
+  });
+
+  test('hospital- and org-level assignments are counted', async () => {
+    const tree = await buildOrgTree(store, 'c-org');
+    assert.equal(tree.hospitals[0].stats.users, 1);
+    assert.equal(tree.org.stats.users, 1);
+  });
+
+  test('hospital and org carry rolled-up patient stats', async () => {
+    const tree = await buildOrgTree(store, 'c-org');
+    assert.equal(tree.hospitals[0].stats.livePatients, 2);
+    assert.equal(tree.org.stats.livePatients, 2);
+    assert.equal(tree.org.stats.byStatus.postop, 1);
+    assert.equal(tree.org.stats.byStatus.preop, 1);
+  });
+
+  test('a wardId belonging to a different unit is not counted at that ward', async () => {
+    const tree = await buildOrgTree(store, 'c-org');
+    const units = tree.hospitals[0].departments[0].units;
+    const wardA = units.find(u => u.id === 'c-uA').wards[0];
+    const wardB = units.find(u => u.id === 'c-uB').wards[0];
+    assert.equal(wardA.stats.livePatients, 1); // c-p1 only
+    assert.equal(wardB.stats.livePatients, 0); // c-p2's wardId is stale, its unit is c-uA
   });
 });

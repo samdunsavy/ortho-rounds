@@ -35,14 +35,21 @@ export async function buildOrgTree(store, orgId){
   const patients = parseLivePatients(await store.getActive());
 
   const outHospitals = [];
-  const departmentStats = new Map(); // departmentId -> stats object (shared with output)
+  const orgStats = emptyStats();
+  const hospitalStats = new Map();   // hospitalId -> stats object (shared with output)
+  const departmentStats = new Map(); // departmentId -> stats object
   const unitStats = new Map();       // unitId -> stats object
   const wardStats = new Map();       // wardId -> stats object
   const unitToDepartment = new Map();
+  const unitToHospital = new Map();
+  const wardToUnit = new Map();
 
   let unitCount = 0, wardCount = 0;
 
   for(const h of hospitals){
+    const hStats = emptyStats();
+    hospitalStats.set(h.id, hStats);
+
     const departments = await store.listDepartmentsByHospital(h.id);
     const outDepartments = [];
     for(const dep of departments){
@@ -56,6 +63,7 @@ export async function buildOrgTree(store, orgId){
         const uStats = emptyStats();
         unitStats.set(unit.id, uStats);
         unitToDepartment.set(unit.id, dep.id);
+        unitToHospital.set(unit.id, h.id);
 
         const wards = await store.listWardsByUnit(unit.id);
         const outWards = [];
@@ -63,23 +71,33 @@ export async function buildOrgTree(store, orgId){
           wardCount++;
           const wStats = emptyStats();
           wardStats.set(ward.id, wStats);
+          wardToUnit.set(ward.id, unit.id);
           outWards.push({ id: ward.id, name: ward.name, stats: wStats });
         }
         outUnits.push({ id: unit.id, name: unit.name, stats: uStats, wards: outWards });
       }
       outDepartments.push({ id: dep.id, name: dep.name, specialty: dep.specialty, stats: depStats, units: outUnits });
     }
-    outHospitals.push({ id: h.id, name: h.name, departments: outDepartments });
+    outHospitals.push({ id: h.id, name: h.name, stats: hStats, departments: outDepartments });
   }
 
   for(const u of users){
-    // Legacy per-department assignment (predates node-based assignment).
+    // Node-based assignment is authoritative and counts at exactly one level.
+    // Counting the legacy per-department `wardId` as well double-counted any
+    // user carrying both, so the legacy field is now only a fallback for
+    // users whose assignment is missing or points outside this tree.
+    if(u.assignmentType && u.assignmentId){
+      const bucket =
+        u.assignmentType === 'ward' ? wardStats.get(u.assignmentId) :
+        u.assignmentType === 'unit' ? unitStats.get(u.assignmentId) :
+        u.assignmentType === 'department' ? departmentStats.get(u.assignmentId) :
+        u.assignmentType === 'hospital' ? hospitalStats.get(u.assignmentId) :
+        u.assignmentType === 'org' && u.assignmentId === orgId ? orgStats :
+        null;
+      if(bucket){ bucket.users++; continue; }
+    }
     const depStats = u.wardId ? departmentStats.get(u.wardId) : null;
     if(depStats) depStats.users++;
-    // Node-based assignment (Task 6): counts exactly at the assigned node.
-    if(u.assignmentType === 'unit' && unitStats.has(u.assignmentId)) unitStats.get(u.assignmentId).users++;
-    else if(u.assignmentType === 'ward' && wardStats.has(u.assignmentId)) wardStats.get(u.assignmentId).users++;
-    else if(u.assignmentType === 'department' && departmentStats.has(u.assignmentId)) departmentStats.get(u.assignmentId).users++;
   }
 
   let livePatients = 0;
@@ -90,17 +108,21 @@ export async function buildOrgTree(store, orgId){
     addPatientToStats(uStats, p);
     const depId = unitToDepartment.get(p.unitId);
     if(depId) addPatientToStats(departmentStats.get(depId), p);
+    const hospId = unitToHospital.get(p.unitId);
+    if(hospId) addPatientToStats(hospitalStats.get(hospId), p);
+    addPatientToStats(orgStats, p);
     // Ward is an optional location under the unit — only patients carrying
-    // that specific wardId count at the ward level (a subset of the unit's
-    // patients, not everyone under the unit).
-    if(p.wardId && wardStats.has(p.wardId)) addPatientToStats(wardStats.get(p.wardId), p);
+    // that specific wardId count at the ward level, and only when the ward
+    // actually belongs to the patient's unit. A wardId left behind by a move
+    // would otherwise be counted under a ward in an unrelated unit.
+    if(p.wardId && wardToUnit.get(p.wardId) === p.unitId) addPatientToStats(wardStats.get(p.wardId), p);
   }
 
   let departments = 0;
   for(const h of outHospitals) departments += h.departments.length;
 
   return {
-    org: org ? { id: org.id, name: org.name } : null,
+    org: org ? { id: org.id, name: org.name, stats: orgStats } : null,
     totals: {
       hospitals: outHospitals.length,
       departments,
