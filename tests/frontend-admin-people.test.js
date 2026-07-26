@@ -674,6 +674,79 @@ describe('role change', () => {
   });
 });
 
+describe('placement change: inline confirmation and revert', () => {
+  test('a successful change shows an inline "Saved" note next to that row only', async () => {
+    const { window, document } = loadFrontendEnv();
+    const users = CC_USERS.map(u => ({ ...u }));
+    window.api = async (path, opts) => {
+      if(path.startsWith('/api/admin/org')) return TREE;
+      if(path === '/api/admin/users') return { users };
+      if(opts && opts.method === 'POST') return { ok: true };
+      return {};
+    };
+    await window.loadAdminView();
+    window.switchAdminSection('people');
+    const sel = document.querySelector('[data-assign-user="usr2"]');
+    sel.value = 'unit:u1';
+    sel.dispatchEvent(new window.Event('change', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 0));
+    assert.ok(document.querySelector('[data-user-row="usr2"]').textContent.includes('Saved'));
+    assert.ok(!document.querySelector('[data-user-row="usr1"]').textContent.includes('Saved'));
+  });
+
+  test('a failed change reverts the select and shows the reason inline, not just a toast', async () => {
+    const { window, document } = loadFrontendEnv();
+    const users = CC_USERS.map(u => ({ ...u }));
+    window.api = async (path, opts) => {
+      if(path.startsWith('/api/admin/org')) return TREE;
+      if(path === '/api/admin/users') return { users };
+      if(opts && opts.method === 'POST'){ const e = new window.Error('Node is not in this organization'); throw e; }
+      return {};
+    };
+    await window.loadAdminView();
+    window.switchAdminSection('people');
+    const sel = document.querySelector('[data-assign-user="usr2"]');
+    const before = sel.value;
+    sel.value = 'unit:u1';
+    sel.dispatchEvent(new window.Event('change', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 0));
+    assert.equal(sel.value, before);
+    assert.ok(document.querySelector('[data-user-row="usr2"]').textContent.includes('Node is not in this organization'));
+  });
+});
+
+describe('sticky bulk bar reports what happened', () => {
+  test('a successful bulk assign reports the count and target, and stays visible with the same selection', async () => {
+    const { window, document } = loadFrontendEnv();
+    const users = CC_USERS.map(u => ({ ...u }));
+    window.api = async (path, opts) => {
+      if(path.startsWith('/api/admin/org')) return TREE;
+      if(path === '/api/admin/users') return { users };
+      if(opts && opts.method === 'POST') return { assigned: 1 };
+      return {};
+    };
+    await window.loadAdminView();
+    window.switchAdminSection('people');
+    document.querySelector('[data-user-check="usr2"]').checked = true;
+    document.querySelector('[data-user-check="usr2"]').dispatchEvent(new window.Event('change', { bubbles: true }));
+    document.getElementById('adminBulkNode').value = 'unit:u1';
+    document.getElementById('adminBulkApply').dispatchEvent(new window.Event('click', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 0));
+    assert.ok(document.querySelector('[data-user-check="usr2"]').checked, 'selection stays visible');
+    const bar = document.getElementById('adminBulkBar');
+    assert.match(bar.textContent, /Assigned 1 person to Ortho › IV/);
+  });
+});
+
+describe('mobile card markup for the People list', () => {
+  test('every row also renders as a card, hidden by CSS on wide viewports', () => {
+    const { window } = loadFrontendEnv();
+    const html = window.renderAdminUsersPanelHTML({ tree: TREE, users: CC_USERS, orgs: [] });
+    assert.ok(html.includes('admin-people-cards'));
+    assert.ok(html.includes('data-user-card="usr2"'));
+  });
+});
+
 describe('mobile read-only (removed in Task 11 — still gates today)', () => {
   test('narrow users panel has no live write path: no checkbox, no assign select, but still shows username and assignment as text', () => {
     const { window } = loadFrontendEnv();

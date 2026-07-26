@@ -155,6 +155,27 @@ function refreshAdminPeopleRowGuards(){
   });
 }
 
+function renderAdminPeopleCardHTML(u, state){
+  state = state || adminData;
+  const unscoped = adminNeedsOrgChoice();
+  const groups = buildAssignNodeGroups(state.tree, state.orgs);
+  const placement = peopleAssignmentDisplay(u, groups, state.orgs, unscoped);
+  const assignText = placement.text === '—' ? 'Not assigned' : placement.text;
+  return `<div class="admin-people-card" data-user-card="${escapeHTML(u.id)}">
+    <div class="admin-people-card-head" data-card-toggle="${escapeHTML(u.id)}">
+      <strong>${escapeHTML(u.username)}${isSelfUser(u) ? ' <span class="spec-badge">You</span>' : ''}</strong>
+      <span>${u.active ? 'active' : 'disabled'}</span>
+    </div>
+    <div class="admin-people-card-body">
+      <div class="small-muted">${escapeHTML(assignText)}</div>
+      <div class="admin-inline-form">
+        <button class="btn" data-user-toggle="${escapeHTML(u.id)}">${u.active ? 'Disable' : 'Enable'}</button>
+        <button class="btn" data-user-reset="${escapeHTML(u.id)}">Reset password</button>
+      </div>
+    </div>
+  </div>`;
+}
+
 function renderAdminUsersPanelHTML(state){
   const narrow = adminIsNarrow();
   const unscoped = adminNeedsOrgChoice();
@@ -162,6 +183,7 @@ function renderAdminUsersPanelHTML(state){
   const rows = (state.users || []).map(u =>
     `<tr data-user-row="${escapeHTML(u.id)}" data-username="${escapeHTML((u.username || '').toLowerCase())}">${renderAdminPeopleRowHTML(u, state)}</tr>`
   ).join('');
+  const cards = (state.users || []).map(u => renderAdminPeopleCardHTML(u, state)).join('');
   const narrowNote = narrow ? '<div class="small-muted">Open on a larger screen to edit</div>' : '';
   const createUserForm = narrow ? '' : unscoped ? `
     <div class="small-muted">Choose an organization on the Organizations tab to create users.</div>
@@ -190,7 +212,8 @@ function renderAdminUsersPanelHTML(state){
     <table class="admin-users-table">
       <thead><tr><th></th><th>Person</th><th>Role</th><th>Can see patients in</th><th>Status</th></tr></thead>
       <tbody>${rows}</tbody>
-    </table>`;
+    </table>
+    <div class="admin-people-cards">${cards}</div>`;
 }
 
 function applyAdminPeopleFilters(){
@@ -271,9 +294,26 @@ document.getElementById('adminPeopleSection')?.addEventListener('click', (e) => 
     const i = raw.indexOf(':');
     const nodeType = i === -1 ? null : raw.slice(0, i);
     const nodeId = i === -1 ? null : raw.slice(i + 1);
+    const groups = buildAssignNodeGroups(adminData.tree, adminData.orgs);
+    const targetLabel = nodeType ? (assignLabelFor(groups, nodeType, nodeId) || 'that place') : 'no placement';
     api('/api/admin/users/assign-bulk', { method: 'POST', body: JSON.stringify({ userIds: ids, nodeType, nodeId }) })
-      .then(() => { showToast(`Assigned ${ids.length} user${ids.length === 1 ? '' : 's'}`); return loadAdminView(); })
+      .then(async res => {
+        const msg = `Assigned ${res.assigned} ${res.assigned === 1 ? 'person' : 'people'} to ${targetLabel}`;
+        showToast(msg);
+        await loadAdminView();
+        applyAdminPeopleFilters();
+        const bar = document.getElementById('adminBulkBar');
+        if(bar && selectedAdminUserIds().length){
+          bar.hidden = false;
+          bar.textContent = msg;
+        }
+      })
       .catch(err => showToast(err.message));
+    return;
+  }
+  const cardToggle = e.target.closest('[data-card-toggle]');
+  if(cardToggle){
+    cardToggle.closest('.admin-people-card')?.classList.toggle('is-expanded');
     return;
   }
   const toggleBtn = e.target.closest('[data-user-toggle]');
@@ -372,25 +412,34 @@ document.getElementById('adminPeopleSection')?.addEventListener('change', async 
     return;
   }
   const sel = e.target.closest('[data-assign-user]');
-  if(!sel) return;
-  const raw = sel.value;
-  const sepIdx = raw.indexOf(':');
-  const nodeType = sepIdx === -1 ? null : raw.slice(0, sepIdx);
-  const nodeId = sepIdx === -1 ? null : raw.slice(sepIdx + 1);
-  try{
-    await api(`/api/admin/users/${sel.dataset.assignUser}/assign`, { method: 'POST', body: JSON.stringify({ nodeType, nodeId }) });
+  if(sel){
+    const raw = sel.value;
+    const sepIdx = raw.indexOf(':');
+    const nodeType = sepIdx === -1 ? null : raw.slice(0, sepIdx);
+    const nodeId = sepIdx === -1 ? null : raw.slice(sepIdx + 1);
     const userId = sel.dataset.assignUser;
-    const u = (adminData.users || []).find(x => x.id === userId);
-    if(u){
-      u.assignmentType = nodeType;
-      u.assignmentId = nodeId;
+    const esc = (typeof CSS !== 'undefined' && CSS.escape) ? CSS.escape : s => String(s);
+    try{
+      await api(`/api/admin/users/${userId}/assign`, { method: 'POST', body: JSON.stringify({ nodeType, nodeId }) });
+      sel.dataset.prev = raw;
+      const u = (adminData.users || []).find(x => x.id === userId);
+      if(u){ u.assignmentType = nodeType; u.assignmentId = nodeId; }
+      renderAdminPeopleRow(userId);
+      applyAdminPeopleFilters();
+      const row = document.querySelector(`[data-user-row="${esc(userId)}"]`);
+      const note = document.createElement('span');
+      note.className = 'admin-inline-note';
+      note.textContent = 'Saved';
+      row?.lastElementChild?.appendChild(note);
+      setTimeout(() => note.remove(), 2500);
+    }catch(err){
+      sel.value = sel.dataset.prev || '';
+      const row = document.querySelector(`[data-user-row="${esc(userId)}"]`);
+      const note = document.createElement('span');
+      note.className = 'admin-inline-note admin-inline-note-error';
+      note.textContent = err.message;
+      row?.lastElementChild?.appendChild(note);
     }
-    sel.dataset.prev = raw;
-    renderAdminPeopleRow(userId);
-    applyAdminPeopleFilters();
-    showToast('Assignment updated');
-  }catch(err){
-    sel.value = sel.dataset.prev || '';
-    showToast(err.message);
+    return;
   }
 });
