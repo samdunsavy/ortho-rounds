@@ -11,3 +11,6 @@ node_modules/
 *_backup.json
 *_recovered*.json
 .sdd/
+
+# Subagent-driven-development scratch workspace (briefs, reports, review packages)
+.superpowers/
