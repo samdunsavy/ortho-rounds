@@ -189,6 +189,15 @@ describe('Overview: computeAdminNeedsAttention', () => {
     assert.ok(html.includes('unassigned1'));
     assert.ok(html.includes('data-attention-people="unassigned"'));
   });
+
+  test('renderAdminNeedsAttentionHTML uses exact stale-assignment copy (capital A)', () => {
+    const { window } = loadFrontendEnv();
+    const html = window.renderAdminNeedsAttentionHTML({
+      unassigned: [], stale: [{ id: 'u2', username: 'stale1' }], emptyUnits: [], disabled: []
+    });
+    assert.ok(html.includes('Assigned to a place that no longer exists'));
+    assert.ok(!html.includes('assigned to a place that no longer exists'));
+  });
 });
 
 describe('Overview: quick actions', () => {
@@ -205,7 +214,7 @@ describe('Overview: quick actions', () => {
     await window.loadAdminView();
     document.getElementById('adminQuickFixAssignment').dispatchEvent(new window.Event('click', { bubbles: true }));
     assert.equal(document.getElementById('adminPeopleSection').hidden, false);
-    assert.equal(document.getElementById('adminPeopleSection').dataset.peopleFilter, 'unassigned');
+    assert.equal(window.getAdminPeopleFilter(), 'unassigned');
   });
 
   test('Add ward switches to Structure and selects the first unit', async () => {

@@ -149,8 +149,8 @@ function renderAdminNeedsAttentionHTML(cats){
   const groups = [];
   if(cats.unassigned.length) groups.push({ title: `${cats.unassigned.length} ${cats.unassigned.length === 1 ? 'person has' : 'people have'} no assignment`,
     rows: cats.unassigned.map(u => `<button type="button" class="admin-attention-row" data-attention-people="unassigned">${escapeHTML(u.username)} — no assignment</button>`).join('') });
-  if(cats.stale.length) groups.push({ title: `${cats.stale.length} ${cats.stale.length === 1 ? 'person is' : 'people are'} assigned to a place that no longer exists`,
-    rows: cats.stale.map(u => `<button type="button" class="admin-attention-row" data-attention-people="stale">${escapeHTML(u.username)} — assigned to a place that no longer exists</button>`).join('') });
+  if(cats.stale.length) groups.push({ title: `${cats.stale.length} ${cats.stale.length === 1 ? 'person is' : 'people are'} Assigned to a place that no longer exists`,
+    rows: cats.stale.map(u => `<button type="button" class="admin-attention-row" data-attention-people="stale">${escapeHTML(u.username)} — Assigned to a place that no longer exists</button>`).join('') });
   if(cats.emptyUnits.length) groups.push({ title: `${cats.emptyUnits.length} empty unit${cats.emptyUnits.length === 1 ? '' : 's'} (no wards, patients or staff)`,
     rows: cats.emptyUnits.map(u => `<button type="button" class="admin-attention-row" data-attention-unit="${escapeHTML(u.id)}">${escapeHTML(u.name)}</button>`).join('') });
   if(cats.disabled.length) groups.push({ title: `${cats.disabled.length} disabled account${cats.disabled.length === 1 ? '' : 's'}`,
@@ -178,6 +178,10 @@ function quickActionAddPerson(){
 function quickActionFixAssignment(){
   adminUI.peopleFilter = 'unassigned';
   switchAdminSection('people');
+}
+
+function getAdminPeopleFilter(){
+  return adminUI.peopleFilter;
 }
 
 document.getElementById('adminOverviewBody')?.addEventListener('click', (e) => {

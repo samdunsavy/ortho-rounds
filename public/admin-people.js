@@ -102,7 +102,6 @@ function applyAdminPeopleChecked(){
 function renderAdminPeopleSection(){
   const el = document.getElementById('adminPeopleSection');
   if(!el) return;
-  el.dataset.peopleFilter = adminUI.peopleFilter;
   el.innerHTML = renderAdminUsersPanelHTML(adminData);
   const search = document.getElementById('adminUserSearch');
   if(search) search.value = adminUI.peopleSearch;
