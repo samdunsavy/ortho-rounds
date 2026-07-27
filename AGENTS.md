@@ -2,6 +2,8 @@
 
 Self-hosted orthopedic ward-rounds patient tracker. A vanilla-JS PWA (`public/`) served by a dependency-light Node HTTP server (`server.js`, `storage.js`, `auth.js`, `ai.js`, …). No framework, no build step.
 
+> **Changing the code? Read `AGENT-GUIDE.md` first** — conventions, non-negotiables, test-harness traps, definition of done, and the stop-list. Pick work from `BACKLOG.md` (top-down, respecting dependencies). This file covers how to *run* the app; `AGENT-GUIDE.md` covers how to *change* it.
+
 ## Cursor Cloud specific instructions
 
 - Requires **Node ≥ 22.5** (uses the built-in `node:sqlite` module). The sandbox Node satisfies this.

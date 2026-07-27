@@ -6459,6 +6459,14 @@ async function openPatientModal(p){
   document.getElementById('patientModal').classList.add('active');
   if(scopePickerActive()) await populateScopePicker(modalWorkingData);
   requestAnimationFrame(()=> snapshotModalBaseline());
+  // Audit: report a patient view when opening an existing record while online.
+  // Failures are ignored — audit must never block the clinician.
+  if(isExisting && navigator.onLine && p && p.id){
+    void api('/api/audit/patient-view', {
+      method: 'POST',
+      body: JSON.stringify({ patientId: p.id })
+    }).catch(() => {});
+  }
 }
 
 function readModalFieldsToObject(){

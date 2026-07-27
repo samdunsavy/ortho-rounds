@@ -95,7 +95,7 @@ export async function startServer({ multiTenant = false, seed = null, seedRaw = 
       return {
         baseUrl,
         dataDir,
-        async stop(){
+        async stop({ keepData = false } = {}){
           child.kill('SIGTERM');
           // Wait up to 2s for graceful exit
           await Promise.race([
@@ -107,7 +107,7 @@ export async function startServer({ multiTenant = false, seed = null, seedRaw = 
             child.kill('SIGKILL');
             await new Promise(r => child.once('exit', r));
           }
-          fs.rmSync(dataDir, { recursive: true, force: true });
+          if(!keepData) fs.rmSync(dataDir, { recursive: true, force: true });
         }
       };
     }catch(err){

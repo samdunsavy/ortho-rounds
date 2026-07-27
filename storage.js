@@ -188,6 +188,26 @@ function createSqliteStore({ dataDir }){
           lastDigestAt INTEGER NOT NULL DEFAULT 0
         );
       `);
+      // Append-only audit log (BACKLOG T1). No update/delete API is exposed.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS audit (
+          id            TEXT PRIMARY KEY,
+          at            INTEGER NOT NULL,
+          actorId       TEXT,
+          actorUsername TEXT,
+          action        TEXT NOT NULL,
+          subjectType   TEXT,
+          subjectId     TEXT,
+          orgId         TEXT,
+          ip            TEXT,
+          userAgent     TEXT,
+          detail        TEXT NOT NULL DEFAULT '{}'
+        );
+      `);
+      db.exec('CREATE INDEX IF NOT EXISTS idx_audit_at ON audit(at);');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_audit_action ON audit(action);');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_audit_subject ON audit(subjectType, subjectId);');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_audit_orgId ON audit(orgId);');
     },
 
     async loadRawConfig(){
@@ -355,6 +375,50 @@ function createSqliteStore({ dataDir }){
     async deleteWard(id){ db.prepare('DELETE FROM wards WHERE id = ?').run(id); },
     async deleteUnit(id){ db.prepare('DELETE FROM units WHERE id = ?').run(id); },
 
+    // ---- audit log (T1) — append-only; no update/delete methods ----
+    async appendAudit(entry){
+      const detail = entry && entry.detail != null ? entry.detail : {};
+      db.prepare(`
+        INSERT INTO audit (id, at, actorId, actorUsername, action, subjectType, subjectId, orgId, ip, userAgent, detail)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        entry.id,
+        Number(entry.at) || Date.now(),
+        entry.actorId ?? null,
+        entry.actorUsername ?? null,
+        entry.action,
+        entry.subjectType ?? null,
+        entry.subjectId ?? null,
+        entry.orgId ?? null,
+        entry.ip ?? null,
+        entry.userAgent ?? null,
+        JSON.stringify(detail)
+      );
+    },
+    async listAudit(opts = {}){
+      const where = [];
+      const params = [];
+      if(opts.action){ where.push('action = ?'); params.push(opts.action); }
+      if(opts.subjectId){ where.push('subjectId = ?'); params.push(opts.subjectId); }
+      if(opts.actorId){ where.push('actorId = ?'); params.push(opts.actorId); }
+      if(opts.orgId){ where.push('orgId = ?'); params.push(opts.orgId); }
+      if(opts.from != null){ where.push('at >= ?'); params.push(Number(opts.from)); }
+      if(opts.to != null){ where.push('at <= ?'); params.push(Number(opts.to)); }
+      const limit = Math.min(Math.max(Number(opts.limit) || 100, 1), 1000);
+      const offset = Math.max(Number(opts.offset) || 0, 0);
+      const sql = `SELECT * FROM audit${where.length ? ' WHERE ' + where.join(' AND ') : ''} ORDER BY at DESC LIMIT ? OFFSET ?`;
+      params.push(limit, offset);
+      return db.prepare(sql).all(...params).map(row => {
+        let detail = {};
+        try{ detail = JSON.parse(row.detail || '{}'); }catch{ detail = {}; }
+        return {
+          id: row.id, at: row.at, actorId: row.actorId, actorUsername: row.actorUsername,
+          action: row.action, subjectType: row.subjectType, subjectId: row.subjectId,
+          orgId: row.orgId, ip: row.ip, userAgent: row.userAgent, detail
+        };
+      });
+    },
+
     async begin(){ db.exec('BEGIN'); },
     async commit(){ db.exec('COMMIT'); },
     async rollback(){ db.exec('ROLLBACK'); },
@@ -440,6 +504,7 @@ async function createMongoStore({ mongoUri }){
   const departments = database.collection('departments');
   const wards = database.collection('wards');
   const units = database.collection('units');
+  const audit = database.collection('audit');
   await patients.createIndex({ updatedAt: 1 });
   await users.createIndex({ username: 1 }, { unique: true });
   await pushSubscriptions.createIndex({ endpoint: 1 }, { unique: true });
@@ -448,6 +513,10 @@ async function createMongoStore({ mongoUri }){
   await departments.createIndex({ hospitalId: 1 });
   await wards.createIndex({ unitId: 1 });
   await units.createIndex({ departmentId: 1 });
+  await audit.createIndex({ at: -1 });
+  await audit.createIndex({ action: 1 });
+  await audit.createIndex({ subjectType: 1, subjectId: 1 });
+  await audit.createIndex({ orgId: 1 });
 
   const freshStart = (await patients.estimatedDocumentCount()) === 0;
   const mapRow = d => d ? { id: d._id, updatedAt: d.updatedAt, deleted: d.deleted ? 1 : 0, data: d.data } : null;
@@ -636,6 +705,45 @@ async function createMongoStore({ mongoUri }){
     async deleteDepartment(id){ await departments.deleteOne({ _id: id }); },
     async deleteWard(id){ await wards.deleteOne({ _id: id }); },
     async deleteUnit(id){ await units.deleteOne({ _id: id }); },
+
+    // ---- audit log (T1) — append-only; no update/delete methods ----
+    async appendAudit(entry){
+      const detail = entry && entry.detail != null ? entry.detail : {};
+      await audit.insertOne({
+        _id: entry.id,
+        at: Number(entry.at) || Date.now(),
+        actorId: entry.actorId ?? null,
+        actorUsername: entry.actorUsername ?? null,
+        action: entry.action,
+        subjectType: entry.subjectType ?? null,
+        subjectId: entry.subjectId ?? null,
+        orgId: entry.orgId ?? null,
+        ip: entry.ip ?? null,
+        userAgent: entry.userAgent ?? null,
+        detail
+      });
+    },
+    async listAudit(opts = {}){
+      const q = {};
+      if(opts.action) q.action = opts.action;
+      if(opts.subjectId) q.subjectId = opts.subjectId;
+      if(opts.actorId) q.actorId = opts.actorId;
+      if(opts.orgId) q.orgId = opts.orgId;
+      if(opts.from != null || opts.to != null){
+        q.at = {};
+        if(opts.from != null) q.at.$gte = Number(opts.from);
+        if(opts.to != null) q.at.$lte = Number(opts.to);
+      }
+      const limit = Math.min(Math.max(Number(opts.limit) || 100, 1), 1000);
+      const offset = Math.max(Number(opts.offset) || 0, 0);
+      const arr = await audit.find(q).sort({ at: -1 }).skip(offset).limit(limit).toArray();
+      return arr.map(d => ({
+        id: d._id, at: d.at, actorId: d.actorId ?? null, actorUsername: d.actorUsername ?? null,
+        action: d.action, subjectType: d.subjectType ?? null, subjectId: d.subjectId ?? null,
+        orgId: d.orgId ?? null, ip: d.ip ?? null, userAgent: d.userAgent ?? null,
+        detail: d.detail && typeof d.detail === 'object' ? d.detail : {}
+      }));
+    },
 
     // MongoDB upserts are individually atomic; multi-doc transactions aren't
     // needed for this app's small sync batches, so these are no-ops.

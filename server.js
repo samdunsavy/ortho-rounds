@@ -68,6 +68,7 @@ import { wardUnitId, listUnitIdsUnder } from './hierarchy.js';
 import { recordEvent, getSnapshot, isExportEnabled, startExportLoop } from './telemetry.js';
 import { buildOrgTree, buildOrgRollups, buildScopeTree } from './admin.js';
 import { NODE_TYPES, PARENT_TYPE, getNode, nodeOrgId, childrenOf, unitIdsUnder, restampUnits, restampPatient, updateNode, deleteNode, PARENT_FIELD } from './structure.js';
+import { recordAudit, ACTIONS } from './audit.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -305,15 +306,40 @@ async function handleApi(req, res, pathname){
     const rateKey = `${getClientIp(req)}:${username.toLowerCase()}`;
     const rate = checkLoginRateLimit(rateKey);
     if(!rate.ok){
+      await recordAudit(store, {
+        actor: { id: null, username: username || null },
+        action: ACTIONS.LOGIN_FAILURE,
+        subjectType: 'session',
+        subjectId: null,
+        req,
+        detail: { reason: 'rate_limited' }
+      });
       return sendJSON(res, 429, { error: `Too many attempts — try again in ${rate.retryAfterSec}s` });
     }
     const user = username ? await store.getUserByUsername(username) : null;
     const ok = user && user.active && verifyPasswordHash(body.password, user.passwordSalt, user.passwordHash);
     if(!ok){
+      await recordAudit(store, {
+        actor: { id: null, username: username || null },
+        action: ACTIONS.LOGIN_FAILURE,
+        subjectType: 'session',
+        subjectId: user ? user.id : null,
+        orgId: user ? (user.orgId ?? null) : null,
+        req,
+        detail: { reason: 'invalid_credentials' }
+      });
       return sendJSON(res, 401, { error: 'Invalid username or password' });
     }
     const token = signToken({ sub: user.id, username: user.username, tokenVersion: user.tokenVersion }, config.tokenSecret);
     recordEvent('login');
+    await recordAudit(store, {
+      actor: { id: user.id, username: user.username },
+      action: ACTIONS.LOGIN_SUCCESS,
+      subjectType: 'session',
+      subjectId: user.id,
+      orgId: user.orgId ?? null,
+      req
+    });
     return sendJSON(res, 200, { token, username: user.username, role: user.role, orgId: user.orgId ?? null, wardId: user.wardId ?? null });
   }
 
@@ -423,6 +449,10 @@ async function handleApi(req, res, pathname){
     if(existing.length >= 50) return sendJSON(res, 409, { error: 'Ward limit reached for this unit' });
     const ward = { id: crypto.randomUUID(), unitId: unit.id, name, createdAt: Date.now() };
     await store.createWard(ward);
+    await recordAudit(store, {
+      actor, action: ACTIONS.STRUCTURE_CREATE, subjectType: 'ward', subjectId: ward.id,
+      orgId: actor.orgId ?? null, req, detail: { name }
+    });
     return sendJSON(res, 200, { id: ward.id, unitId: unit.id, name });
   }
 
@@ -436,6 +466,10 @@ async function handleApi(req, res, pathname){
       if(!name) return sendJSON(res, 400, { error: 'Organization name required (max 80 chars)' });
       const org = { id: crypto.randomUUID(), name, plan: body.plan === 'paid' ? 'paid' : 'free', createdAt: Date.now() };
       await store.createOrganization(org);
+      await recordAudit(store, {
+        actor, action: ACTIONS.STRUCTURE_CREATE, subjectType: 'org', subjectId: org.id,
+        orgId: org.id, req, detail: { name: org.name, plan: org.plan }
+      });
       return sendJSON(res, 200, { id: org.id, name: org.name, plan: org.plan });
     }
 
@@ -459,6 +493,10 @@ async function handleApi(req, res, pathname){
         role: 'admin', active: true, tokenVersion: 0, createdAt: Date.now(), orgId: org.id, wardId: null
       };
       await store.createUser(newUser);
+      await recordAudit(store, {
+        actor, action: ACTIONS.USER_CREATE, subjectType: 'user', subjectId: newUser.id,
+        orgId: org.id, req, detail: { username, role: 'admin' }
+      });
       return sendJSON(res, 200, { id: newUser.id, username, role: 'admin', orgId: org.id, temporaryPassword: password });
     }
 
@@ -483,6 +521,10 @@ async function handleApi(req, res, pathname){
       if(!name) return sendJSON(res, 400, { error: 'Hospital name required (max 80 chars)' });
       const hospital = { id: crypto.randomUUID(), orgId, name, createdAt: Date.now() };
       await store.createHospital(hospital);
+      await recordAudit(store, {
+        actor, action: ACTIONS.STRUCTURE_CREATE, subjectType: 'hospital', subjectId: hospital.id,
+        orgId, req, detail: { name }
+      });
       return sendJSON(res, 200, { id: hospital.id, orgId, name });
     }
 
@@ -497,6 +539,10 @@ async function handleApi(req, res, pathname){
       const specialty = cleanName(body.specialty, 40) || 'ortho';
       const department = { id: crypto.randomUUID(), hospitalId: hospital.id, name, specialty, createdAt: Date.now() };
       await store.createDepartment(department);
+      await recordAudit(store, {
+        actor, action: ACTIONS.STRUCTURE_CREATE, subjectType: 'department', subjectId: department.id,
+        orgId: hospital.orgId, req, detail: { name, specialty }
+      });
       return sendJSON(res, 200, { id: department.id, hospitalId: hospital.id, name, specialty });
     }
 
@@ -510,6 +556,10 @@ async function handleApi(req, res, pathname){
       if(!name) return sendJSON(res, 400, { error: 'Ward name required (max 80 chars)' });
       const ward = { id: crypto.randomUUID(), unitId: unit.id, name, createdAt: Date.now() };
       await store.createWard(ward);
+      await recordAudit(store, {
+        actor, action: ACTIONS.STRUCTURE_CREATE, subjectType: 'ward', subjectId: ward.id,
+        orgId: actor.orgId ?? null, req, detail: { name }
+      });
       return sendJSON(res, 200, { id: ward.id, unitId: unit.id, name });
     }
 
@@ -523,6 +573,10 @@ async function handleApi(req, res, pathname){
       if(!name) return sendJSON(res, 400, { error: 'Unit name required (max 80 chars)' });
       const unit = { id: crypto.randomUUID(), departmentId: dep.id, name, createdAt: Date.now() };
       await store.createUnit(unit);
+      await recordAudit(store, {
+        actor, action: ACTIONS.STRUCTURE_CREATE, subjectType: 'unit', subjectId: unit.id,
+        orgId: actor.orgId ?? null, req, detail: { name }
+      });
       return sendJSON(res, 200, { id: unit.id, departmentId: dep.id, name });
     }
 
@@ -557,6 +611,10 @@ async function handleApi(req, res, pathname){
       if(type === 'department' && typeof body.specialty === 'string') patch.specialty = cleanName(body.specialty, 40) || 'ortho';
       await updateNode(store, type, id, patch);
       if(type === 'ward' || type === 'unit') await restampUnits(store, await unitIdsUnder(store, type, id));
+      await recordAudit(store, {
+        actor, action: ACTIONS.STRUCTURE_UPDATE, subjectType: type, subjectId: id,
+        orgId: actor.orgId ?? null, req, detail: { name }
+      });
       return sendJSON(res, 200, { id, type, name });
     }
 
@@ -588,6 +646,10 @@ async function handleApi(req, res, pathname){
         return sendJSON(res, 409, { error: 'Node is not empty', blockedBy: { children, users, patients } });
       }
       await deleteNode(store, type, id);
+      await recordAudit(store, {
+        actor, action: ACTIONS.STRUCTURE_DELETE, subjectType: type, subjectId: id,
+        orgId: actor.orgId ?? null, req
+      });
       return sendJSON(res, 200, { deleted: true });
     }
 
@@ -616,6 +678,10 @@ async function handleApi(req, res, pathname){
       const set = await unitIdsUnder(store, type, id);
       if(type === 'ward' && oldParentId) set.add(oldParentId);
       await restampUnits(store, set);
+      await recordAudit(store, {
+        actor, action: ACTIONS.STRUCTURE_MOVE, subjectType: type, subjectId: id,
+        orgId: g.orgId ?? null, req, detail: { newParentId, oldParentId }
+      });
       return sendJSON(res, 200, { id, type, newParentId });
     }
 
@@ -647,6 +713,10 @@ async function handleApi(req, res, pathname){
         const patched = { ...row, data: JSON.stringify(o) };
         if(await restampPatient(store, patched, unitId)) moved++;
       }
+      await recordAudit(store, {
+        actor, action: ACTIONS.STRUCTURE_MOVE, subjectType: 'unit', subjectId: unitId,
+        orgId: targetOrg, req, detail: { kind: 'patient-rehome', patientIds: ids, wardId, moved }
+      });
       return sendJSON(res, 200, { moved });
     }
 
@@ -737,6 +807,10 @@ async function handleApi(req, res, pathname){
       }
     }
     await store.createUser(newUser);
+    await recordAudit(store, {
+      actor, action: ACTIONS.USER_CREATE, subjectType: 'user', subjectId: newUser.id,
+      orgId: newUser.orgId ?? null, req, detail: { username: newUser.username, role: newUser.role }
+    });
     return sendJSON(res, 200, { id: newUser.id, username: newUser.username, role: newUser.role, temporaryPassword: password });
   }
 
@@ -752,6 +826,10 @@ async function handleApi(req, res, pathname){
       return sendJSON(res, 400, { error: 'You cannot disable your own account' });
     }
     await store.updateUser(target.id, { active: false, tokenVersion: (target.tokenVersion || 0) + 1 });
+    await recordAudit(store, {
+      actor, action: ACTIONS.USER_DISABLE, subjectType: 'user', subjectId: target.id,
+      orgId: target.orgId ?? null, req
+    });
     return sendJSON(res, 200, { ok: true });
   }
 
@@ -764,6 +842,10 @@ async function handleApi(req, res, pathname){
       return sendJSON(res, 403, { error: 'Not your organization' });
     }
     await store.updateUser(target.id, { active: true });
+    await recordAudit(store, {
+      actor, action: ACTIONS.USER_ENABLE, subjectType: 'user', subjectId: target.id,
+      orgId: target.orgId ?? null, req
+    });
     return sendJSON(res, 200, { ok: true });
   }
 
@@ -779,6 +861,10 @@ async function handleApi(req, res, pathname){
     const passwordSalt = crypto.randomBytes(16).toString('hex');
     const passwordHash = hashPassword(password, passwordSalt);
     await store.updateUser(target.id, { passwordHash, passwordSalt, tokenVersion: (target.tokenVersion || 0) + 1 });
+    await recordAudit(store, {
+      actor, action: ACTIONS.PASSWORD_RESET, subjectType: 'user', subjectId: target.id,
+      orgId: target.orgId ?? null, req
+    });
     return sendJSON(res, 200, { ok: true, temporaryPassword: password });
   }
 
@@ -851,6 +937,7 @@ async function handleApi(req, res, pathname){
     // silent `continue` leaves the record permanently _dirty). Scope refusals
     // only; LWW losers are legitimately stored and never listed here.
     const rejected = [];
+    const auditJobs = [];
 
     await store.begin();
     try{
@@ -910,12 +997,40 @@ async function handleApi(req, res, pathname){
           }
           stored.updatedAt = now;
           await store.upsertPatient(p.id, now, p.deleted ? 1 : 0, JSON.stringify(stored));
+          // Defer audit until after commit so a rolled-back sync never leaves
+          // audit rows for writes that did not land, and audit never holds the txn.
+          auditJobs.push({
+            action: ACTIONS.PATIENT_WRITE,
+            subjectId: p.id,
+            orgId: stored.orgId ?? null,
+            detail: { deleted: !!p.deleted }
+          });
+          if(decision && decision.moved){
+            auditJobs.push({
+              action: ACTIONS.PATIENT_MOVE,
+              subjectId: p.id,
+              orgId: stored.orgId ?? null,
+              detail: { from: decision.moved.from, to: decision.moved.to }
+            });
+          }
         }
       }
       await store.commit();
     }catch(err){
       await store.rollback();
       throw err;
+    }
+
+    for(const job of auditJobs){
+      await recordAudit(store, {
+        actor,
+        action: job.action,
+        subjectType: 'patient',
+        subjectId: job.subjectId,
+        orgId: job.orgId,
+        req,
+        detail: job.detail
+      });
     }
 
     const rows = await store.getChangedSince(since);
@@ -942,6 +1057,10 @@ async function handleApi(req, res, pathname){
     }
     const filePath = store.backupFilePath ? store.backupFilePath() : null;
     if(filePath){
+      await recordAudit(store, {
+        actor, action: ACTIONS.BACKUP_DOWNLOAD, subjectType: 'backup', subjectId: null,
+        orgId: actor.orgId ?? null, req
+      });
       res.writeHead(200, {
         'Content-Type': 'application/octet-stream',
         'Content-Disposition': `attachment; filename="ortho_${new Date().toISOString().slice(0,10)}.db"`,
@@ -989,6 +1108,10 @@ async function handleApi(req, res, pathname){
       return sendJSON(res, 403, { error: 'Instance admin only' });
     }
     const rows = await store.getActive();
+    await recordAudit(store, {
+      actor, action: ACTIONS.EXPORT, subjectType: 'export', subjectId: null,
+      orgId: actor.orgId ?? null, req, detail: { count: rows.length, kind: 'json' }
+    });
     const payload = {
       exportedAt: new Date().toISOString(),
       appVersion: 2,
@@ -1023,6 +1146,10 @@ async function handleApi(req, res, pathname){
       const buf = await buildOtListDocx({ date, unit, patients, defaultOtDoctors: defaults });
       const stamp = date.replace(/-/g, '');
       const unitSlug = (unit || 'list').replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_|_$/g, '') || 'list';
+      await recordAudit(store, {
+        actor, action: ACTIONS.EXPORT, subjectType: 'export', subjectId: null,
+        orgId: actor.orgId ?? null, req, detail: { kind: 'ot-list', date, count: patients.length }
+      });
       res.writeHead(200, {
         'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
         'Content-Disposition': `attachment; filename="OT_LIST_UNIT_${unitSlug}_${stamp}.docx"`,
@@ -1047,6 +1174,14 @@ async function handleApi(req, res, pathname){
     }
     const body = await readBody(req) || {};
     recordEvent(`ai:${pathname.slice('/api/ai/'.length)}`);
+    const aiEndpoint = pathname.slice('/api/ai/'.length);
+    const patientId = body.patient && typeof body.patient === 'object' && body.patient.id
+      ? String(body.patient.id)
+      : null;
+    await recordAudit(store, {
+      actor, action: ACTIONS.AI_INVOKE, subjectType: 'ai', subjectId: patientId,
+      orgId: actor.orgId ?? null, req, detail: { endpoint: aiEndpoint }
+    });
     try{
       if(pathname === '/api/ai/draft-plan'){
         if(!body.patient || typeof body.patient !== 'object'){
@@ -1145,7 +1280,31 @@ async function handleApi(req, res, pathname){
       await store.rollback();
       throw err;
     }
+    await recordAudit(store, {
+      actor, action: ACTIONS.IMPORT, subjectType: 'import', subjectId: null,
+      orgId: actor.orgId ?? null, req, detail: { count: incoming.length, replace }
+    });
     return sendJSON(res, 200, { count: incoming.length });
+  }
+
+  if(pathname === '/api/audit/patient-view' && req.method === 'POST'){
+    const body = await readBody(req) || {};
+    const patientId = typeof body.patientId === 'string' ? body.patientId.trim() : '';
+    if(!patientId) return sendJSON(res, 400, { error: 'patientId required' });
+    const row = await store.getPatientRaw(patientId);
+    if(!row) return sendJSON(res, 404, { error: 'Patient not found' });
+    let patient;
+    try{ patient = JSON.parse(row.data || '{}'); }catch{ patient = {}; }
+    patient.id = patientId;
+    if(isEnabled('MULTI_TENANT')){
+      const scope = await resolveScope(actor, store);
+      if(!canRead(patient, scope)) return sendJSON(res, 403, { error: 'Not in scope' });
+    }
+    await recordAudit(store, {
+      actor, action: ACTIONS.PATIENT_VIEW, subjectType: 'patient', subjectId: patientId,
+      orgId: patient.orgId ?? null, req
+    });
+    return sendJSON(res, 200, { ok: true });
   }
 
   return sendJSON(res, 404, { error: 'Unknown endpoint' });
