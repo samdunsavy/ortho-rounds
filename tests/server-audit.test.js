@@ -149,7 +149,7 @@ describe('T1 audit write path (flag off)', () => {
 });
 
 describe('T1 audit write path — patient.move + structure (MULTI_TENANT)', () => {
-  let srv, token, rows;
+  let srv, token, rows, unitCreateId, wardCreateId;
 
   before(async () => {
     srv = await startServer({
@@ -177,6 +177,25 @@ describe('T1 audit write path — patient.move + structure (MULTI_TENANT)', () =
       method: 'POST', body: JSON.stringify({ orgId: 'org1', name: 'Audit Hospital' })
     });
     assert.equal(hosp.status, 200);
+
+    // Instance admin (actor.orgId === null) creating unit/ward under org1 must
+    // stamp the node's org, not null.
+    const unitRes = await authFetch(srv.baseUrl, rootTok, '/api/admin/units', {
+      method: 'POST', body: JSON.stringify({ departmentId: 'dep1', name: 'Audit Unit' })
+    });
+    assert.equal(unitRes.status, 200);
+    unitCreateId = unitRes.json.id;
+    const wardRes = await authFetch(srv.baseUrl, rootTok, '/api/admin/wards', {
+      method: 'POST', body: JSON.stringify({ unitId: 'unit1', name: 'Audit Ward' })
+    });
+    assert.equal(wardRes.status, 200);
+    wardCreateId = wardRes.json.id;
+    assert.equal((await authFetch(srv.baseUrl, rootTok, `/api/admin/nodes/ward/${wardCreateId}`, {
+      method: 'PATCH', body: JSON.stringify({ name: 'Audit Ward Renamed' })
+    })).status, 200);
+    assert.equal((await authFetch(srv.baseUrl, rootTok, `/api/admin/nodes/ward/${wardCreateId}`, {
+      method: 'DELETE'
+    })).status, 200);
 
     const dleadLogin = await login(srv.baseUrl, 'dlead', 'pw-dlead');
     assert.equal(dleadLogin.status, 200);
@@ -219,6 +238,24 @@ describe('T1 audit write path — patient.move + structure (MULTI_TENANT)', () =
     assert.ok(hit, 'structure.create row missing');
     assert.equal(hit.detail.name, 'Audit Hospital');
     assert.equal(hit.orgId, 'org1');
+  });
+
+  test('instance admin structure.create/update/delete stamp node orgId, not null', () => {
+    const unitHit = rows.find(r => r.action === 'structure.create' && r.subjectType === 'unit' && r.subjectId === unitCreateId);
+    assert.ok(unitHit, 'unit structure.create missing');
+    assert.equal(unitHit.orgId, 'org1');
+
+    const wardHit = rows.find(r => r.action === 'structure.create' && r.subjectType === 'ward' && r.subjectId === wardCreateId);
+    assert.ok(wardHit, 'ward structure.create missing');
+    assert.equal(wardHit.orgId, 'org1');
+
+    const upd = rows.find(r => r.action === 'structure.update' && r.subjectType === 'ward' && r.subjectId === wardCreateId);
+    assert.ok(upd, 'ward structure.update missing');
+    assert.equal(upd.orgId, 'org1');
+
+    const del = rows.find(r => r.action === 'structure.delete' && r.subjectType === 'ward' && r.subjectId === wardCreateId);
+    assert.ok(del, 'ward structure.delete missing');
+    assert.equal(del.orgId, 'org1');
   });
 });
 

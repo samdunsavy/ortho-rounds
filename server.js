@@ -499,7 +499,7 @@ async function handleApi(req, res, pathname){
     await store.createWard(ward);
     await recordAudit(store, {
       actor, action: ACTIONS.STRUCTURE_CREATE, subjectType: 'ward', subjectId: ward.id,
-      orgId: actor.orgId ?? null, req, detail: { name }
+      orgId: await nodeOrgId(store, 'unit', unit.id), req, detail: { name }
     });
     return sendJSON(res, 200, { id: ward.id, unitId: unit.id, name });
   }
@@ -606,7 +606,7 @@ async function handleApi(req, res, pathname){
       await store.createWard(ward);
       await recordAudit(store, {
         actor, action: ACTIONS.STRUCTURE_CREATE, subjectType: 'ward', subjectId: ward.id,
-        orgId: actor.orgId ?? null, req, detail: { name }
+        orgId: await nodeOrgId(store, 'unit', unit.id), req, detail: { name }
       });
       return sendJSON(res, 200, { id: ward.id, unitId: unit.id, name });
     }
@@ -623,7 +623,7 @@ async function handleApi(req, res, pathname){
       await store.createUnit(unit);
       await recordAudit(store, {
         actor, action: ACTIONS.STRUCTURE_CREATE, subjectType: 'unit', subjectId: unit.id,
-        orgId: actor.orgId ?? null, req, detail: { name }
+        orgId: await nodeOrgId(store, 'department', dep.id), req, detail: { name }
       });
       return sendJSON(res, 200, { id: unit.id, departmentId: dep.id, name });
     }
@@ -661,7 +661,7 @@ async function handleApi(req, res, pathname){
       if(type === 'ward' || type === 'unit') await restampUnits(store, await unitIdsUnder(store, type, id));
       await recordAudit(store, {
         actor, action: ACTIONS.STRUCTURE_UPDATE, subjectType: type, subjectId: id,
-        orgId: actor.orgId ?? null, req, detail: { name }
+        orgId: g.orgId ?? null, req, detail: { name }
       });
       return sendJSON(res, 200, { id, type, name });
     }
@@ -696,7 +696,7 @@ async function handleApi(req, res, pathname){
       await deleteNode(store, type, id);
       await recordAudit(store, {
         actor, action: ACTIONS.STRUCTURE_DELETE, subjectType: type, subjectId: id,
-        orgId: actor.orgId ?? null, req
+        orgId: g.orgId ?? null, req
       });
       return sendJSON(res, 200, { deleted: true });
     }
@@ -1140,12 +1140,12 @@ async function handleApi(req, res, pathname){
     if(isEnabled('MULTI_TENANT') && !isInstanceAdmin(actor)){
       return sendJSON(res, 403, { error: 'Instance admin only' });
     }
+    await recordAudit(store, {
+      actor, action: ACTIONS.BACKUP_DOWNLOAD, subjectType: 'backup', subjectId: null,
+      orgId: actor.orgId ?? null, req
+    });
     const filePath = store.backupFilePath ? store.backupFilePath() : null;
     if(filePath){
-      await recordAudit(store, {
-        actor, action: ACTIONS.BACKUP_DOWNLOAD, subjectType: 'backup', subjectId: null,
-        orgId: actor.orgId ?? null, req
-      });
       res.writeHead(200, {
         'Content-Type': 'application/octet-stream',
         'Content-Disposition': `attachment; filename="ortho_${new Date().toISOString().slice(0,10)}.db"`,
