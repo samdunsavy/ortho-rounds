@@ -115,7 +115,7 @@ function peopleAssignmentDisplay(u, groups, orgs, unscoped){
   const label = assignLabelFor(groups, selType, selId);
   if(label) return { text: label, readOnly: unscoped, enterOrgId: unscoped && u.orgId ? u.orgId : null, stale: false };
   if(unscoped) return { text: `Within ${orgNameForUser(u, orgs)}`, readOnly: true, enterOrgId: u.orgId || null, stale: false };
-  return { text: 'Assigned to a place that no longer exists', readOnly: false, enterOrgId: null, stale: true };
+  return { text: 'assigned to a place that no longer exists', readOnly: false, enterOrgId: null, stale: true };
 }
 
 function renderAdminPeopleRowHTML(u, state){
@@ -273,7 +273,7 @@ function renderAdminUsersPanelHTML(state){
   ).join('');
   const cards = (state.users || []).map(u => renderAdminPeopleCardHTML(u, state)).join('');
   const createUserForm = unscoped ? `
-    <div class="small-muted">Choose an organization on the Organizations tab to create users.</div>
+    <div class="small-muted">Choose an organization on the Organizations section to create users.</div>
     <button type="button" class="btn" id="adminPeoplePickOrg">Go to Organizations</button>` : `
     <div class="admin-inline-form">
       <label for="adminNewUsername" class="sr-only">New username</label>

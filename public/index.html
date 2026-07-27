@@ -720,7 +720,8 @@
   .admin-nav-item[aria-current="page"]{color:var(--accent);background:var(--accent-soft);background-color:var(--accent-soft);font-weight:700;box-shadow:inset 3px 0 0 var(--accent);}
   .admin-nav-item .ic{font-size:18px;color:inherit;}
   .admin-nav-item:focus-visible{outline:none;box-shadow:var(--focus-ring);}
-  .admin-sidebar-back{margin-top:auto;justify-content:flex-start;min-height:44px;background:transparent;border:1px solid var(--line);color:var(--ink-soft);}
+  .admin-sidebar-back{margin-top:auto;justify-content:flex-start;min-height:44px;background:transparent;border:1px solid var(--line);color:var(--ink-soft);box-shadow:none;}
+  .admin-sidebar-back:hover{color:var(--ink);background:var(--accent-soft);box-shadow:none;}
   .admin-main{flex:1;min-width:0;overflow-y:auto;padding:16px 20px;max-width:1120px;margin:0 auto;width:100%;}
   .admin-context-bar{position:sticky;top:0;background:var(--paper);z-index:10;display:flex;align-items:center;gap:12px;padding:4px 0 12px;flex-wrap:wrap;}
   .admin-busy-status{
@@ -2188,7 +2189,7 @@
     </div>
 
     <div class="admin-section" id="adminOverviewSection">
-      <div class="small-muted" id="adminOverviewChooser" hidden>Choose an organization on the Organizations tab first.</div>
+      <div class="small-muted" id="adminOverviewChooser" hidden>Choose an organization on the Organizations section first.</div>
       <div id="adminOverviewBody">
         <div class="admin-stat-tiles" id="adminStatTiles"></div>
         <div id="adminOverviewStatusBar"></div>
@@ -2204,7 +2205,7 @@
     <div class="admin-section" id="adminPeopleSection" hidden></div>
 
     <div class="admin-section" id="adminStructureSection" hidden>
-      <div class="small-muted" id="adminStructureChooser" hidden>Choose an organization on the Organizations tab first.</div>
+      <div class="small-muted" id="adminStructureChooser" hidden>Choose an organization on the Organizations section first.</div>
       <div class="admin-cc" id="adminStructureBody">
         <aside class="admin-cc-rail" id="adminTreeRail"></aside>
         <section class="admin-cc-detail" id="adminDetailPane"></section>

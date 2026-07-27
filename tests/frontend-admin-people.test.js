@@ -47,11 +47,11 @@ describe('assign-select grouping', () => {
     assert.ok(html.includes('<optgroup label="Wards">'));
   });
 
-  test('a stale selection reads "Assigned to a place that no longer exists", not a raw type:id', () => {
+  test('a stale selection reads "assigned to a place that no longer exists", not a raw type:id', () => {
     const { window } = loadFrontendEnv();
     const groups = window.buildAssignNodeGroups(TREE, []);
     const html = window.renderAssignSelectOptionsHTML(groups, 'unit', 'gone-unit');
-    assert.ok(html.includes('Assigned to a place that no longer exists'));
+    assert.ok(html.includes('assigned to a place that no longer exists'));
     assert.ok(!html.includes('Stale ('));
   });
 });
@@ -103,7 +103,7 @@ describe('users panel', () => {
   test('a stale assignment reads the plain-language warning, not the raw type:id', () => {
     const { window } = loadFrontendEnv();
     const html = window.renderAdminUsersPanelHTML({ tree: TREE, users: CC_USERS, orgs: [] });
-    assert.ok(html.includes('Assigned to a place that no longer exists'));
+    assert.ok(html.includes('assigned to a place that no longer exists'));
   });
   test('scoped stale assignment renders editable reassign select', () => {
     const { window } = loadFrontendEnv();

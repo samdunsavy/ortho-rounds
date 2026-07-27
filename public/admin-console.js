@@ -140,7 +140,7 @@ function adminNeedsOrgChoice(){
 }
 
 function adminOrgChooserHTML(){
-  return 'Choose an organization on the Organizations tab first.';
+  return 'Choose an organization on the Organizations section first.';
 }
 
 function renderAdminOverviewSection(){
@@ -290,7 +290,7 @@ function buildAssignNodeGroups(tree, orgs){
 
 // Looks up the display label for a "type:id" assignment. Returns null when
 // the node isn't in the current tree/org list (a stale assignment) so
-// callers can render the "Assigned to a place that no longer exists" copy.
+// callers can render the "assigned to a place that no longer exists" copy.
 function assignLabelFor(groups, type, id){
   if(!type || !id) return null;
   const hit = (groups[type] || []).find(x => x.id === id);
@@ -303,7 +303,7 @@ function renderAssignSelectOptionsHTML(groups, selType, selId){
   ).join('')}</optgroup>` : '';
   const known = (groups[selType] || []).some(x => x.id === selId);
   const stale = selType && selId && !known
-    ? `<option value="${escapeHTML(selType)}:${escapeHTML(selId)}" selected>Assigned to a place that no longer exists</option>`
+    ? `<option value="${escapeHTML(selType)}:${escapeHTML(selId)}" selected>assigned to a place that no longer exists</option>`
     : '';
   return `<option value="">— none —</option>` + stale +
     optgroup('Organizations', 'org', groups.org) +
