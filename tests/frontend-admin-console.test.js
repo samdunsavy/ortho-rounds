@@ -194,12 +194,23 @@ describe('admin overview dashboard', () => {
     window.switchAdminSection('overview');
     assert.ok(document.querySelector('#adminOverviewStatusBar .admin-status-bar'));
   });
-  test('needs-attention rows keep their data hooks and gain icons', () => {
-    const { window } = orgAdminEnv();
-    const cats = { unassigned: [{ username: 'x' }], stale: [], emptyUnits: [], disabled: [] };
-    const html = window.renderAdminNeedsAttentionHTML(cats);
-    assert.match(html, /data-attention-people="unassigned"/);
-    assert.match(html, /<svg class="ic/);
+  test('needs-attention renders real DOM rows for both people and unit categories, each icon-led', async () => {
+    const { window, document } = orgAdminEnv();
+    const withEmptyUnit = JSON.parse(JSON.stringify(TREE));
+    withEmptyUnit.hospitals[0].departments[0].units.push({ id: 'u-empty', name: 'Empty Unit', stats: { livePatients: 0, byStatus: { postop: 0, preop: 0, conservative: 0, fordischarge: 0 }, users: 0, lastActivity: null }, wards: [] });
+    window.api = async (path) => {
+      if(path.startsWith('/api/admin/org')) return withEmptyUnit;
+      if(path === '/api/admin/users') return { users: [{ id: 'u1', username: 'unassigned1', role: 'member', active: true, orgId: null, assignmentType: null, assignmentId: null }] };
+      return {};
+    };
+    await window.loadAdminView(); // real render path: loadAdminView -> renderAdminSection -> renderAdminOverviewSection
+    window.switchAdminSection('overview');
+    const peopleRow = document.querySelector('#adminNeedsAttention [data-attention-people="unassigned"]');
+    const unitRow = document.querySelector('#adminNeedsAttention [data-attention-unit="u-empty"]');
+    assert.ok(peopleRow, 'expected a data-attention-people row in the DOM');
+    assert.ok(unitRow, 'expected a data-attention-unit row in the DOM');
+    assert.ok(peopleRow.querySelector('svg.ic use'), 'people row should lead with an icon');
+    assert.ok(unitRow.querySelector('svg.ic use'), 'unit row should lead with an icon');
   });
 });
 
@@ -251,17 +262,27 @@ describe('Overview: computeAdminNeedsAttention', () => {
     assert.ok(html.includes('data-attention-people="unassigned"'));
   });
 
-  test('renderAdminNeedsAttentionHTML uses exact stale-assignment copy (capital A)', () => {
+  test('renderAdminNeedsAttentionHTML uses sentence-case stale-assignment copy', () => {
     const { window } = loadFrontendEnv();
     const html = window.renderAdminNeedsAttentionHTML({
       unassigned: [], stale: [{ id: 'u2', username: 'stale1' }], emptyUnits: [], disabled: []
     });
-    assert.ok(html.includes('Assigned to a place that no longer exists'));
-    assert.ok(!html.includes('assigned to a place that no longer exists'));
+    assert.ok(html.includes('assigned to a place that no longer exists'));
+    assert.ok(!html.includes('Assigned to a place that no longer exists'));
   });
 });
 
 describe('Overview: quick actions', () => {
+  test('clicking the icon inside a quick-action button still triggers the action (regression: e.target may be the svg/use, not the button)', async () => {
+    const { window, document } = orgAdminEnv();
+    await window.loadAdminView();
+    const svg = document.querySelector('#adminQuickAddPerson svg');
+    assert.ok(svg, 'quick-action button should contain an icon svg');
+    svg.dispatchEvent(new window.Event('click', { bubbles: true }));
+    assert.equal(document.getElementById('adminPeopleSection').hidden, false);
+    assert.equal(document.activeElement.id, 'adminNewUsername');
+  });
+
   test('Add person switches to People and focuses the create form', async () => {
     const { window, document } = orgAdminEnv();
     await window.loadAdminView();

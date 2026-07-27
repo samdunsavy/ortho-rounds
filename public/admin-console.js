@@ -185,8 +185,8 @@ function renderAdminNeedsAttentionHTML(cats){
   const groups = [];
   if(cats.unassigned.length) groups.push({ title: `${cats.unassigned.length} ${cats.unassigned.length === 1 ? 'person has' : 'people have'} no assignment`, urgent: true,
     rows: cats.unassigned.map(u => row('data-attention-people', 'unassigned', 'user-check', `${escapeHTML(u.username)} — no assignment`)).join('') });
-  if(cats.stale.length) groups.push({ title: `${cats.stale.length} ${cats.stale.length === 1 ? 'person is' : 'people are'} Assigned to a place that no longer exists`,
-    rows: cats.stale.map(u => row('data-attention-people', 'stale', 'map-pin-off', `${escapeHTML(u.username)} — Assigned to a place that no longer exists`)).join('') });
+  if(cats.stale.length) groups.push({ title: `${cats.stale.length} ${cats.stale.length === 1 ? 'person is' : 'people are'} assigned to a place that no longer exists`,
+    rows: cats.stale.map(u => row('data-attention-people', 'stale', 'map-pin-off', `${escapeHTML(u.username)} — assigned to a place that no longer exists`)).join('') });
   if(cats.emptyUnits.length) groups.push({ title: `${cats.emptyUnits.length} empty unit${cats.emptyUnits.length === 1 ? '' : 's'} (no wards, patients or staff)`,
     rows: cats.emptyUnits.map(u => row('data-attention-unit', u.id, 'box-off', escapeHTML(u.name))).join('') });
   if(cats.disabled.length) groups.push({ title: `${cats.disabled.length} disabled account${cats.disabled.length === 1 ? '' : 's'}`,
@@ -225,9 +225,9 @@ function getAdminPeopleFilter(){
 }
 
 document.getElementById('adminOverviewBody')?.addEventListener('click', (e) => {
-  if(e.target.id === 'adminQuickAddPerson') return quickActionAddPerson();
-  if(e.target.id === 'adminQuickAddWard') return quickActionAddWard();
-  if(e.target.id === 'adminQuickFixAssignment') return quickActionFixAssignment();
+  if(e.target.closest('#adminQuickAddPerson')) return quickActionAddPerson();
+  if(e.target.closest('#adminQuickAddWard')) return quickActionAddWard();
+  if(e.target.closest('#adminQuickFixAssignment')) return quickActionFixAssignment();
   const unitRow = e.target.closest('[data-attention-unit]');
   if(unitRow){ switchAdminSection('structure'); selectAdminNode('unit', unitRow.dataset.attentionUnit); return; }
   const peopleRow = e.target.closest('[data-attention-people]');
