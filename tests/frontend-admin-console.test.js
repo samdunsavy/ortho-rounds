@@ -53,18 +53,18 @@ describe('admin icon system', () => {
 });
 
 describe('admin console shell: sidebar nav', () => {
-  test('org admin sees 3 nav items (no Organizations); instance admin sees 4', () => {
+  test('org admin sees 4 nav items (no Organizations); instance admin sees 5', () => {
     const { window, document } = orgAdminEnv();
     window.renderAdminSidebarNav();
     assert.deepEqual(
       [...document.querySelectorAll('#adminSidebarNav [data-admin-section]')].map(b => b.dataset.adminSection),
-      ['overview', 'people', 'structure']
+      ['overview', 'people', 'structure', 'audit']
     );
     window.localStorage.setItem('ortho_role', 'admin');
     window.renderAdminSidebarNav();
     assert.deepEqual(
       [...document.querySelectorAll('#adminSidebarNav [data-admin-section]')].map(b => b.dataset.adminSection),
-      ['overview', 'people', 'structure', 'orgs']
+      ['overview', 'people', 'structure', 'audit', 'orgs']
     );
   });
   test('the active nav item has aria-current=page and no other does', () => {
