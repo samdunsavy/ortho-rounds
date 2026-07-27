@@ -1,7 +1,7 @@
 # Admin Console Premium Craft — Design
 
 **Date:** 2026-07-27  
-**Status:** Approved (design).  
+**Status:** Implemented.  
 **Builds on:** `docs/superpowers/specs/2026-07-27-admin-console-redesign-design.md` (sidebar shell, icons, master-detail — implemented) and `docs/superpowers/specs/2026-07-27-admin-console-visual-polish-design.md` (quiet tokens + busy state — implemented). Audit section from T2 remains in the nav and gets the same instrument treatment.
 
 ## Problem
