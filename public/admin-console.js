@@ -1,10 +1,10 @@
-/* Admin console — shared core: state, the four-section shell, and Overview.
+/* Admin console — shared core: state, the section shell, and Overview.
    Plain script, not a module: function declarations must stay global so
-   app.js's button handlers and the other three admin-*.js files can call
-   them. Cross-file calls (e.g. this file calling renderAdminPeopleSection,
+   app.js's button handlers and the other admin-*.js files can call them.
+   Cross-file calls (e.g. this file calling renderAdminPeopleSection,
    defined in admin-people.js) only ever happen from inside a function body
    that runs later — never at this file's own top level — so the order the
-   four admin-*.js files load in index.html does not matter. Runtime helpers
+   admin-*.js files load in index.html does not matter. Runtime helpers
    (api, showToast, escapeHTML, formatRelativeTime, isInstanceAdminUser,
    isAdmin, adminUiVisible) come from app.js and are only *called* here. */
 
@@ -18,7 +18,7 @@ let adminData = { tree: null, users: [], orgs: [] };
     selection and checked rows survive a mutation instead of being wiped by
     the next loadAdminView() (design spec defect 1). */
 let adminUI = {
-  section: 'overview',           // 'overview' | 'people' | 'structure' | 'orgs'
+  section: 'overview',           // 'overview' | 'people' | 'structure' | 'audit' | 'orgs'
   viewedOrgId: null,             // instance admin: which org's tree is loaded
   allOrgs: [],                   // instance admin: every org, kept across a drill-in
   selectedOrgId: null,           // Organizations: rail selection, master-detail
@@ -30,6 +30,13 @@ let adminUI = {
   peopleSearch: '',
   peopleFilter: 'all',           // 'all' | 'unassigned' | 'disabled' | 'admins' | 'stale' | 'node:<type>:<id>'
   peopleChecked: new Set(),      // checked user ids, bulk assign
+  auditFilters: { action: '', actorId: '', subjectId: '', from: '', to: '', orgId: '' },
+  auditEntries: [],
+  auditSelectedId: null,
+  auditOffset: 0,
+  auditLoading: false,
+  auditError: null,
+  auditHasMore: false,
   busy: false,
   lastLoadedAt: null             // ms timestamp of the latest successful loadAdminView()
 };
@@ -44,6 +51,7 @@ const ADMIN_SECTIONS = [
   { id: 'overview', label: 'Overview' },
   { id: 'people', label: 'People' },
   { id: 'structure', label: 'Structure' },
+  { id: 'audit', label: 'Audit' },
   { id: 'orgs', label: 'Organizations' }
 ];
 
@@ -51,7 +59,7 @@ function visibleAdminSections(){
   return isInstanceAdminUser() ? ADMIN_SECTIONS : ADMIN_SECTIONS.filter(s => s.id !== 'orgs');
 }
 
-const ADMIN_SECTION_ICONS = { overview: 'dashboard', people: 'users', structure: 'sitemap', orgs: 'hospital' };
+const ADMIN_SECTION_ICONS = { overview: 'dashboard', people: 'users', structure: 'sitemap', audit: 'activity', orgs: 'hospital' };
 
 function renderAdminSidebarNav(){
   const el = document.getElementById('adminSidebarNav');
@@ -65,7 +73,7 @@ function renderAdminSidebarNav(){
     </button>`).join('');
 }
 
-const ADMIN_SECTION_IDS = { overview: 'adminOverviewSection', people: 'adminPeopleSection', structure: 'adminStructureSection', orgs: 'adminOrgsSection' };
+const ADMIN_SECTION_IDS = { overview: 'adminOverviewSection', people: 'adminPeopleSection', structure: 'adminStructureSection', audit: 'adminAuditSection', orgs: 'adminOrgsSection' };
 
 function renderAdminOrgChip(){
   const chip = document.getElementById('adminOrgChip');
@@ -91,12 +99,13 @@ function renderAdminSection(){
     if(el) el.hidden = adminUI.section !== name;
   }
   // Late-bound: renderAdminPeopleSection/renderAdminStructureSection/
-  // renderAdminOrgsSection live in the other three admin-*.js files. This
-  // call happens long after every <script> tag has run (it only fires from
-  // an event handler or after an await), so it is safe regardless of the
-  // order those files are listed in index.html.
+  // renderAdminAuditSection/renderAdminOrgsSection live in the other admin-*.js
+  // files. This call happens long after every <script> tag has run (it only
+  // fires from an event handler or after an await), so it is safe regardless
+  // of the order those files are listed in index.html.
   if(adminUI.section === 'people') renderAdminPeopleSection();
   else if(adminUI.section === 'structure') renderAdminStructureSection();
+  else if(adminUI.section === 'audit') renderAdminAuditSection();
   else if(adminUI.section === 'orgs') renderAdminOrgsSection();
   else renderAdminOverviewSection();
 }
@@ -132,9 +141,10 @@ document.getElementById('adminSidebarNav')?.addEventListener('keydown', (e) => {
 });
 
 /** True once an instance admin needs to pick an org before Overview or
-    Structure — both are meaningless without a specific org's tree. People
-    and Organizations are not gated by this: an instance admin can browse
-    every user cross-org, and Organizations IS the picker. */
+    Structure — both are meaningless without a specific org's tree. People,
+    Audit, and Organizations are not gated by this: an instance admin can
+    browse every user cross-org, Audit is org-clamped by the API, and
+    Organizations IS the picker. */
 function adminNeedsOrgChoice(){
   return isInstanceAdminUser() && !adminUI.viewedOrgId;
 }
