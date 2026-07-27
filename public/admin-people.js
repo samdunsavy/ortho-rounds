@@ -39,6 +39,32 @@ function isSelfUser(u){
   return u.username === localStorage.getItem('ortho_username');
 }
 
+/** Icon glyph for each People filter chip. Only the chips that actually
+    exist in renderAdminUsersPanelHTML's chip list get an icon here. */
+const ADMIN_PEOPLE_FILTER_ICONS = { all: 'users', unassigned: 'map-pin-off', disabled: 'user-check', admins: 'user-check' };
+
+/** Semantic status chip for a person row/card. Priority: a disabled account
+    always reads "Disabled" even if it also happens to be unassigned or
+    stale, since that's the more actionable fact. isStale is passed in by
+    the caller (which already has assignLabelFor's groups on hand) rather
+    than recomputed here. */
+function statusChipHTML(u, isStale){
+  let kind, label;
+  if(!u.active){ kind = 'disabled'; label = 'Disabled'; }
+  else if(isStale){ kind = 'stale'; label = 'Stale'; }
+  else if(!u.assignmentType || !u.assignmentId){ kind = 'unassigned'; label = 'Unassigned'; }
+  else{ kind = 'active'; label = 'Active'; }
+  return `<span class="admin-status-chip is-${kind}">${label}</span>`;
+}
+
+/** Two-letter initials avatar, e.g. "Amit Roy" -> "AR", "bob" -> "BO". */
+function initialsAvatar(username){
+  const name = (username || '').trim();
+  const parts = name.split(/[\s._-]+/).filter(Boolean);
+  const initials = parts.length >= 2 ? parts[0][0] + parts[1][0] : name.slice(0, 2);
+  return `<span class="admin-avatar">${escapeHTML((initials || '?').toUpperCase())}</span>`;
+}
+
 /** Mirrors the server's own last-admin check in POST .../role (server.js)
     so the client never offers a click that can only 400. */
 function isLastActiveAdmin(user, users){
@@ -79,13 +105,17 @@ function orgNameForUser(user, orgs){
   return hit ? hit.name : (user.orgId || 'their organization');
 }
 
+/** stale: true only in the one branch where we can actually confirm the
+    assignment points nowhere (not unscoped, no matching node) — an
+    unscoped "Within OrgName" fallback isn't necessarily stale, just
+    unresolvable from this context, so it must not be flagged as such. */
 function peopleAssignmentDisplay(u, groups, orgs, unscoped){
   const selType = u.assignmentType || null, selId = u.assignmentId || null;
-  if(!selType || !selId) return { text: '—', readOnly: unscoped, enterOrgId: null };
+  if(!selType || !selId) return { text: '—', readOnly: unscoped, enterOrgId: null, stale: false };
   const label = assignLabelFor(groups, selType, selId);
-  if(label) return { text: label, readOnly: unscoped, enterOrgId: unscoped && u.orgId ? u.orgId : null };
-  if(unscoped) return { text: `Within ${orgNameForUser(u, orgs)}`, readOnly: true, enterOrgId: u.orgId || null };
-  return { text: 'Assigned to a place that no longer exists', readOnly: false, enterOrgId: null };
+  if(label) return { text: label, readOnly: unscoped, enterOrgId: unscoped && u.orgId ? u.orgId : null, stale: false };
+  if(unscoped) return { text: `Within ${orgNameForUser(u, orgs)}`, readOnly: true, enterOrgId: u.orgId || null, stale: false };
+  return { text: 'Assigned to a place that no longer exists', readOnly: false, enterOrgId: null, stale: true };
 }
 
 function renderAdminPeopleRowHTML(u, state){
@@ -113,7 +143,7 @@ function renderAdminPeopleRowHTML(u, state){
   }else{
     assignCell = `<td><select data-assign-user="${escapeHTML(u.id)}" data-prev="${escapeHTML(prev)}">${renderAssignSelectOptionsHTML(groups, selType, selId)}</select></td>`;
   }
-  const nameCell = self ? `${escapeHTML(u.username)} <span class="spec-badge">You</span>` : escapeHTML(u.username);
+  const nameCell = `${initialsAvatar(u.username)} <span class="admin-people-name">${escapeHTML(u.username)}${self ? ' <span class="spec-badge">You</span>' : ''}</span> ${statusChipHTML(u, placement.stale)}`;
   const roleCell = `<td><select data-role-user="${escapeHTML(u.id)}"${roleDisabled ? ` disabled title="${escapeHTML(roleTitle)}"` : ''}>
         <option value="member"${u.role === 'member' ? ' selected' : ''}>Member</option>
         <option value="admin"${u.role === 'admin' ? ' selected' : ''}>Admin</option>
@@ -211,8 +241,11 @@ function renderAdminPeopleCardHTML(u, state){
   }
   return `<div class="admin-people-card" data-user-card="${escapeHTML(u.id)}" data-username="${escapeHTML((u.username || '').toLowerCase())}">
     <div class="admin-people-card-head" data-card-toggle="${escapeHTML(u.id)}">
-      <strong>${escapeHTML(u.username)}${self ? ' <span class="spec-badge">You</span>' : ''}</strong>
-      <span>${u.active ? 'Active' : 'Disabled'}</span>
+      <span class="admin-people-card-title">
+        ${initialsAvatar(u.username)}
+        <strong>${escapeHTML(u.username)}${self ? ' <span class="spec-badge">You</span>' : ''}</strong>
+      </span>
+      ${statusChipHTML(u, placement.stale)}
     </div>
     <div class="admin-people-card-body">
       ${checkHTML}
@@ -251,7 +284,7 @@ function renderAdminUsersPanelHTML(state){
       <button class="btn" id="adminCreateUser">Create person</button>
     </div>`;
   const chips = ['all', 'unassigned', 'disabled', 'admins'].map(f =>
-    `<button type="button" class="admin-people-chip${f === adminUI.peopleFilter ? ' is-active' : ''}" data-people-filter="${f}">${f[0].toUpperCase() + f.slice(1)}</button>`
+    `<button type="button" class="admin-people-chip${f === adminUI.peopleFilter ? ' is-active' : ''}" data-people-filter="${f}">${icon(ADMIN_PEOPLE_FILTER_ICONS[f])}<span>${f[0].toUpperCase() + f.slice(1)}</span></button>`
   ).join('');
   return `
     <div class="admin-detail-head"><h3>People</h3></div>

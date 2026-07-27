@@ -9,6 +9,22 @@ const CC_USERS = [
   { id: 'usr3', username: 'ghost', role: 'member', active: true, orgId: 'bfv2-org', assignmentType: 'unit', assignmentId: 'gone-unit' }
 ];
 
+/** Stubs the admin API the way orgAdminEnv() does in frontend-admin-console.test.js,
+    but lets each test supply its own users list. Tests still drive the real render
+    path (loadAdminView + switchAdminSection('people')) rather than poking the
+    file-local adminData/adminUI directly — those are never exposed on window. */
+function peopleEnv(users){
+  const env = loadFrontendEnv();
+  const calls = [];
+  env.window.api = async (path, opts) => {
+    calls.push({ path, opts });
+    if(path.startsWith('/api/admin/org')) return TREE;
+    if(path === '/api/admin/users') return { users: users || [] };
+    return {};
+  };
+  return Object.assign({ calls }, env);
+}
+
 describe('assign-select grouping', () => {
   test('buildAssignNodeGroups groups nodes by level with full-path labels', () => {
     const { window } = loadFrontendEnv();
@@ -818,6 +834,71 @@ describe('mobile card markup for the People list', () => {
     const cardSel = document.querySelector('[data-user-card="usr2"] [data-assign-user="usr2"]');
     assert.equal(cardSel.value, 'unit:u1');
     assert.equal(cardSel.selectedOptions[0].textContent, 'Ortho › IV');
+  });
+});
+
+describe('People restyle: filter icons, status chips, avatars', () => {
+  test('filter chips carry icons', async () => {
+    const { window, document } = peopleEnv([]);
+    await window.loadAdminView();
+    window.switchAdminSection('people');
+    assert.ok(document.querySelector('.admin-people-chip svg.ic use'));
+  });
+
+  test('a disabled user renders a disabled status chip', async () => {
+    const { window, document } = peopleEnv([
+      { id: 'u9', username: 'bob', role: 'member', active: false, orgId: null, assignmentType: null, assignmentId: null }
+    ]);
+    await window.loadAdminView();
+    window.switchAdminSection('people');
+    const chip = document.querySelector('[data-user-row="u9"] .admin-status-chip, [data-user-card="u9"] .admin-status-chip');
+    assert.ok(chip, 'expected a .admin-status-chip for the disabled user');
+    assert.match(chip.textContent.toLowerCase(), /disabled/);
+  });
+
+  test('an active, unassigned user renders an unassigned status chip', () => {
+    const { window } = loadFrontendEnv();
+    const users = [
+      { id: 'u1', username: 'pat', role: 'member', active: true, orgId: null, assignmentType: null, assignmentId: null }
+    ];
+    const html = window.renderAdminUsersPanelHTML({ tree: TREE, users, orgs: [] });
+    assert.match(html, /admin-status-chip is-unassigned/);
+  });
+
+  test('a stale assignment renders a stale status chip', () => {
+    const { window } = loadFrontendEnv();
+    const users = [
+      { id: 'usr3', username: 'ghost', role: 'member', active: true, orgId: 'bfv2-org', assignmentType: 'unit', assignmentId: 'gone-unit' }
+    ];
+    const html = window.renderAdminUsersPanelHTML({ tree: TREE, users, orgs: [{ id: 'bfv2-org', name: 'Default' }] });
+    assert.match(html, /admin-status-chip is-stale/);
+  });
+
+  test('an unscoped "Within OrgName" placement is not flagged stale (it is merely unresolved from this context)', () => {
+    const { window } = loadFrontendEnv();
+    window.localStorage.setItem('ortho_role', 'admin');
+    const users = [
+      { id: 'u1', username: 'pat', role: 'member', active: true, orgId: 'o1', assignmentType: 'unit', assignmentId: 'u1' }
+    ];
+    const orgs = [{ id: 'o1', name: 'Pilot Org', plan: 'free', stats: { hospitals: 0, departments: 0, users: 1, livePatients: 0 } }];
+    const html = window.renderAdminUsersPanelHTML({ tree: null, users, orgs });
+    assert.ok(html.includes('Within Pilot Org'));
+    assert.ok(!html.includes('admin-status-chip is-stale'));
+  });
+
+  test('a user row shows an initials avatar', async () => {
+    const { window, document } = peopleEnv([
+      { id: 'u9', username: 'bob', role: 'member', active: true, orgId: null, assignmentType: null, assignmentId: null }
+    ]);
+    await window.loadAdminView();
+    window.switchAdminSection('people');
+    assert.ok(document.querySelector('[data-user-row="u9"] .admin-avatar'));
+    assert.ok(document.querySelector('[data-user-card="u9"] .admin-avatar'), 'the phone card also gets an avatar');
+  });
+
+  test('initialsAvatar renders uppercase initials for a plain username', () => {
+    const { window } = loadFrontendEnv();
+    assert.equal(window.initialsAvatar('bob'), '<span class="admin-avatar">BO</span>');
   });
 });
 
