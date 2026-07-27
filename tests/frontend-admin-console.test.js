@@ -565,3 +565,40 @@ describe('admin premium craft: tokens and fonts', () => {
     assert.match(href, /Fraunces/);
   });
 });
+
+describe('admin premium craft: shell', () => {
+  test('sidebar brand shows Ortho Rounds and Admin', () => {
+    const { document } = loadFrontendEnv();
+    const brand = document.querySelector('.admin-sidebar-brand');
+    assert.ok(brand);
+    assert.match(brand.textContent, /Ortho Rounds/);
+    assert.match(brand.textContent, /Admin/);
+  });
+
+  test('busy state keeps Updating… and context bar for shimmer hook', async () => {
+    // Same pending-users pattern as "admin soft busy state" — orgAdminEnv()
+    // resolves users immediately, so we cannot observe is-busy with it.
+    const { window, document } = loadFrontendEnv();
+    let resolveUsers;
+    const usersPending = new Promise(r => { resolveUsers = r; });
+    window.api = async (path) => {
+      if(path === '/api/admin/users'){ await usersPending; return { users: [] }; }
+      if(path === '/api/health') return { ok: true, storage: 'sqlite', ai: { enabled: false }, flags: { MULTI_TENANT: true } };
+      if(path.startsWith('/api/admin/org')) return {
+        org: { id: 'bfv2-org', name: 'Default', stats: { livePatients: 0, byStatus: {}, users: 0, lastActivity: null } },
+        totals: { hospitals: 0, departments: 0, units: 0, wards: 0, usersActive: 0, usersDisabled: 0, livePatients: 0 },
+        hospitals: []
+      };
+      return {};
+    };
+    window.localStorage.setItem('ortho_org_id', 'bfv2-org');
+    document.getElementById('adminView').hidden = false;
+    const p = window.loadAdminView();
+    await new Promise(r => setTimeout(r, 0));
+    assert.equal(document.getElementById('adminView').classList.contains('is-busy'), true);
+    assert.ok(document.querySelector('.admin-context-bar'));
+    assert.equal(document.getElementById('adminBusyStatus').hidden, false);
+    resolveUsers({ users: [] });
+    await p;
+  });
+});
