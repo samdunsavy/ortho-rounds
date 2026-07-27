@@ -286,6 +286,9 @@ function renderAdminUsersPanelHTML(state){
   const chips = ['all', 'unassigned', 'disabled', 'admins'].map(f =>
     `<button type="button" class="admin-people-chip${f === adminUI.peopleFilter ? ' is-active' : ''}" data-people-filter="${f}">${icon(ADMIN_PEOPLE_FILTER_ICONS[f])}<span>${f[0].toUpperCase() + f.slice(1)}</span></button>`
   ).join('');
+  const emptyList = !(state.users || []).length
+    ? `<div class="admin-empty" id="adminPeopleEmpty">No people yet.</div>`
+    : `<div class="admin-empty" id="adminPeopleEmptyFilter" hidden>No people match.</div>`;
   return `
     <div class="admin-detail-head"><h3>People</h3></div>
     <div class="admin-inline-form">
@@ -299,7 +302,8 @@ function renderAdminUsersPanelHTML(state){
       <thead><tr><th></th><th>Person</th><th>Role</th><th>Can see patients in</th><th>Status</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
-    <div class="admin-people-cards">${cards}</div>`;
+    <div class="admin-people-cards">${cards}</div>
+    ${emptyList}`;
 }
 
 function applyAdminPeopleFilters(){
@@ -313,6 +317,11 @@ function applyAdminPeopleFilters(){
   };
   document.querySelectorAll('[data-user-row]').forEach(tr => apply(tr, tr.dataset.userRow));
   document.querySelectorAll('[data-user-card]').forEach(card => apply(card, card.dataset.userCard));
+  const filterEmpty = document.getElementById('adminPeopleEmptyFilter');
+  if(filterEmpty){
+    const anyVisible = [...document.querySelectorAll('[data-user-row]')].some(el => el.style.display !== 'none');
+    filterEmpty.hidden = anyVisible || !(adminData.users || []).length;
+  }
 }
 
 function applyAdminPeopleChecked(){

@@ -89,6 +89,28 @@ describe('delegated assign-select change handler', () => {
 });
 
 describe('users panel', () => {
+  test('empty users list shows No people yet', () => {
+    const { window, document } = loadFrontendEnv();
+    document.getElementById('adminPeopleSection').innerHTML =
+      window.renderAdminUsersPanelHTML({ tree: null, users: [], orgs: [] });
+    assert.match(document.getElementById('adminPeopleSection').textContent, /No people yet/);
+  });
+
+  test('no filter matches shows No people match', async () => {
+    const { window, document } = peopleEnv([
+      { id: 'u1', username: 'alice', role: 'member', active: true, orgId: null, assignmentType: null, assignmentId: null }
+    ]);
+    await window.loadAdminView();
+    window.switchAdminSection('people');
+    const input = document.getElementById('adminUserSearch');
+    input.value = 'zzz-no-match';
+    input.dispatchEvent(new window.Event('input', { bubbles: true }));
+    const empty = document.getElementById('adminPeopleEmptyFilter');
+    assert.ok(empty);
+    assert.equal(empty.hidden, false);
+    assert.match(empty.textContent, /No people match/);
+  });
+
   test('assignment picker includes an Organizations group', () => {
     const { window } = loadFrontendEnv();
     const html = window.renderAdminUsersPanelHTML({ tree: TREE, users: CC_USERS, orgs: [{ id: 'bfv2-org', name: 'Default' }] });
