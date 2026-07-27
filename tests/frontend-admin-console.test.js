@@ -31,6 +31,27 @@ function orgAdminEnv(){
   return Object.assign({ calls }, env);
 }
 
+describe('admin icon system', () => {
+  test('icon() returns an svg use reference to the sprite', () => {
+    const { window } = orgAdminEnv();
+    const html = window.icon('users');
+    assert.match(html, /<svg class="ic[^"]*" aria-hidden="true"><use href="#ic-users"\/><\/svg>/);
+  });
+  test('icon() applies an extra class', () => {
+    const { window } = orgAdminEnv();
+    assert.match(window.icon('trash', 'ic-lg'), /class="ic ic-lg"/);
+  });
+  test('the sprite defines every glyph icon() will be asked for', () => {
+    const { document } = orgAdminEnv();
+    for(const id of ['ic-dashboard','ic-users','ic-sitemap','ic-hospital','ic-arrow-left',
+      'ic-stethoscope','ic-user-check','ic-bed','ic-activity','ic-alert-triangle',
+      'ic-chevron-right','ic-chevron-down','ic-plus','ic-edit','ic-trash',
+      'ic-map-pin-off','ic-box-off','ic-search']){
+      assert.ok(document.getElementById(id), `missing sprite symbol ${id}`);
+    }
+  });
+});
+
 describe('admin console shell: section tabs', () => {
   test('org admin sees 3 tabs (no Organizations); instance admin sees 4', () => {
     const { window, document } = orgAdminEnv();

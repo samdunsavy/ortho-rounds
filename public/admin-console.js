@@ -32,6 +32,12 @@ let adminUI = {
   busy: false
 };
 
+/** Sprite glyph as inline svg. name maps to a <symbol id="ic-<name>">.
+    Decorative only — always aria-hidden; callers keep the accessible name. */
+function icon(name, cls){
+  return `<svg class="ic${cls ? ' ' + cls : ''}" aria-hidden="true"><use href="#ic-${name}"/></svg>`;
+}
+
 const ADMIN_SECTIONS = [
   { id: 'overview', label: 'Overview' },
   { id: 'people', label: 'People' },
