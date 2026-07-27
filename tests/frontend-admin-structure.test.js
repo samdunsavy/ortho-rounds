@@ -35,6 +35,19 @@ describe('structure two-pane grid (Task 4)', () => {
     window.selectAdminNode('unit', 'u1');
     assert.ok(document.querySelector('#adminDetailPane .admin-cc-stats'));
   });
+  test('structure detail pane includes slide-in motion class after select', async () => {
+    const { window, document } = structureEnv();
+    await window.loadAdminView();
+    window.switchAdminSection('structure');
+    window.selectAdminNode('unit', 'u1');
+    const detail = document.getElementById('adminDetailPane');
+    assert.ok(detail);
+    assert.ok(
+      detail.classList.contains('admin-motion-slide-in') ||
+      detail.querySelector('.admin-motion-slide-in'),
+      'expected slide-in class on detail pane or its inner root'
+    );
+  });
 });
 
 function mockAdminApi(calls, overrides){

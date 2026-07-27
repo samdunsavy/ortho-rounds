@@ -356,6 +356,9 @@ function renderAdminStructureBody(){
     if(detail){
       detail.innerHTML = `<button type="button" class="btn admin-back-to-tree" data-back-to-tree>‹ Back to tree</button>` +
         renderAdminDetailHTML({ tree: adminData.tree, users: adminData.users, orgs: adminData.orgs, selection: adminUI.selectedNode });
+      detail.classList.remove('admin-motion-slide-in');
+      void detail.offsetWidth; // restart CSS animation on re-select
+      detail.classList.add('admin-motion-slide-in');
     }
   });
 }
