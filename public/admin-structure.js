@@ -76,6 +76,13 @@ function structureCountLabel(count, unitLabel){
   return `${count} ${unitLabel}${count === 1 ? '' : 's'}`;
 }
 
+/** Rail-row / detail-header glyph per node type. Org has no dedicated icon
+    (it's the singleton tree root, not itself a "kind" of node) so callers
+    that see an undefined result just omit the icon for that row. */
+function nodeTypeIcon(type){
+  return { hospital: 'hospital', department: 'stethoscope', unit: 'sitemap', ward: 'bed' }[type];
+}
+
 function ccRowHTML(type, id, label, count, unitLabel, depth, selection, expandable, expanded){
   const sel = selection && selection.type === type && selection.id === id ? ' is-selected' : '';
   const countLabel = structureCountLabel(count, unitLabel);
@@ -84,7 +91,9 @@ function ccRowHTML(type, id, label, count, unitLabel, depth, selection, expandab
   const chevron = expandable
     ? `<button type="button" class="admin-cc-chevron" data-toggle-expand="${escapeHTML(key)}" aria-expanded="${!!expanded}" aria-label="${expanded ? 'Collapse' : 'Expand'}">${expanded ? '▾' : '▸'}</button>`
     : '<span class="admin-cc-chevron-spacer"></span>';
-  return `<span class="admin-cc-row-wrap" data-depth="${depth}">${chevron}<button type="button" data-node="${escapeHTML(key)}" class="admin-cc-row${sel}">${escapeHTML(label)}${c}</button></span>`;
+  const typeIcon = nodeTypeIcon(type);
+  const rowIcon = typeIcon ? icon(typeIcon) : '';
+  return `<span class="admin-cc-row-wrap" data-depth="${depth}">${chevron}<button type="button" data-node="${escapeHTML(key)}" class="admin-cc-row${sel}">${rowIcon}${escapeHTML(label)}${c}</button></span>`;
 }
 
 function renderAdminTreeHTML(tree, selection, expanded){
@@ -158,6 +167,35 @@ function usersAssignedTo(type, id, users){
   return (users || []).filter(u => u.assignmentType === type && u.assignmentId === id);
 }
 
+/** Ancestor path for the detail-pane breadcrumb, department-relative like
+    buildAssignNodeGroups' option labels (e.g. a ward's breadcrumb reads
+    "Ortho › IV") — org and hospital sit at/near the tree root, so they
+    render an empty breadcrumb. */
+function nodeBreadcrumbPath(tree, type, id){
+  for(const h of (tree && tree.hospitals) || []){
+    if(type === 'hospital' && h.id === id) return '';
+    for(const dep of h.departments || []){
+      if(type === 'department' && dep.id === id) return h.name;
+      for(const u of dep.units || []){
+        if(type === 'unit' && u.id === id) return dep.name;
+        for(const w of u.wards || []){
+          if(type === 'ward' && w.id === id) return `${dep.name} › ${u.name}`;
+        }
+      }
+    }
+  }
+  return '';
+}
+
+function nodeStatGridHTML(stats){
+  if(!stats) return '';
+  return `<div class="admin-cc-stats">
+    <div class="admin-cc-stat"><div class="n">${stats.livePatients || 0}</div><div class="l">Patients</div></div>
+    <div class="admin-cc-stat"><div class="n">${stats.users || 0}</div><div class="l">Staff</div></div>
+    <div class="admin-cc-stat"><div class="n">${stats.byStatus ? (stats.byStatus.postop || 0) : 0}</div><div class="l">Post-op</div></div>
+  </div>`;
+}
+
 function nodeStatsHTML(node, type){
   const s = node.stats;
   if(!s) return '';
@@ -204,12 +242,15 @@ function renderAdminDetailHTML(state){
     ${assignedUsers.length
       ? `<div class="admin-cc-children">${assignedUsers.map(u => `<button type="button" class="admin-attention-row" data-attention-people="node:${escapeHTML(sel.type)}:${escapeHTML(sel.id)}">${escapeHTML(u.username)}</button>`).join('')}</div>`
       : '<div class="small-muted">Nobody is assigned here yet.</div>'}`;
+  const breadcrumbPath = nodeBreadcrumbPath(state.tree, sel.type, sel.id);
+  const breadcrumbHTML = breadcrumbPath ? `<span class="admin-cc-breadcrumb">${escapeHTML(breadcrumbPath)}</span>` : '';
   return `
     <div class="admin-detail-head">
-      <h3><button type="button" class="admin-rename-target" data-rename-target="${escapeHTML(sel.type)}:${escapeHTML(sel.id)}">${escapeHTML(node.name)}</button></h3>
+      <h3><button type="button" class="admin-rename-target" data-rename-target="${escapeHTML(sel.type)}:${escapeHTML(sel.id)}">${icon('edit')}${escapeHTML(node.name)}</button>${breadcrumbHTML}</h3>
       <span class="spec-badge">${escapeHTML(humanNodeType(sel.type))}</span>
       ${renderAdminNodeActionsHTML(state, sel, hit)}
     </div>
+    ${nodeStatGridHTML(node.stats)}
     ${specialtyHTML}
     ${nodeStatsHTML(node, sel.type)}
     ${peopleHTML}
@@ -275,13 +316,13 @@ function renderAdminNodeActionsHTML(state, sel, hit){
         <option value="">Move to…</option>
         ${parents.map(p => `<option value="${escapeHTML(p.id)}">${escapeHTML(p.name)}</option>`).join('')}
       </select>
-      <button class="btn" data-move-confirm="${escapeHTML(key)}" disabled>Move</button>
+      <button class="btn" data-move-confirm="${escapeHTML(key)}" disabled>${icon('arrow-left')}Move</button>
     </span>` : '';
   const deleteLabel = blocked ? `Can't delete — ${escapeHTML(blocked)}` : 'Delete';
   return `
     <span class="admin-detail-actions">
       ${moveHTML}
-      <button class="btn" data-delete-node="${escapeHTML(key)}"${blocked ? ' disabled' : ''} title="${escapeHTML(deleteLabel)}">${escapeHTML(deleteLabel)}</button>
+      <button class="btn" data-delete-node="${escapeHTML(key)}"${blocked ? ' disabled' : ''} title="${escapeHTML(deleteLabel)}">${icon('trash')}${escapeHTML(deleteLabel)}</button>
     </span>
     <div id="adminDeleteBlockers"></div>`;
 }

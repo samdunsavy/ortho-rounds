@@ -3,6 +3,40 @@ import assert from 'node:assert/strict';
 import { loadFrontendEnv } from './helpers/frontend-env.js';
 import { TREE } from './frontend-admin-console.test.js';
 
+/** Mirrors orgAdminEnv() in frontend-admin-console.test.js (not exported from
+    there, so duplicated here): a ready-to-drive env with the org tree and an
+    empty user list already stubbed. */
+function structureEnv(){
+  const env = loadFrontendEnv();
+  env.window.api = async (path) => {
+    if(path.startsWith('/api/admin/org')) return TREE;
+    if(path === '/api/admin/users') return { users: [] };
+    return {};
+  };
+  return env;
+}
+
+describe('structure two-pane grid (Task 4)', () => {
+  test('structure body uses a two-column grid class at desktop', () => {
+    const { document } = structureEnv();
+    assert.ok(document.getElementById('adminStructureBody').classList.contains('admin-cc'));
+    // the CSS grid is asserted via the class contract; JSDOM has no layout engine
+  });
+  test('rail rows carry a node-type icon', async () => {
+    const { window, document } = structureEnv();
+    await window.loadAdminView();
+    window.switchAdminSection('structure');
+    assert.ok(document.querySelector('#adminTreeRail .admin-cc-row svg.ic use'));
+  });
+  test('detail pane shows a stat grid for a selected unit', async () => {
+    const { window, document } = structureEnv();
+    await window.loadAdminView();
+    window.switchAdminSection('structure');
+    window.selectAdminNode('unit', 'u1');
+    assert.ok(document.querySelector('#adminDetailPane .admin-cc-stats'));
+  });
+});
+
 function mockAdminApi(calls, overrides){
   return async (path, opts) => {
     calls.push({ path, opts });
