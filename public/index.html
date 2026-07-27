@@ -13,7 +13,7 @@
 <link rel="apple-touch-icon" href="icons/icon.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,600;0,9..40,700;1,9..40,400&family=Fraunces:opsz,wght@9..144,500;9..144,700&family=JetBrains+Mono:wght@500;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   :root{
     --font-sans:"DM Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
@@ -708,11 +708,71 @@
   .ward-handover-actions{display:flex;gap:6px;flex-shrink:0;}
 
   /* ---------- admin console ---------- */
+  #adminView{
+    --admin-font-ui:"Plus Jakarta Sans",var(--font-sans);
+    --admin-font-display:"Fraunces",Georgia,serif;
+    --admin-font-mono:var(--mono);
+    --admin-paper:var(--paper);
+    --admin-card:var(--card);
+    --admin-elevated:var(--card);
+    --admin-accent-soft:var(--accent-soft);
+    --admin-radius-lux:14px;
+    --admin-radius-tool:8px;
+    --admin-shadow-elev:var(--shadow-md);
+    background:var(--admin-paper);
+    font-family:var(--admin-font-ui);
+    color:var(--ink);
+  }
+  #adminView .admin-view-title,
+  #adminView .admin-stat-tile .n,
+  #adminView .admin-command-title{
+    font-family:var(--admin-font-display);
+  }
+  #adminView .admin-updated,
+  #adminView .admin-telemetry-value,
+  #adminView .admin-cc-crumb{
+    font-family:var(--admin-font-mono);
+  }
+  @keyframes admin-fade-rise{
+    from{opacity:0;transform:translateY(8px)}
+    to{opacity:1;transform:none}
+  }
+  @keyframes admin-slide-in{
+    from{opacity:0;transform:translateX(12px)}
+    to{opacity:1;transform:none}
+  }
+  @keyframes admin-pulse-soft{
+    0%,100%{opacity:1}
+    50%{opacity:0.55}
+  }
+  @keyframes admin-shimmer{
+    0%{transform:translateX(-100%)}
+    100%{transform:translateX(100%)}
+  }
+  .admin-motion-fade-rise{animation:admin-fade-rise 0.35s ease both}
+  .admin-motion-slide-in{animation:admin-slide-in 0.28s ease both}
+  .admin-motion-stagger{animation:admin-fade-rise 0.4s ease both;animation-delay:calc(var(--i, 0) * 70ms)}
+  .admin-motion-pulse-soft{animation:admin-pulse-soft 2.4s ease-in-out infinite}
+  .admin-view.is-busy .admin-context-bar{position:relative;overflow:hidden}
+  .admin-view.is-busy .admin-context-bar::after{
+    content:"";position:absolute;left:0;right:0;bottom:0;height:2px;
+    background:linear-gradient(90deg,transparent,var(--accent),transparent);
+    animation:admin-shimmer 1.1s linear infinite;
+  }
+  @media (prefers-reduced-motion: reduce){
+    .admin-motion-fade-rise,
+    .admin-motion-slide-in,
+    .admin-motion-stagger,
+    .admin-motion-pulse-soft,
+    .admin-view.is-busy .admin-context-bar::after{
+      animation:none !important;transition:none !important;
+    }
+  }
   .ic{width:1em;height:1em;flex:none;vertical-align:-0.15em;stroke-width:2;}
   .ic-lg{width:1.25em;height:1.25em;}
   .admin-view{position:fixed;inset:0;z-index:60;background:var(--paper);display:flex;overflow:hidden;}
   .admin-view[hidden]{display:none;}
-  .admin-sidebar{width:200px;flex:none;background:var(--card);border-right:1px solid var(--line);display:flex;flex-direction:column;padding:14px 10px;gap:2px;overflow-y:auto;}
+  .admin-sidebar{width:220px;flex:none;background:var(--admin-card);border-right:1px solid var(--line);display:flex;flex-direction:column;padding:14px 10px;gap:2px;overflow-y:auto;}
   .admin-sidebar-brand{display:flex;align-items:center;gap:8px;font-weight:700;color:var(--ink);padding:4px 8px 12px;font-size:15px;}
   .admin-sidebar-nav{display:flex;flex-direction:column;gap:2px;}
   .admin-nav-item{display:flex;align-items:center;gap:10px;padding:10px;border:0;border-radius:var(--radius-sm);background:none;color:var(--ink-soft);font:inherit;font-size:14px;cursor:pointer;text-align:left;min-height:44px;}
@@ -759,7 +819,7 @@
   .admin-stat-tiles{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:18px;}
   @media (min-width:720px){.admin-stat-tiles{grid-template-columns:repeat(4,1fr);}}
   .admin-stat-tile{
-    background:var(--card);border:1px solid var(--line);border-radius:var(--radius-sm);
+    background:var(--admin-card);border:1px solid var(--line);border-radius:var(--radius-sm);
     padding:16px 14px;text-align:left;box-shadow:var(--shadow-sm);
   }
   .admin-stat-icon{color:var(--ink-soft);font-size:16px;margin-bottom:6px;}
@@ -768,7 +828,7 @@
   .admin-quick-actions{display:flex;flex-wrap:wrap;gap:8px;margin:4px 0 16px;}
   .admin-quick-actions .btn{display:inline-flex;align-items:center;gap:6px;min-height:44px;}
   .admin-section{padding-top:4px;}
-  .admin-attention-group{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:10px;}
+  .admin-attention-group{background:var(--admin-card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:10px;}
   .admin-attention-group h4{margin:0 0 6px;font-size:13px;color:var(--ink-soft);display:flex;align-items:center;gap:6px;}
   .admin-attention-urgent{background:var(--warn-bg);}
   .admin-attention-row{display:flex;align-items:center;gap:8px;width:100%;text-align:left;background:none;border:0;border-top:1px solid var(--line-soft, var(--line));padding:8px 2px;color:var(--ink);cursor:pointer;font:inherit;min-height:44px;}
@@ -827,7 +887,7 @@
     .admin-people-cards{display:block;}
   }
   .admin-people-card{
-    background:var(--card);border:1px solid var(--line);border-radius:var(--radius-sm);
+    background:var(--admin-card);border:1px solid var(--line);border-radius:var(--radius-sm);
     padding:12px;margin-bottom:8px;box-shadow:var(--shadow-sm);
   }
   .admin-people-card-head{display:flex;justify-content:space-between;align-items:center;gap:8px;cursor:pointer;min-height:44px;}
@@ -839,7 +899,7 @@
   .admin-people-card.is-expanded .admin-people-card-body{display:block;}
   .admin-cc{display:block;}
   .admin-cc-rail,.admin-cc-detail{
-    background:var(--card);border:1px solid var(--line);border-radius:var(--radius-sm);
+    background:var(--admin-card);border:1px solid var(--line);border-radius:var(--radius-sm);
     box-shadow:var(--shadow-sm);
   }
   .admin-cc-rail{padding:10px;margin-bottom:12px;}

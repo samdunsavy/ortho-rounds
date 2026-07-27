@@ -531,3 +531,37 @@ describe('admin visual polish hooks', () => {
     assert.notEqual(bg, 'transparent');
   });
 });
+
+describe('admin premium craft: tokens and fonts', () => {
+  test('#adminView declares admin font and surface tokens', () => {
+    const { document } = loadFrontendEnv();
+    const view = document.getElementById('adminView');
+    assert.ok(view);
+    // Tokens live in CSS; assert the stylesheet text includes the contract names.
+    const css = [...document.querySelectorAll('style')].map(s => s.textContent).join('\n');
+    for (const token of [
+      '--admin-font-ui',
+      '--admin-font-display',
+      '--admin-font-mono',
+      '--admin-paper',
+      '--admin-card',
+      '--admin-elevated',
+      '--admin-radius-lux',
+      '--admin-radius-tool',
+      '--admin-shadow-elev'
+    ]) {
+      assert.match(css, new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    }
+    assert.match(css, /admin-motion-fade-rise/);
+    assert.match(css, /prefers-reduced-motion:\s*reduce/);
+  });
+
+  test('document loads Plus Jakarta Sans and Fraunces', () => {
+    const { document } = loadFrontendEnv();
+    const href = [...document.querySelectorAll('link[rel="stylesheet"]')]
+      .map(l => l.href || l.getAttribute('href') || '')
+      .join(' ');
+    assert.match(href, /Plus\+Jakarta\+Sans|Plus Jakarta Sans/);
+    assert.match(href, /Fraunces/);
+  });
+});
