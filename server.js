@@ -1372,6 +1372,30 @@ async function handleApi(req, res, pathname){
     return sendJSON(res, 200, { count: incoming.length });
   }
 
+  const patientAuditMatch = pathname.match(/^\/api\/patients\/([^/]+)\/audit$/);
+  if(patientAuditMatch && req.method === 'GET'){
+    const patientId = decodeURIComponent(patientAuditMatch[1]);
+    const row = await store.getPatientRaw(patientId);
+    if(!row) return sendJSON(res, 404, { error: 'Patient not found' });
+    let patient; try{ patient = JSON.parse(row.data || '{}'); }catch{ patient = {}; }
+    patient.id = patientId;
+    if(isEnabled('MULTI_TENANT')){
+      const scope = await resolveScope(actor, store);
+      if(!canRead(patient, scope)) return sendJSON(res, 403, { error: 'Not in scope' });
+    }
+    const qIdx = req.url.indexOf('?');
+    const params = new URLSearchParams(qIdx >= 0 ? req.url.slice(qIdx + 1) : '');
+    const parsed = parseAuditListQuery(params, { defaultLimit: 20, maxLimit: 100 });
+    if(!parsed.ok) return sendJSON(res, 400, { error: parsed.error });
+    const entries = await store.listAudit({
+      subjectId: patientId,
+      actions: ['patient.view', 'patient.write', 'patient.move', 'ai.invoke'],
+      limit: parsed.filters.limit,
+      offset: parsed.filters.offset
+    });
+    return sendJSON(res, 200, { entries, limit: parsed.filters.limit, offset: parsed.filters.offset });
+  }
+
   if(pathname === '/api/audit/patient-view' && req.method === 'POST'){
     const body = await readBody(req) || {};
     const patientId = typeof body.patientId === 'string' ? body.patientId.trim() : '';

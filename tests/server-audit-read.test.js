@@ -48,6 +48,13 @@ describe('T2 admin audit read (MULTI_TENANT)', () => {
           role: 'member', active: true, tokenVersion: 0, createdAt: Date.now(),
           orgId: 'orgA', assignmentType: 'unit', assignmentId: 'unitA'
         });
+        const now = Date.now();
+        await store.upsertPatient('patA', now, 0, JSON.stringify({
+          id: 'patA', name: 'A', orgId: 'orgA', unitId: 'unitA', hospitalId: 'hA', departmentId: 'depA'
+        }));
+        await store.upsertPatient('patB', now, 0, JSON.stringify({
+          id: 'patB', name: 'B', orgId: 'orgB', unitId: 'unitB', hospitalId: 'hB', departmentId: 'depB'
+        }));
         await store.appendAudit({
           id: 'row-a1', at: 1000, actorId: 'adminA', actorUsername: 'adminA',
           action: 'patient.write', subjectType: 'patient', subjectId: 'patA',
@@ -61,6 +68,11 @@ describe('T2 admin audit read (MULTI_TENANT)', () => {
         await store.appendAudit({
           id: 'row-a2', at: 1500, actorId: 'adminA', actorUsername: 'adminA',
           action: 'patient.view', subjectType: 'patient', subjectId: 'patA',
+          orgId: 'orgA', ip: null, userAgent: null, detail: {}
+        });
+        await store.appendAudit({
+          id: 'row-a-export', at: 1600, actorId: 'adminA', actorUsername: 'adminA',
+          action: 'export', subjectType: 'export', subjectId: 'patA',
           orgId: 'orgA', ip: null, userAgent: null, detail: {}
         });
       }
@@ -143,6 +155,29 @@ describe('T2 admin audit read (MULTI_TENANT)', () => {
     assert.ok(text.startsWith('id,at,actorId,'));
     assert.ok(text.includes('patA'));
     assert.ok(!text.includes('patB'));
+  });
+
+  test('member can read own patient audit allowlist only', async () => {
+    const tok = (await login(srv.baseUrl, 'pgA', 'pw-pgA')).json.token;
+    const r = await authFetch(srv.baseUrl, tok, '/api/patients/patA/audit?limit=50');
+    assert.equal(r.status, 200);
+    assert.ok(r.json.entries.length >= 1);
+    assert.ok(r.json.entries.every(e =>
+      ['patient.view', 'patient.write', 'patient.move', 'ai.invoke'].includes(e.action)
+    ));
+    assert.ok(r.json.entries.some(e => e.id === 'row-a1'));
+    assert.ok(r.json.entries.some(e => e.id === 'row-a2'));
+    assert.ok(!r.json.entries.some(e => e.id === 'row-a-export'));
+  });
+
+  test('member cannot read other org patient audit', async () => {
+    const tok = (await login(srv.baseUrl, 'pgA', 'pw-pgA')).json.token;
+    assert.equal((await authFetch(srv.baseUrl, tok, '/api/patients/patB/audit')).status, 403);
+  });
+
+  test('missing patient is 404', async () => {
+    const tok = (await login(srv.baseUrl, 'pgA', 'pw-pgA')).json.token;
+    assert.equal((await authFetch(srv.baseUrl, tok, '/api/patients/no-such/audit')).status, 404);
   });
 });
 
