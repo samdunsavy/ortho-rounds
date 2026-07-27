@@ -182,6 +182,27 @@ describe('Overview section', () => {
   });
 });
 
+describe('admin overview dashboard', () => {
+  test('each stat tile has an icon', () => {
+    const { window, document } = orgAdminEnv();
+    document.getElementById('adminStatTiles').innerHTML = window.renderAdminStatTiles(TREE);
+    assert.equal(document.querySelectorAll('#adminStatTiles .admin-stat-tile svg.ic').length, 4);
+  });
+  test('overview renders an org-level status bar', async () => {
+    const { window, document } = orgAdminEnv();
+    await window.loadAdminView();
+    window.switchAdminSection('overview');
+    assert.ok(document.querySelector('#adminOverviewStatusBar .admin-status-bar'));
+  });
+  test('needs-attention rows keep their data hooks and gain icons', () => {
+    const { window } = orgAdminEnv();
+    const cats = { unassigned: [{ username: 'x' }], stale: [], emptyUnits: [], disabled: [] };
+    const html = window.renderAdminNeedsAttentionHTML(cats);
+    assert.match(html, /data-attention-people="unassigned"/);
+    assert.match(html, /<svg class="ic/);
+  });
+});
+
 describe('Overview: computeAdminNeedsAttention', () => {
   const users = [
     { id: 'u1', username: 'unassigned1', active: true, role: 'member', assignmentType: null, assignmentId: null },

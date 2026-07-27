@@ -150,6 +150,8 @@ function renderAdminOverviewSection(){
   if(body) body.hidden = needsOrg;
   if(needsOrg) return;
   renderAdminStatTilesInto(adminData.tree);
+  const bar = document.getElementById('adminOverviewStatusBar');
+  if(bar){ const s = adminData.tree && adminData.tree.org && adminData.tree.org.stats; bar.innerHTML = s ? renderAdminStatusBar(s.byStatus, s.livePatients) : ''; }
   const attn = document.getElementById('adminNeedsAttention');
   if(attn) attn.innerHTML = renderAdminNeedsAttentionHTML(computeAdminNeedsAttention(adminData.tree, adminData.users, adminData.orgs));
 }
@@ -179,17 +181,18 @@ function computeAdminNeedsAttention(tree, users, orgs){
 }
 
 function renderAdminNeedsAttentionHTML(cats){
+  const row = (attr, val, icName, label) => `<button type="button" class="admin-attention-row" ${attr}="${escapeHTML(val)}">${icon(icName)}${label}${icon('chevron-right')}</button>`;
   const groups = [];
-  if(cats.unassigned.length) groups.push({ title: `${cats.unassigned.length} ${cats.unassigned.length === 1 ? 'person has' : 'people have'} no assignment`,
-    rows: cats.unassigned.map(u => `<button type="button" class="admin-attention-row" data-attention-people="unassigned">${escapeHTML(u.username)} — no assignment</button>`).join('') });
+  if(cats.unassigned.length) groups.push({ title: `${cats.unassigned.length} ${cats.unassigned.length === 1 ? 'person has' : 'people have'} no assignment`, urgent: true,
+    rows: cats.unassigned.map(u => row('data-attention-people', 'unassigned', 'user-check', `${escapeHTML(u.username)} — no assignment`)).join('') });
   if(cats.stale.length) groups.push({ title: `${cats.stale.length} ${cats.stale.length === 1 ? 'person is' : 'people are'} Assigned to a place that no longer exists`,
-    rows: cats.stale.map(u => `<button type="button" class="admin-attention-row" data-attention-people="stale">${escapeHTML(u.username)} — Assigned to a place that no longer exists</button>`).join('') });
+    rows: cats.stale.map(u => row('data-attention-people', 'stale', 'map-pin-off', `${escapeHTML(u.username)} — Assigned to a place that no longer exists`)).join('') });
   if(cats.emptyUnits.length) groups.push({ title: `${cats.emptyUnits.length} empty unit${cats.emptyUnits.length === 1 ? '' : 's'} (no wards, patients or staff)`,
-    rows: cats.emptyUnits.map(u => `<button type="button" class="admin-attention-row" data-attention-unit="${escapeHTML(u.id)}">${escapeHTML(u.name)}</button>`).join('') });
+    rows: cats.emptyUnits.map(u => row('data-attention-unit', u.id, 'box-off', escapeHTML(u.name))).join('') });
   if(cats.disabled.length) groups.push({ title: `${cats.disabled.length} disabled account${cats.disabled.length === 1 ? '' : 's'}`,
-    rows: cats.disabled.map(u => `<button type="button" class="admin-attention-row" data-attention-people="disabled">${escapeHTML(u.username)} — disabled</button>`).join('') });
+    rows: cats.disabled.map(u => row('data-attention-people', 'disabled', 'users', `${escapeHTML(u.username)} — disabled`)).join('') });
   if(!groups.length) return '';
-  return `<h3>Needs attention</h3>` + groups.map(g => `<div class="admin-attention-group"><h4>${escapeHTML(g.title)}</h4>${g.rows}</div>`).join('');
+  return `<h3>Needs attention</h3>` + groups.map(g => `<div class="admin-attention-group${g.urgent ? ' admin-attention-urgent' : ''}"><h4>${icon('alert-triangle')}${escapeHTML(g.title)}</h4>${g.rows}</div>`).join('');
 }
 
 /** Selects the first unit found in the tree and focuses its add-ward input.
@@ -234,12 +237,12 @@ document.getElementById('adminOverviewBody')?.addEventListener('click', (e) => {
 function renderAdminStatTiles(tree){
   const postop = tree.hospitals.flatMap(h => h.departments).reduce((n, dep) => n + (dep.stats.byStatus.postop || 0), 0);
   const tiles = [
-    { n: tree.totals.departments, l: 'Departments' },
-    { n: tree.totals.usersActive, l: 'Active users' },
-    { n: tree.totals.livePatients, l: 'Live patients' },
-    { n: postop, l: 'Post-op' }
+    { n: tree.totals.departments, l: 'Departments', ic: 'stethoscope' },
+    { n: tree.totals.usersActive, l: 'Active users', ic: 'user-check' },
+    { n: tree.totals.livePatients, l: 'Live patients', ic: 'bed' },
+    { n: postop, l: 'Post-op', ic: 'activity' }
   ];
-  return tiles.map(t => `<div class="admin-stat-tile"><div class="n">${t.n}</div><div class="l">${t.l}</div></div>`).join('');
+  return tiles.map(t => `<div class="admin-stat-tile"><div class="admin-stat-icon">${icon(t.ic)}</div><div class="n">${t.n}</div><div class="l">${escapeHTML(t.l)}</div></div>`).join('');
 }
 
 function renderAdminStatTilesInto(tree){
