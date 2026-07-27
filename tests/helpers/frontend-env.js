@@ -80,7 +80,7 @@ export function loadFrontendEnv(options){
   // that scope with each other (see this file's own header note) — so they
   // must be joined into a single eval() to see each other's top-level
   // `adminData`/`adminUI`, exactly like appJs+initScript already are below.
-  const adminFiles = ['admin-console.js', 'admin-people.js', 'admin-structure.js', 'admin-orgs.js']
+  const adminFiles = ['admin-console.js', 'admin-people.js', 'admin-structure.js', 'admin-orgs.js', 'admin-audit.js']
     .map(f => readFileSync(path.join(PUBLIC_DIR, f), 'utf8'));
   window.eval(milestonesJs);
   window.eval(adminFiles.join('\n'));

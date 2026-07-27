@@ -31,7 +31,7 @@ function renderAdminOrgsSection(){
       <input placeholder="New org admin username" maxlength="32" data-new-org-admin="${escapeHTML(sel.id)}">
       <button class="btn" data-create-org-admin="${escapeHTML(sel.id)}">${icon('plus')} Create org admin</button>
       <button class="btn primary" data-view-org="${escapeHTML(sel.id)}">View</button>
-    </div>` : `<div class="small-muted">No organizations yet.</div>`;
+    </div>` : `<div class="admin-empty">No organizations yet.</div>`;
   const repairHTML = isInstanceAdminUser()
     ? `<div class="admin-inline-form"><button class="btn" data-repair-ancestry>${icon('sitemap')} Repair ancestry</button></div>`
     : '';
@@ -46,6 +46,12 @@ function renderAdminOrgsSection(){
       <button class="btn" id="adminAddOrgBtn">${icon('plus')} Create organization</button>
     </div>
     ${repairHTML}`;
+  const detailEl = document.getElementById('adminOrgsDetail');
+  if(detailEl){
+    detailEl.classList.remove('admin-motion-slide-in');
+    void detailEl.offsetWidth; // restart CSS animation on re-select
+    detailEl.classList.add('admin-motion-slide-in');
+  }
 }
 
 /** Leave a drilled-in org and go back to the all-orgs list. */

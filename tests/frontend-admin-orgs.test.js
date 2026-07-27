@@ -50,6 +50,32 @@ describe('orgs section rendering', () => {
   });
 });
 
+describe('orgs instrument polish (premium craft Task 6)', () => {
+  test('orgs empty state uses admin-empty class', async () => {
+    const { window, document } = orgsEnv([]);
+    await window.loadAdminView();
+    window.renderAdminOrgsSection();
+    const empty = document.querySelector('#adminOrgsSection .admin-empty');
+    assert.ok(empty);
+    assert.match(empty.textContent, /No organizations yet/);
+  });
+
+  test('orgs detail pane includes slide-in motion class after select', async () => {
+    const { window, document } = orgsEnv([
+      { id: 'o1', name: 'Alpha', plan: 'pro', stats: { hospitals: 1, departments: 2, users: 3, livePatients: 4 } }
+    ]);
+    await window.loadAdminView();
+    window.selectAdminOrg('o1');
+    const detail = document.getElementById('adminOrgsDetail');
+    assert.ok(detail);
+    assert.ok(
+      detail.classList.contains('admin-motion-slide-in') ||
+      detail.querySelector('.admin-motion-slide-in'),
+      'expected slide-in class on orgs detail pane or its inner root'
+    );
+  });
+});
+
 describe('orgs master-detail (Task 6)', () => {
   test('orgs render a rail of selectable rows + a detail pane', async () => {
     const { window, document } = orgsEnv([

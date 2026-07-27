@@ -78,7 +78,7 @@ function renderAdminAuditListHTML(){
     return `<div class="small-muted">${escapeHTML(adminUI.auditError)}</div>`;
   }
   if(!entries.length){
-    return `<div class="small-muted">No audit entries match.</div>`;
+    return `<div class="admin-empty">No audit entries match.</div>`;
   }
   return entries.map(e => {
     const sel = e.id === adminUI.auditSelectedId ? ' is-selected' : '';

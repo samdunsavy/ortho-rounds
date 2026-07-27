@@ -626,6 +626,17 @@ describe('admin premium craft: tokens and fonts', () => {
   });
 });
 
+describe('admin premium craft: audit empty', () => {
+  test('audit no-match uses admin-empty class', () => {
+    const { window, document } = loadFrontendEnv();
+    // Default auditEntries is []; list HTML is the no-match empty without auto-load.
+    document.getElementById('adminAuditSection').innerHTML = window.renderAdminAuditListHTML();
+    const empty = document.querySelector('#adminAuditSection .admin-empty');
+    assert.ok(empty);
+    assert.match(empty.textContent, /No audit entries match/);
+  });
+});
+
 describe('admin premium craft: shell', () => {
   test('sidebar brand shows Ortho Rounds and Admin', () => {
     const { document } = loadFrontendEnv();
