@@ -72,6 +72,19 @@ async function runAuditSuite(label, makeStore){
       assert.ok(!byActor.some(r => r.id === 'f3'));
     });
 
+    test('listAudit filters by actions array (IN)', async () => {
+      await store.appendAudit(sample({ id: 'act1', at: 600, action: 'patient.view' }));
+      await store.appendAudit(sample({ id: 'act2', at: 700, action: 'login.success', subjectType: 'session', subjectId: 'u1' }));
+      await store.appendAudit(sample({ id: 'act3', at: 800, action: 'patient.write' }));
+      const rows = await store.listAudit({
+        actions: ['patient.view', 'patient.write'],
+        subjectId: 'p1',
+        from: 600,
+        limit: 10
+      });
+      assert.deepEqual(rows.map(r => r.id).sort(), ['act1', 'act3']);
+    });
+
     test('store has no updateAudit or deleteAudit', () => {
       assert.equal(typeof store.updateAudit, 'undefined');
       assert.equal(typeof store.deleteAudit, 'undefined');

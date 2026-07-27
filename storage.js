@@ -398,7 +398,15 @@ function createSqliteStore({ dataDir }){
     async listAudit(opts = {}){
       const where = [];
       const params = [];
-      if(opts.action){ where.push('action = ?'); params.push(opts.action); }
+      if(Array.isArray(opts.actions) && opts.actions.length){
+        const list = opts.actions.filter(a => typeof a === 'string' && a);
+        if(list.length){
+          where.push(`action IN (${list.map(() => '?').join(',')})`);
+          params.push(...list);
+        }
+      } else if(opts.action){
+        where.push('action = ?'); params.push(opts.action);
+      }
       if(opts.subjectId){ where.push('subjectId = ?'); params.push(opts.subjectId); }
       if(opts.actorId){ where.push('actorId = ?'); params.push(opts.actorId); }
       if(opts.orgId){ where.push('orgId = ?'); params.push(opts.orgId); }
@@ -725,7 +733,12 @@ async function createMongoStore({ mongoUri }){
     },
     async listAudit(opts = {}){
       const q = {};
-      if(opts.action) q.action = opts.action;
+      if(Array.isArray(opts.actions) && opts.actions.length){
+        const list = opts.actions.filter(a => typeof a === 'string' && a);
+        if(list.length) q.action = { $in: list };
+      } else if(opts.action){
+        q.action = opts.action;
+      }
       if(opts.subjectId) q.subjectId = opts.subjectId;
       if(opts.actorId) q.actorId = opts.actorId;
       if(opts.orgId) q.orgId = opts.orgId;
