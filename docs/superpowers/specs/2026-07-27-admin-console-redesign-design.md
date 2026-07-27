@@ -1,7 +1,7 @@
 # Admin Console Redesign (Approach B) — Design
 
 **Date:** 2026-07-27
-**Status:** Draft (design).
+**Status:** Implemented.
 **Builds on:** `docs/superpowers/specs/2026-07-26-admin-console-overhaul-design.md` (Plan 2 IA) and `docs/superpowers/specs/2026-07-27-admin-console-visual-polish-design.md` (quiet CSS refresh + busy state, already shipped).
 
 ## Problem
