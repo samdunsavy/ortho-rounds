@@ -19,6 +19,7 @@ let modalSuppressAutoTemplate = false; // user removed milestones — don't refi
 let modalSmartPasteUsed = false; // AI admission fill — don't auto-apply milestone templates
 let modalLabReportDate = null; // set by lab-photo extraction when the report's own date differs from today
 let modalPendingOtherLabs = []; // AI-read analytes outside the known panel, pending doctor review
+let patientActivityOffset = 0; // pagination for patient-modal Activity trail
 let pendingImageSlot = null;  // {type: 'preop'|'postop'|'followup'}
 let modalPendingImages = [];  // { id, dataURL, type } — staged X-rays before modal save
 let viewingImageContext = null; // { patientId, imgId }
@@ -6834,7 +6835,60 @@ function renderModalForm(d){
       <label>Notes</label>
       <textarea id="f_notes" placeholder="Free-text rounds notes">${escapeHTML(d.notes)}</textarea>
     </div>
+    ${editingPatientId ? `<div class="form-row">${renderPatientActivitySection(editingPatientId)}</div>` : ''}
   `;
+}
+
+function humaniseAuditAction(entry){
+  if(entry.action === 'patient.view') return 'Viewed';
+  if(entry.action === 'patient.write') return 'Updated';
+  if(entry.action === 'patient.move') return 'Moved';
+  if(entry.action === 'ai.invoke'){
+    const ep = entry.detail && entry.detail.endpoint ? String(entry.detail.endpoint) : 'AI';
+    return 'AI: ' + ep;
+  }
+  return entry.action || 'Event';
+}
+
+function renderPatientActivitySection(patientId){
+  return `<details class="patient-activity" id="patientActivity" data-patient-id="${escapeHTML(patientId)}">
+    <summary>Activity</summary>
+    <div id="patientActivityBody" class="small-muted">Open to load activity</div>
+    <button type="button" class="btn" id="patientActivityMore" hidden>Load more</button>
+  </details>`;
+}
+
+async function loadPatientActivity(reset){
+  const root = document.getElementById('patientActivity');
+  const body = document.getElementById('patientActivityBody');
+  const more = document.getElementById('patientActivityMore');
+  if(!root || !body) return;
+  const id = root.dataset.patientId;
+  if(reset) patientActivityOffset = 0;
+  if(!navigator.onLine){
+    body.textContent = 'Activity unavailable offline';
+    return;
+  }
+  try{
+    const data = await api('/api/patients/' + encodeURIComponent(id) + '/audit?limit=20&offset=' + patientActivityOffset);
+    const entries = data.entries || [];
+    if(reset) body.innerHTML = '';
+    if(!entries.length && patientActivityOffset === 0){
+      body.innerHTML = '<div class="small-muted">No activity yet</div>';
+    } else {
+      body.insertAdjacentHTML('beforeend', entries.map(e =>
+        `<div class="patient-activity-row">` +
+          `<span>${escapeHTML(formatRelativeTime(e.at))}</span> · ` +
+          `<span>${escapeHTML(e.actorUsername || 'unknown')}</span> · ` +
+          `<span>${escapeHTML(humaniseAuditAction(e))}</span>` +
+        `</div>`
+      ).join(''));
+    }
+    patientActivityOffset += entries.length;
+    if(more) more.hidden = entries.length < 20;
+  }catch{
+    body.textContent = 'Could not load activity';
+  }
 }
 
 function getWorkingData(){
@@ -7066,6 +7120,17 @@ function bindModalDynamicLists(){
   renderPlanStatus();
   renderModalPendingXrays();
   document.getElementById('f_dailyPlan').addEventListener('input', renderPlanStatus);
+
+  const activityRoot = document.getElementById('patientActivity');
+  if(activityRoot){
+    patientActivityOffset = 0;
+    activityRoot.addEventListener('toggle', ()=>{
+      if(activityRoot.open) void loadPatientActivity(true);
+    });
+    document.getElementById('patientActivityMore')?.addEventListener('click', ()=>{
+      void loadPatientActivity(false);
+    });
+  }
 
   // labPhotoFileInput lives inside renderModalForm()'s output, so — like
   // every other dynamically-rendered modal control bound in this function —
