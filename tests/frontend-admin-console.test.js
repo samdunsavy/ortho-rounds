@@ -214,6 +214,68 @@ describe('admin overview dashboard', () => {
   });
 });
 
+describe('admin premium craft: Master Control Overview', () => {
+  test('loadAdminView fills telemetry from /api/health and Overview renders AI + storage', async () => {
+    const { window, document } = orgAdminEnv();
+    const prevApi = window.api;
+    window.api = async (path, ...rest) => {
+      if(path === '/api/health') return { ok: true, storage: 'mongo', ai: { enabled: true }, flags: { MULTI_TENANT: true } };
+      return prevApi(path, ...rest);
+    };
+    // refreshAdminTelemetry uses fetch (public health; not api()) so Overview does not need auth headers
+    window.fetch = async (url) => {
+      if(String(url).includes('/api/health')){
+        return { ok: true, json: async () => ({ ok: true, storage: 'mongo', ai: { enabled: true }, flags: { MULTI_TENANT: true } }) };
+      }
+      return { ok: false, json: async () => ({}) };
+    };
+    await window.loadAdminView();
+    window.switchAdminSection('overview');
+    const tel = document.getElementById('adminTelemetry');
+    assert.ok(tel);
+    assert.match(tel.textContent, /AI/i);
+    assert.match(tel.textContent, /on/i);
+    assert.match(tel.textContent, /mongo/i);
+    assert.ok(document.querySelector('.admin-command-title'));
+    assert.match(document.querySelector('.admin-command-title').textContent, /Command/);
+  });
+
+  test('health failure shows em dash for AI and storage', async () => {
+    const { window, document } = orgAdminEnv();
+    window.fetch = async () => { throw new Error('offline'); };
+    await window.loadAdminView();
+    window.switchAdminSection('overview');
+    const tel = document.getElementById('adminTelemetry');
+    assert.ok(tel);
+    assert.match(tel.textContent, /—/);
+  });
+
+  test('empty needs-attention shows All systems clear', async () => {
+    const { window, document } = orgAdminEnv();
+    window.api = async (path) => {
+      if(path === '/api/admin/users') return { users: [{ id: 'u1', username: 'fine1', role: 'member', active: true, orgId: 'bfv2-org', assignmentType: 'unit', assignmentId: 'u1' }] };
+      if(path.startsWith('/api/admin/org')) return TREE;
+      return {};
+    };
+    window.fetch = async () => ({ ok: true, json: async () => ({ ok: true, storage: 'sqlite', ai: { enabled: false } }) });
+    await window.loadAdminView();
+    window.switchAdminSection('overview');
+    assert.match(document.getElementById('adminNeedsAttention').textContent, /All systems clear/);
+  });
+
+  test('stat tiles carry stagger motion hooks', async () => {
+    const { window, document } = orgAdminEnv();
+    window.fetch = async () => ({ ok: true, json: async () => ({ ok: true, storage: 'sqlite', ai: { enabled: false } }) });
+    await window.loadAdminView();
+    const tiles = [...document.querySelectorAll('#adminStatTiles .admin-stat-tile')];
+    assert.equal(tiles.length, 4);
+    tiles.forEach((t, i) => {
+      assert.ok(t.classList.contains('admin-motion-stagger'));
+      assert.equal(t.style.getPropertyValue('--i').trim(), String(i));
+    });
+  });
+});
+
 describe('Overview: computeAdminNeedsAttention', () => {
   const users = [
     { id: 'u1', username: 'unassigned1', active: true, role: 'member', assignmentType: null, assignmentId: null },
@@ -252,7 +314,7 @@ describe('Overview: computeAdminNeedsAttention', () => {
   test('renderAdminNeedsAttentionHTML omits a category with zero entries', () => {
     const { window } = loadFrontendEnv();
     const html = window.renderAdminNeedsAttentionHTML({ unassigned: [], stale: [], emptyUnits: [], disabled: [] });
-    assert.equal(html, '');
+    assert.match(html, /All systems clear/);
   });
 
   test('renderAdminNeedsAttentionHTML lists a populated category', () => {
@@ -502,7 +564,7 @@ describe('admin visual polish hooks', () => {
     const tile = document.querySelector('#adminStatTiles .admin-stat-tile');
     assert.ok(tile);
     const tileShadow = window.getComputedStyle(tile).boxShadow;
-    assert.equal(tileShadow, 'var(--shadow-sm)');
+    assert.equal(tileShadow, 'var(--admin-shadow-elev)');
     window.switchAdminSection('structure');
     window.selectAdminNode('unit', 'u1');
     const rail = document.getElementById('adminTreeRail');

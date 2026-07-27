@@ -38,7 +38,8 @@ let adminUI = {
   auditError: null,
   auditHasMore: false,
   busy: false,
-  lastLoadedAt: null             // ms timestamp of the latest successful loadAdminView()
+  lastLoadedAt: null,            // ms timestamp of the latest successful loadAdminView()
+  telemetry: { ok: false, ai: null, storage: null }  // from public GET /api/health via fetch
 };
 
 /** Sprite glyph as inline svg. name maps to a <symbol id="ic-<name>">.
@@ -153,6 +154,15 @@ function adminOrgChooserHTML(){
   return 'Choose an organization on the Organizations section first.';
 }
 
+function renderAdminTelemetryHTML(){
+  const t = adminUI.telemetry || { ok: false, ai: null, storage: null };
+  const ai = t.ok ? (t.ai ? 'on' : 'off') : '—';
+  const storage = t.ok && t.storage ? t.storage : '—';
+  const pulse = t.ok && t.ai ? ' admin-motion-pulse-soft' : '';
+  return `<span class="admin-telemetry-item${pulse}"><span class="admin-telemetry-label">AI</span> <span class="admin-telemetry-value">${ai}</span></span>` +
+    `<span class="admin-telemetry-item"><span class="admin-telemetry-label">Storage</span> <span class="admin-telemetry-value">${escapeHTML(storage)}</span></span>`;
+}
+
 function renderAdminOverviewSection(){
   const chooser = document.getElementById('adminOverviewChooser');
   const body = document.getElementById('adminOverviewBody');
@@ -160,6 +170,11 @@ function renderAdminOverviewSection(){
   if(chooser) chooser.hidden = !needsOrg;
   if(body) body.hidden = needsOrg;
   if(needsOrg) return;
+  const orgName = adminData.tree && adminData.tree.org && adminData.tree.org.name;
+  const titleEl = document.getElementById('adminCommandTitle');
+  if(titleEl) titleEl.textContent = orgName ? `${orgName} · Command` : 'Command';
+  const tel = document.getElementById('adminTelemetry');
+  if(tel){ tel.innerHTML = renderAdminTelemetryHTML(); tel.hidden = false; }
   renderAdminStatTilesInto(adminData.tree);
   const bar = document.getElementById('adminOverviewStatusBar');
   if(bar){ const s = adminData.tree && adminData.tree.org && adminData.tree.org.stats; bar.innerHTML = s ? renderAdminStatusBar(s.byStatus, s.livePatients) : ''; }
@@ -202,8 +217,12 @@ function renderAdminNeedsAttentionHTML(cats){
     rows: cats.emptyUnits.map(u => row('data-attention-unit', u.id, 'box-off', escapeHTML(u.name))).join('') });
   if(cats.disabled.length) groups.push({ title: `${cats.disabled.length} disabled account${cats.disabled.length === 1 ? '' : 's'}`,
     rows: cats.disabled.map(u => row('data-attention-people', 'disabled', 'users', `${escapeHTML(u.username)} — disabled`)).join('') });
-  if(!groups.length) return '';
-  return `<h3>Needs attention</h3>` + groups.map(g => `<div class="admin-attention-group${g.urgent ? ' admin-attention-urgent' : ''}"><h4>${icon('alert-triangle')}${escapeHTML(g.title)}</h4>${g.rows}</div>`).join('');
+  if(!groups.length){
+    return `<div class="admin-systems-clear admin-motion-fade-rise"><span class="admin-motion-pulse-soft" aria-hidden="true"></span> All systems clear</div>`;
+  }
+  return `<h3 class="admin-alert-queue-title">Needs attention</h3>` + groups.map((g, gi) =>
+    `<div class="admin-attention-group admin-motion-slide-in${g.urgent ? ' admin-attention-urgent' : ''}" style="--i:${gi}"><h4>${icon('alert-triangle')}${escapeHTML(g.title)}</h4>${g.rows}</div>`
+  ).join('');
 }
 
 /** Selects the first unit found in the tree and focuses its add-ward input.
@@ -253,7 +272,9 @@ function renderAdminStatTiles(tree){
     { n: tree.totals.livePatients, l: 'Live patients', ic: 'bed' },
     { n: postop, l: 'Post-op', ic: 'activity' }
   ];
-  return tiles.map(t => `<div class="admin-stat-tile"><div class="admin-stat-icon">${icon(t.ic)}</div><div class="n">${t.n}</div><div class="l">${escapeHTML(t.l)}</div></div>`).join('');
+  return tiles.map((t, i) =>
+    `<div class="admin-stat-tile admin-motion-stagger" style="--i:${i}"><div class="admin-stat-icon">${icon(t.ic)}</div><div class="n">${t.n}</div><div class="l">${escapeHTML(t.l)}</div></div>`
+  ).join('');
 }
 
 function renderAdminStatTilesInto(tree){
@@ -371,6 +392,22 @@ function setAdminBusy(on){
   if(status) status.hidden = !adminUI.busy;
 }
 
+/** Public /api/health via fetch (not api()) — no auth headers needed. */
+async function refreshAdminTelemetry(){
+  try{
+    const res = await fetch('/api/health');
+    if(!res.ok) throw new Error('health ' + res.status);
+    const data = await res.json();
+    adminUI.telemetry = {
+      ok: true,
+      ai: !!(data.ai && data.ai.enabled),
+      storage: typeof data.storage === 'string' ? data.storage : null
+    };
+  }catch{
+    adminUI.telemetry = { ok: false, ai: null, storage: null };
+  }
+}
+
 async function loadAdminView(){
   const loadToken = ++adminLoadSeq;
   const instAdmin = isInstanceAdminUser();
@@ -394,6 +431,8 @@ async function loadAdminView(){
       orgs = tree.org ? [tree.org] : [];
     }
     adminData = { tree, users, orgs };
+    await refreshAdminTelemetry();
+    if(loadToken !== adminLoadSeq) return;
   }catch(err){
     if(loadToken !== adminLoadSeq) return;
     setAdminBusy(false);
