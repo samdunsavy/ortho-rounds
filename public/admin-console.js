@@ -17,7 +17,7 @@ let adminData = { tree: null, users: [], orgs: [] };
     reload — this is what makes search text, filter chips, tree expansion,
     selection and checked rows survive a mutation instead of being wiped by
     the next loadAdminView() (design spec defect 1). */
-var adminUI = {
+let adminUI = {
   section: 'overview',           // 'overview' | 'people' | 'structure' | 'orgs'
   viewedOrgId: null,             // instance admin: which org's tree is loaded
   allOrgs: [],                   // instance admin: every org, kept across a drill-in

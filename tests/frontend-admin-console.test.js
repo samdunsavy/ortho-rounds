@@ -80,10 +80,12 @@ describe('admin console shell: sidebar nav', () => {
     const overview = document.querySelector('#adminSidebarNav [data-admin-section="overview"]');
     assert.ok(overview.querySelector('svg.ic use'));
   });
-  test('loadAdminView stamps lastLoadedAt', async () => {
-    const { window } = orgAdminEnv();
+  test('loadAdminView stamps and shows the "updated" timestamp', async () => {
+    const { window, document } = orgAdminEnv();
     await window.loadAdminView();
-    assert.equal(typeof window.adminUI.lastLoadedAt, 'number');
+    const stamp = document.getElementById('adminUpdatedStamp');
+    assert.equal(stamp.hidden, false);
+    assert.match(stamp.textContent, /updated \d{1,2}:\d{2}/);
   });
 
   test('switchAdminSection shows the target section and hides the others', async () => {
