@@ -363,6 +363,9 @@ describe('instance-admin org context', () => {
     assert.ok(document.getElementById('adminDetailPane').innerHTML.includes('no longer exists'));
 
     window.exitAdminOrgContext();
+    // Task 6: Organizations is now rail + detail — o2's View action only
+    // renders once o2 is the selected rail row (o1 stays selected otherwise).
+    document.querySelector('[data-org-select="o2"]').dispatchEvent(new window.Event('click', { bubbles: true }));
     document.querySelector('[data-view-org="o2"]').dispatchEvent(new window.Event('click', { bubbles: true }));
     await new Promise(r => setTimeout(r, 0));
     assert.ok(!document.getElementById('adminDetailPane').innerHTML.includes('no longer exists'));

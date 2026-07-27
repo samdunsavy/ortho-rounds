@@ -21,6 +21,7 @@ let adminUI = {
   section: 'overview',           // 'overview' | 'people' | 'structure' | 'orgs'
   viewedOrgId: null,             // instance admin: which org's tree is loaded
   allOrgs: [],                   // instance admin: every org, kept across a drill-in
+  selectedOrgId: null,           // Organizations: rail selection, master-detail
   selectedNode: null,            // Structure: { type, id } | null
   structureExpanded: new Set(),  // Structure: "type:id" keys of expanded rows
   structureInitialized: false,   // Structure: defaults applied once; empty Set is valid

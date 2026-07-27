@@ -2,23 +2,38 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { loadFrontendEnv } from './helpers/frontend-env.js';
 
+/** Mirrors orgAdminEnv() in frontend-admin-console.test.js (not exported from
+    there, so duplicated here): stubs the admin API with a caller-supplied org
+    list. Organizations is instance-admin-only functionality, so this always
+    sets ortho_role to admin unless the caller explicitly opts out (needed by
+    the repair-ancestry visibility test below, which drives the render path
+    directly without an instance-admin load). */
+function orgsEnv(orgs, instanceAdmin = true){
+  const env = loadFrontendEnv();
+  if(instanceAdmin) env.window.localStorage.setItem('ortho_role', 'admin');
+  const calls = [];
+  env.window.api = async (path, opts) => {
+    calls.push({ path, opts });
+    if(path === '/api/admin/orgs') return { orgs: orgs || [] };
+    if(path === '/api/admin/users') return { users: [] };
+    return {};
+  };
+  return Object.assign({ calls }, env);
+}
+
 describe('orgs section rendering', () => {
-  test('renders rollup cards after an instance-admin load', async () => {
-    const { window, document } = loadFrontendEnv();
-    window.localStorage.setItem('ortho_role', 'admin'); // instance admin
-    window.api = async (path) => {
-      if(path === '/api/admin/orgs') return { orgs: [
-        { id: 'o1', name: 'Pilot Org', plan: 'free', createdAt: 1, stats: { hospitals: 1, departments: 2, users: 4, livePatients: 7 } }
-      ] };
-      if(path === '/api/admin/users') return { users: [] };
-      return {};
-    };
+  test('renders a rail row and a default-selected detail pane after an instance-admin load', async () => {
+    const { window, document } = orgsEnv([
+      { id: 'o1', name: 'Pilot Org', plan: 'free', createdAt: 1, stats: { hospitals: 1, departments: 2, users: 4, livePatients: 7 } }
+    ]);
     await window.loadAdminView();
     window.switchAdminSection('orgs');
-    const cards = document.querySelectorAll('#adminOrgsSection .admin-org-card');
-    assert.equal(cards.length, 1);
-    assert.match(cards[0].textContent, /Pilot Org/);
-    assert.match(cards[0].textContent, /7/);
+    const row = document.querySelector('[data-org-select="o1"]');
+    assert.ok(row);
+    assert.match(row.textContent, /Pilot Org/);
+    const detail = document.getElementById('adminOrgsDetail');
+    assert.match(detail.textContent, /Pilot Org/);
+    assert.match(detail.textContent, /7/);
   });
 
   test('new organization name input has maxlength 80', async () => {
@@ -32,6 +47,58 @@ describe('orgs section rendering', () => {
     await window.loadAdminView();
     window.switchAdminSection('orgs');
     assert.equal(document.getElementById('adminNewOrgName').getAttribute('maxlength'), '80');
+  });
+});
+
+describe('orgs master-detail (Task 6)', () => {
+  test('orgs render a rail of selectable rows + a detail pane', async () => {
+    const { window, document } = orgsEnv([
+      { id: 'o1', name: 'Alpha', plan: 'pro', stats: { hospitals: 1, departments: 2, users: 3, livePatients: 4 } }
+    ]);
+    await window.loadAdminView();
+    window.renderAdminOrgsSection();
+    assert.ok(document.querySelector('[data-org-select="o1"]'));
+    assert.ok(document.getElementById('adminOrgsDetail'));
+  });
+
+  test('selecting an org shows its stats + View action in the detail pane', async () => {
+    const { window, document } = orgsEnv([
+      { id: 'o1', name: 'Alpha', plan: 'pro', stats: { hospitals: 1, departments: 2, users: 3, livePatients: 4 } },
+      { id: 'o2', name: 'Beta', plan: 'free', stats: { hospitals: 0, departments: 0, users: 1, livePatients: 0 } }
+    ]);
+    await window.loadAdminView();
+    window.selectAdminOrg('o2');
+    const detail = document.getElementById('adminOrgsDetail');
+    assert.match(detail.textContent, /Beta/);
+    assert.ok(detail.querySelector('[data-view-org="o2"]'));
+  });
+
+  test('global create-org + repair-ancestry controls persist', async () => {
+    const { window, document } = orgsEnv([{ id: 'o1', name: 'Alpha', plan: 'pro', stats: { hospitals: 0, departments: 0, users: 0, livePatients: 0 } }], true);
+    await window.loadAdminView();
+    window.renderAdminOrgsSection();
+    assert.ok(document.getElementById('adminAddOrgBtn'));
+    assert.ok(document.querySelector('[data-repair-ancestry]'));
+  });
+
+  test('clicking a rail row selects that org via the delegated handler', async () => {
+    const { window, document } = orgsEnv([
+      { id: 'o1', name: 'Alpha', plan: 'pro', stats: { hospitals: 1, departments: 1, users: 1, livePatients: 1 } },
+      { id: 'o2', name: 'Beta', plan: 'free', stats: { hospitals: 0, departments: 0, users: 1, livePatients: 0 } }
+    ]);
+    await window.loadAdminView();
+    document.querySelector('[data-org-select="o2"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+    assert.match(document.getElementById('adminOrgsDetail').textContent, /Beta/);
+  });
+
+  test('a stale selectedOrgId falls back to the first org', async () => {
+    const { window, document } = orgsEnv([
+      { id: 'o1', name: 'Alpha', plan: 'pro', stats: { hospitals: 0, departments: 0, users: 0, livePatients: 0 } }
+    ]);
+    await window.loadAdminView();
+    window.selectAdminOrg('does-not-exist');
+    window.renderAdminOrgsSection();
+    assert.match(document.getElementById('adminOrgsDetail').textContent, /Alpha/);
   });
 });
 

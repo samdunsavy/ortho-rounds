@@ -2,25 +2,48 @@
    (see admin-console.js's header comment). Ported from the old orgs-tab
    code, reading adminUI.viewedOrgId instead of the old module adminViewOrgId. */
 
+/** Selects an org in the rail and re-renders the detail pane. */
+function selectAdminOrg(id){
+  adminUI.selectedOrgId = id;
+  renderAdminOrgsSection();
+}
+
 function renderAdminOrgsSection(){
   const el = document.getElementById('adminOrgsSection');
   if(!el) return;
+  const orgs = adminData.orgs || [];
+  if(orgs.length && !orgs.some(o => o.id === adminUI.selectedOrgId)) adminUI.selectedOrgId = orgs[0].id;
+  const sel = orgs.find(o => o.id === adminUI.selectedOrgId) || null;
+  const rail = orgs.map(o => `
+    <button type="button" class="admin-cc-row${o.id === adminUI.selectedOrgId ? ' is-selected' : ''}" data-org-select="${escapeHTML(o.id)}">
+      ${icon('hospital')}<span>${escapeHTML(o.name)}</span>
+      <span class="cc-count">${o.stats.livePatients}</span>
+    </button>`).join('');
+  const detail = sel ? `
+    <div class="admin-detail-head"><h3>${escapeHTML(sel.name)} <span class="spec-badge">${escapeHTML(sel.plan)}</span></h3></div>
+    <div class="admin-cc-stats">
+      <div class="admin-cc-stat"><div class="n">${sel.stats.hospitals}</div><div class="l">Hospitals</div></div>
+      <div class="admin-cc-stat"><div class="n">${sel.stats.departments}</div><div class="l">Departments</div></div>
+      <div class="admin-cc-stat"><div class="n">${sel.stats.users}</div><div class="l">Users</div></div>
+    </div>
+    <div class="small-muted">${sel.stats.livePatients} live patients</div>
+    <div class="admin-inline-form">
+      <input placeholder="New org admin username" maxlength="32" data-new-org-admin="${escapeHTML(sel.id)}">
+      <button class="btn" data-create-org-admin="${escapeHTML(sel.id)}">${icon('plus')} Create org admin</button>
+      <button class="btn primary" data-view-org="${escapeHTML(sel.id)}">View</button>
+    </div>` : `<div class="small-muted">No organizations yet.</div>`;
   const repairHTML = isInstanceAdminUser()
-    ? `<div class="admin-inline-form"><button class="btn" data-repair-ancestry>Repair ancestry</button></div>`
+    ? `<div class="admin-inline-form"><button class="btn" data-repair-ancestry>${icon('sitemap')} Repair ancestry</button></div>`
     : '';
-  el.innerHTML = `<h3>Organizations</h3>` + (adminData.orgs || []).map(o => `
-    <div class="admin-org-card" data-org-id="${escapeHTML(o.id)}">
-      <strong>${escapeHTML(o.name)}</strong> <span class="spec-badge">${escapeHTML(o.plan)}</span>
-      <div class="small-muted">${o.stats.hospitals} hospitals · ${o.stats.departments} departments · ${o.stats.users} users · ${o.stats.livePatients} live patients</div>
-      <div class="admin-inline-form">
-        <input placeholder="New org admin username" maxlength="32" data-new-org-admin="${escapeHTML(o.id)}">
-        <button class="btn" data-create-org-admin="${escapeHTML(o.id)}">Create org admin</button>
-        <button class="btn" data-view-org="${escapeHTML(o.id)}">View</button>
-      </div>
-    </div>`).join('') + `
+  el.innerHTML = `
+    <h3>Organizations</h3>
+    <div class="admin-cc" id="adminOrgsBody">
+      <aside class="admin-cc-rail" id="adminOrgsRail">${rail}</aside>
+      <section class="admin-cc-detail" id="adminOrgsDetail">${detail}</section>
+    </div>
     <div class="admin-inline-form">
       <input placeholder="New organization name" id="adminNewOrgName" maxlength="80">
-      <button class="btn" id="adminAddOrgBtn">Create organization</button>
+      <button class="btn" id="adminAddOrgBtn">${icon('plus')} Create organization</button>
     </div>
     ${repairHTML}`;
 }
@@ -43,13 +66,19 @@ function enterAdminOrgContext(orgId){
 }
 
 document.getElementById('adminOrgsSection')?.addEventListener('click', (e) => {
+  const selBtn = e.target.closest('[data-org-select]');
+  if(selBtn){
+    e.stopPropagation();
+    selectAdminOrg(selBtn.dataset.orgSelect);
+    return;
+  }
   const viewOrgBtn = e.target.closest('[data-view-org]');
   if(viewOrgBtn){
     e.stopPropagation();
     enterAdminOrgContext(viewOrgBtn.dataset.viewOrg);
     return;
   }
-  if(e.target.id === 'adminAddOrgBtn'){
+  if(e.target.closest('#adminAddOrgBtn')){
     e.stopPropagation();
     const input = document.getElementById('adminNewOrgName');
     const name = (input && input.value || '').trim();
