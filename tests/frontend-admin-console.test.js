@@ -52,31 +52,38 @@ describe('admin icon system', () => {
   });
 });
 
-describe('admin console shell: section tabs', () => {
-  test('org admin sees 3 tabs (no Organizations); instance admin sees 4', () => {
+describe('admin console shell: sidebar nav', () => {
+  test('org admin sees 3 nav items (no Organizations); instance admin sees 4', () => {
     const { window, document } = orgAdminEnv();
-    window.renderAdminSectionTabs();
+    window.renderAdminSidebarNav();
     assert.deepEqual(
-      [...document.querySelectorAll('[data-admin-section]')].map(b => b.dataset.adminSection),
+      [...document.querySelectorAll('#adminSidebarNav [data-admin-section]')].map(b => b.dataset.adminSection),
       ['overview', 'people', 'structure']
     );
-    window.localStorage.setItem('ortho_role', 'admin'); // admin + no org id => instance admin
-    window.renderAdminSectionTabs();
+    window.localStorage.setItem('ortho_role', 'admin');
+    window.renderAdminSidebarNav();
     assert.deepEqual(
-      [...document.querySelectorAll('[data-admin-section]')].map(b => b.dataset.adminSection),
+      [...document.querySelectorAll('#adminSidebarNav [data-admin-section]')].map(b => b.dataset.adminSection),
       ['overview', 'people', 'structure', 'orgs']
     );
   });
-
-  test('the active tab is marked aria-selected and is the only one with tabindex 0', () => {
+  test('the active nav item has aria-current=page and no other does', () => {
     const { window, document } = orgAdminEnv();
-    window.renderAdminSectionTabs();
-    const overviewTab = document.querySelector('[data-admin-section="overview"]');
-    assert.equal(overviewTab.getAttribute('aria-selected'), 'true');
-    assert.equal(overviewTab.getAttribute('tabindex'), '0');
-    const peopleTab = document.querySelector('[data-admin-section="people"]');
-    assert.equal(peopleTab.getAttribute('aria-selected'), 'false');
-    assert.equal(peopleTab.getAttribute('tabindex'), '-1');
+    window.renderAdminSidebarNav();
+    const current = document.querySelectorAll('#adminSidebarNav [aria-current="page"]');
+    assert.equal(current.length, 1);
+    assert.equal(current[0].dataset.adminSection, 'overview');
+  });
+  test('each nav item carries an icon svg', () => {
+    const { window, document } = orgAdminEnv();
+    window.renderAdminSidebarNav();
+    const overview = document.querySelector('#adminSidebarNav [data-admin-section="overview"]');
+    assert.ok(overview.querySelector('svg.ic use'));
+  });
+  test('loadAdminView stamps lastLoadedAt', async () => {
+    const { window } = orgAdminEnv();
+    await window.loadAdminView();
+    assert.equal(typeof window.adminUI.lastLoadedAt, 'number');
   });
 
   test('switchAdminSection shows the target section and hides the others', async () => {
@@ -86,32 +93,32 @@ describe('admin console shell: section tabs', () => {
     assert.equal(document.getElementById('adminPeopleSection').hidden, false);
     assert.equal(document.getElementById('adminOverviewSection').hidden, true);
     assert.equal(document.getElementById('adminStructureSection').hidden, true);
-    assert.equal(document.querySelector('[data-admin-section="people"]').getAttribute('aria-selected'), 'true');
+    assert.equal(document.querySelector('[data-admin-section="people"]').getAttribute('aria-current'), 'page');
   });
 
-  test('clicking a tab switches sections', async () => {
+  test('clicking a nav item switches sections', async () => {
     const { window, document } = orgAdminEnv();
     await window.loadAdminView();
     document.querySelector('[data-admin-section="structure"]').dispatchEvent(new window.Event('click', { bubbles: true }));
     assert.equal(document.getElementById('adminStructureSection').hidden, false);
   });
 
-  test('ArrowRight moves to the next tab and activates it; Home jumps to the first', async () => {
+  test('ArrowDown moves to the next nav item and activates it; Home jumps to the first', async () => {
     const { window, document } = orgAdminEnv();
     await window.loadAdminView();
-    const tabs = document.getElementById('adminSectionTabs');
-    tabs.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    const nav = document.getElementById('adminSidebarNav');
+    nav.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
     assert.equal(document.getElementById('adminPeopleSection').hidden, false);
-    tabs.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    nav.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
     assert.equal(document.getElementById('adminStructureSection').hidden, false);
-    tabs.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Home', bubbles: true }));
+    nav.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Home', bubbles: true }));
     assert.equal(document.getElementById('adminOverviewSection').hidden, false);
   });
 
   test('an unrecognised or unavailable section falls back to Overview on render', () => {
     const { window, document } = orgAdminEnv();
     window.switchAdminSection('orgs'); // org admin: 'orgs' is not visible to them
-    window.renderAdminSectionTabs();
+    window.renderAdminSidebarNav();
     assert.equal(document.getElementById('adminOverviewSection').hidden, false);
   });
 });
@@ -427,7 +434,7 @@ describe('admin soft busy state', () => {
 describe('admin visual polish hooks', () => {
   test('Admin title uses the admin-view-title class for hierarchy styling', () => {
     const { document } = loadFrontendEnv();
-    const title = document.getElementById('adminViewTitle');
+    const title = document.getElementById('adminContextTitle');
     assert.ok(title);
     assert.ok(title.classList.contains('admin-view-title'));
   });
@@ -460,7 +467,7 @@ describe('admin visual polish hooks', () => {
     assert.equal(window.getComputedStyle(detail).boxShadow, 'var(--shadow-sm)');
   });
 
-  test('selected section tab uses accent-soft fill', async () => {
+  test('selected nav item uses accent-soft fill', async () => {
     const { window, document } = loadFrontendEnv();
     window.api = async (path) => {
       if(path.startsWith('/api/admin/org')) return {
@@ -472,10 +479,10 @@ describe('admin visual polish hooks', () => {
       return {};
     };
     await window.loadAdminView();
-    const tab = document.querySelector('[data-admin-section="overview"]');
-    assert.equal(tab.getAttribute('aria-selected'), 'true');
-    const bg = window.getComputedStyle(tab).backgroundColor;
-    // accent-soft is not transparent / not equal to the unselected tab's empty background
+    const item = document.querySelector('[data-admin-section="overview"]');
+    assert.equal(item.getAttribute('aria-current'), 'page');
+    const bg = window.getComputedStyle(item).backgroundColor;
+    // accent-soft is not transparent / not equal to the unselected item's empty background
     assert.notEqual(bg, 'rgba(0, 0, 0, 0)');
     assert.notEqual(bg, 'transparent');
   });

@@ -17,7 +17,7 @@ let adminData = { tree: null, users: [], orgs: [] };
     reload — this is what makes search text, filter chips, tree expansion,
     selection and checked rows survive a mutation instead of being wiped by
     the next loadAdminView() (design spec defect 1). */
-let adminUI = {
+var adminUI = {
   section: 'overview',           // 'overview' | 'people' | 'structure' | 'orgs'
   viewedOrgId: null,             // instance admin: which org's tree is loaded
   allOrgs: [],                   // instance admin: every org, kept across a drill-in
@@ -29,7 +29,8 @@ let adminUI = {
   peopleSearch: '',
   peopleFilter: 'all',           // 'all' | 'unassigned' | 'disabled' | 'admins' | 'stale' | 'node:<type>:<id>'
   peopleChecked: new Set(),      // checked user ids, bulk assign
-  busy: false
+  busy: false,
+  lastLoadedAt: null             // ms timestamp of the latest successful loadAdminView()
 };
 
 /** Sprite glyph as inline svg. name maps to a <symbol id="ic-<name>">.
@@ -49,15 +50,18 @@ function visibleAdminSections(){
   return isInstanceAdminUser() ? ADMIN_SECTIONS : ADMIN_SECTIONS.filter(s => s.id !== 'orgs');
 }
 
-function renderAdminSectionTabs(){
-  const el = document.getElementById('adminSectionTabs');
+const ADMIN_SECTION_ICONS = { overview: 'dashboard', people: 'users', structure: 'sitemap', orgs: 'hospital' };
+
+function renderAdminSidebarNav(){
+  const el = document.getElementById('adminSidebarNav');
   if(!el) return;
   const sections = visibleAdminSections();
   if(!sections.some(s => s.id === adminUI.section)) adminUI.section = 'overview';
   el.innerHTML = sections.map(s => `
-    <button type="button" class="admin-section-tab" role="tab" id="adminTab-${s.id}"
-      aria-selected="${s.id === adminUI.section}" tabindex="${s.id === adminUI.section ? '0' : '-1'}"
-      data-admin-section="${s.id}">${escapeHTML(s.label)}</button>`).join('');
+    <button type="button" class="admin-nav-item" data-admin-section="${s.id}"
+      ${s.id === adminUI.section ? 'aria-current="page"' : ''}>
+      ${icon(ADMIN_SECTION_ICONS[s.id])}<span>${escapeHTML(s.label)}</span>
+    </button>`).join('');
 }
 
 const ADMIN_SECTION_IDS = { overview: 'adminOverviewSection', people: 'adminPeopleSection', structure: 'adminStructureSection', orgs: 'adminOrgsSection' };
@@ -72,8 +76,15 @@ function renderAdminOrgChip(){
 }
 
 function renderAdminSection(){
-  renderAdminSectionTabs();
+  renderAdminSidebarNav();
   renderAdminOrgChip();
+  const titleEl = document.getElementById('adminContextTitle');
+  if(titleEl){ const s = ADMIN_SECTIONS.find(x => x.id === adminUI.section); titleEl.textContent = s ? s.label : 'Admin'; }
+  const stamp = document.getElementById('adminUpdatedStamp');
+  if(stamp){
+    if(adminUI.lastLoadedAt){ stamp.hidden = false; stamp.textContent = 'updated ' + new Date(adminUI.lastLoadedAt).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}); }
+    else stamp.hidden = true;
+  }
   for(const [name, id] of Object.entries(ADMIN_SECTION_IDS)){
     const el = document.getElementById(id);
     if(el) el.hidden = adminUI.section !== name;
@@ -93,27 +104,27 @@ function switchAdminSection(section){
   if(!visibleAdminSections().some(s => s.id === section)) return;
   adminUI.section = section;
   renderAdminSection();
-  document.getElementById(`adminTab-${section}`)?.focus();
+  document.querySelector(`[data-admin-section="${section}"]`)?.focus();
 }
 
 document.getElementById('adminOrgChip')?.addEventListener('click', (e) => {
   if(e.target.closest('[data-org-chip-close]')) exitAdminOrgContext();
 });
 
-document.getElementById('adminSectionTabs')?.addEventListener('click', (e) => {
+document.getElementById('adminSidebarNav')?.addEventListener('click', (e) => {
   const btn = e.target.closest('[data-admin-section]');
   if(btn) switchAdminSection(btn.dataset.adminSection);
 });
 
-document.getElementById('adminSectionTabs')?.addEventListener('keydown', (e) => {
-  if(!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
+document.getElementById('adminSidebarNav')?.addEventListener('keydown', (e) => {
+  if(!['ArrowUp','ArrowDown','Home','End'].includes(e.key)) return;
   const sections = visibleAdminSections();
   const i = sections.findIndex(s => s.id === adminUI.section);
   if(i === -1) return;
   e.preventDefault();
   let next;
-  if(e.key === 'ArrowLeft') next = sections[(i - 1 + sections.length) % sections.length];
-  else if(e.key === 'ArrowRight') next = sections[(i + 1) % sections.length];
+  if(e.key === 'ArrowUp') next = sections[(i - 1 + sections.length) % sections.length];
+  else if(e.key === 'ArrowDown') next = sections[(i + 1) % sections.length];
   else if(e.key === 'Home') next = sections[0];
   else next = sections[sections.length - 1];
   switchAdminSection(next.id);
@@ -376,6 +387,7 @@ async function loadAdminView(){
   }
   if(loadToken !== adminLoadSeq) return;
   setAdminBusy(false);
+  adminUI.lastLoadedAt = Date.now();
   if(instAdmin) renderAdminOrgsSection();
   renderAdminSection();
 }
