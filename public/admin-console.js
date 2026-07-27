@@ -392,19 +392,20 @@ function setAdminBusy(on){
   if(status) status.hidden = !adminUI.busy;
 }
 
-/** Public /api/health via fetch (not api()) — no auth headers needed. */
+/** Public /api/health via fetch (not api()) — no auth headers needed.
+ *  Returns telemetry; does not write adminUI (caller assigns after load-token check). */
 async function refreshAdminTelemetry(){
   try{
     const res = await fetch('/api/health');
     if(!res.ok) throw new Error('health ' + res.status);
     const data = await res.json();
-    adminUI.telemetry = {
+    return {
       ok: true,
       ai: !!(data.ai && data.ai.enabled),
       storage: typeof data.storage === 'string' ? data.storage : null
     };
   }catch{
-    adminUI.telemetry = { ok: false, ai: null, storage: null };
+    return { ok: false, ai: null, storage: null };
   }
 }
 
@@ -431,8 +432,9 @@ async function loadAdminView(){
       orgs = tree.org ? [tree.org] : [];
     }
     adminData = { tree, users, orgs };
-    await refreshAdminTelemetry();
+    const telemetry = await refreshAdminTelemetry();
     if(loadToken !== adminLoadSeq) return;
+    adminUI.telemetry = telemetry;
   }catch(err){
     if(loadToken !== adminLoadSeq) return;
     setAdminBusy(false);

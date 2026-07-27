@@ -516,6 +516,49 @@ describe('admin soft busy state', () => {
       'B finished — busy status must hide');
   });
 
+  test('a stale overlapping load does not overwrite newer telemetry', async () => {
+    const { window, document } = loadFrontendEnv();
+    window.api = async (path) => {
+      if(path === '/api/admin/users') return { users: [] };
+      if(path.startsWith('/api/admin/org')) return {
+        org: { id: 'bfv2-org', name: 'Default', stats: { livePatients: 0, byStatus: {}, users: 0, lastActivity: null } },
+        totals: { hospitals: 0, departments: 0, units: 0, wards: 0, usersActive: 0, usersDisabled: 0, livePatients: 0 },
+        hospitals: []
+      };
+      return {};
+    };
+    let resolveHealthA;
+    const healthAPending = new Promise(r => { resolveHealthA = r; });
+    let healthCall = 0;
+    window.fetch = async (url) => {
+      if(String(url).includes('/api/health')){
+        healthCall += 1;
+        if(healthCall === 1){
+          await healthAPending;
+          return { ok: true, json: async () => ({ ok: true, storage: 'sqlite', ai: { enabled: false } }) };
+        }
+        return { ok: true, json: async () => ({ ok: true, storage: 'mongo', ai: { enabled: true } }) };
+      }
+      return { ok: false, json: async () => ({}) };
+    };
+    document.getElementById('adminView').hidden = false;
+    const pA = window.loadAdminView();
+    await new Promise(r => setTimeout(r, 0));
+    const pB = window.loadAdminView();
+    await pB;
+    window.switchAdminSection('overview');
+    assert.match(document.getElementById('adminTelemetry').textContent, /mongo/i);
+    assert.match(document.getElementById('adminTelemetry').textContent, /on/i);
+    resolveHealthA();
+    await pA;
+    // Re-render from adminUI.telemetry — stale A must not have overwritten B's result
+    window.switchAdminSection('overview');
+    const tel = document.getElementById('adminTelemetry').textContent;
+    assert.match(tel, /mongo/i, `expected newer telemetry (mongo), got: ${tel}`);
+    assert.match(tel, /on/i, `expected AI on from newer load, got: ${tel}`);
+    assert.doesNotMatch(tel, /sqlite/i);
+  });
+
   test('switching sections without loadAdminView does not flash busy', async () => {
     const { window, document } = loadFrontendEnv();
     window.api = async (path) => {
@@ -671,5 +714,14 @@ describe('admin premium craft: shell', () => {
     assert.equal(document.getElementById('adminBusyStatus').hidden, false);
     resolveUsers({ users: [] });
     await p;
+  });
+
+  test('busy shimmer does not override context bar sticky', () => {
+    const { document } = loadFrontendEnv();
+    const css = [...document.querySelectorAll('style')].map(s => s.textContent).join('\n');
+    assert.match(css, /\.admin-context-bar\{[^}]*position:\s*sticky/);
+    assert.match(css, /\.admin-view\.is-busy\s+\.admin-context-bar::after/);
+    assert.doesNotMatch(css, /\.admin-view\.is-busy\s+\.admin-context-bar\{[^}]*position:\s*relative/);
+    assert.doesNotMatch(css, /\.admin-view\.is-busy\s+\.admin-context-bar\{[^}]*overflow:\s*hidden/);
   });
 });

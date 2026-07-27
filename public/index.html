@@ -746,17 +746,20 @@
     50%{opacity:0.55}
   }
   @keyframes admin-shimmer{
-    0%{transform:translateX(-100%)}
-    100%{transform:translateX(100%)}
+    0%{background-position:-50% 0}
+    100%{background-position:150% 0}
   }
   .admin-motion-fade-rise{animation:admin-fade-rise 0.35s ease both}
   .admin-motion-slide-in{animation:admin-slide-in 0.28s ease both}
   .admin-motion-stagger{animation:admin-fade-rise 0.4s ease both;animation-delay:calc(var(--i, 0) * 70ms)}
   .admin-motion-pulse-soft{animation:admin-pulse-soft 2.4s ease-in-out infinite}
-  .admin-view.is-busy .admin-context-bar{position:relative;overflow:hidden}
+  /* Shimmer on sticky bar: sticky is the containing block for absolute ::after.
+     Animate background-position (not transform) so we never need overflow:hidden
+     (which would defeat position:sticky). */
   .admin-view.is-busy .admin-context-bar::after{
-    content:"";position:absolute;left:0;right:0;bottom:0;height:2px;
+    content:"";position:absolute;left:0;right:0;bottom:0;height:2px;pointer-events:none;
     background:linear-gradient(90deg,transparent,var(--accent),transparent);
+    background-size:50% 100%;background-repeat:no-repeat;
     animation:admin-shimmer 1.1s linear infinite;
   }
   @media (prefers-reduced-motion: reduce){
