@@ -412,7 +412,7 @@ function createSqliteStore({ dataDir }){
       if(opts.orgId){ where.push('orgId = ?'); params.push(opts.orgId); }
       if(opts.from != null){ where.push('at >= ?'); params.push(Number(opts.from)); }
       if(opts.to != null){ where.push('at <= ?'); params.push(Number(opts.to)); }
-      const limit = Math.min(Math.max(Number(opts.limit) || 100, 1), 1000);
+      const limit = Math.min(Math.max(Number(opts.limit) || 100, 1), 5000);
       const offset = Math.max(Number(opts.offset) || 0, 0);
       const sql = `SELECT * FROM audit${where.length ? ' WHERE ' + where.join(' AND ') : ''} ORDER BY at DESC LIMIT ? OFFSET ?`;
       params.push(limit, offset);
@@ -747,7 +747,7 @@ async function createMongoStore({ mongoUri }){
         if(opts.from != null) q.at.$gte = Number(opts.from);
         if(opts.to != null) q.at.$lte = Number(opts.to);
       }
-      const limit = Math.min(Math.max(Number(opts.limit) || 100, 1), 1000);
+      const limit = Math.min(Math.max(Number(opts.limit) || 100, 1), 5000);
       const offset = Math.max(Number(opts.offset) || 0, 0);
       const arr = await audit.find(q).sort({ at: -1 }).skip(offset).limit(limit).toArray();
       return arr.map(d => ({

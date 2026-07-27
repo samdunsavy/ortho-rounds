@@ -225,6 +225,54 @@ function isInstanceAdmin(actor){
   return actor.role === 'admin' && !actor.orgId;
 }
 
+function parseAuditListQuery(params, { defaultLimit, maxLimit }){
+  const limitRaw = params.get('limit');
+  const offsetRaw = params.get('offset');
+  const limit = limitRaw == null || limitRaw === '' ? defaultLimit : Number(limitRaw);
+  const offset = offsetRaw == null || offsetRaw === '' ? 0 : Number(offsetRaw);
+  if(!Number.isFinite(limit) || limit < 1 || limit > maxLimit){
+    return { ok: false, error: `limit must be 1–${maxLimit}` };
+  }
+  if(!Number.isFinite(offset) || offset < 0){
+    return { ok: false, error: 'offset must be >= 0' };
+  }
+  const fromRaw = params.get('from');
+  const toRaw = params.get('to');
+  const from = fromRaw == null || fromRaw === '' ? null : Number(fromRaw);
+  const to = toRaw == null || toRaw === '' ? null : Number(toRaw);
+  if(fromRaw != null && fromRaw !== '' && !Number.isFinite(from)) return { ok: false, error: 'from must be epoch ms' };
+  if(toRaw != null && toRaw !== '' && !Number.isFinite(to)) return { ok: false, error: 'to must be epoch ms' };
+  return {
+    ok: true,
+    filters: {
+      actorId: params.get('actorId') || undefined,
+      subjectId: params.get('subjectId') || undefined,
+      action: params.get('action') || undefined,
+      from: from == null ? undefined : from,
+      to: to == null ? undefined : to,
+      limit, offset
+    },
+    requestedOrgId: params.get('orgId') || null
+  };
+}
+
+function resolveAuditOrgClamp(actor, requestedOrgId){
+  if(!isEnabled('MULTI_TENANT')) return { ok: true, orgId: undefined };
+  if(isInstanceAdmin(actor)){
+    return { ok: true, orgId: requestedOrgId || undefined };
+  }
+  if(requestedOrgId && requestedOrgId !== actor.orgId){
+    return { ok: false, status: 403, error: 'Not your organization' };
+  }
+  return { ok: true, orgId: actor.orgId || undefined };
+}
+
+function csvEscape(v){
+  const s = v == null ? '' : String(v);
+  if(/[",\n\r]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+  return s;
+}
+
 function cleanName(raw, max = 80){
   const s = typeof raw === 'string' ? raw.trim() : '';
   return s && s.length <= max ? s : null;
@@ -903,6 +951,43 @@ async function handleApi(req, res, pathname){
     // version signs the target out so their UI cannot disagree.
     await store.updateUser(target.id, { role, tokenVersion: (target.tokenVersion || 0) + 1 });
     return sendJSON(res, 200, { ok: true, role });
+  }
+
+  if(pathname === '/api/admin/audit' && req.method === 'GET'){
+    if(actor.role !== 'admin') return sendJSON(res, 403, { error: 'Admin only' });
+    const qIdx = req.url.indexOf('?');
+    const params = new URLSearchParams(qIdx >= 0 ? req.url.slice(qIdx + 1) : '');
+    const parsed = parseAuditListQuery(params, { defaultLimit: 50, maxLimit: 200 });
+    if(!parsed.ok) return sendJSON(res, 400, { error: parsed.error });
+    const clamp = resolveAuditOrgClamp(actor, parsed.requestedOrgId);
+    if(!clamp.ok) return sendJSON(res, clamp.status, { error: clamp.error });
+    const entries = await store.listAudit({ ...parsed.filters, orgId: clamp.orgId });
+    return sendJSON(res, 200, { entries, limit: parsed.filters.limit, offset: parsed.filters.offset });
+  }
+
+  if(pathname === '/api/admin/audit.csv' && req.method === 'GET'){
+    if(actor.role !== 'admin') return sendJSON(res, 403, { error: 'Admin only' });
+    const qIdx = req.url.indexOf('?');
+    const params = new URLSearchParams(qIdx >= 0 ? req.url.slice(qIdx + 1) : '');
+    const parsed = parseAuditListQuery(params, { defaultLimit: 5000, maxLimit: 5000 });
+    if(!parsed.ok) return sendJSON(res, 400, { error: parsed.error });
+    const clamp = resolveAuditOrgClamp(actor, parsed.requestedOrgId);
+    if(!clamp.ok) return sendJSON(res, clamp.status, { error: clamp.error });
+    const entries = await store.listAudit({
+      ...parsed.filters, orgId: clamp.orgId, limit: 5000, offset: 0
+    });
+    const header = 'id,at,actorId,actorUsername,action,subjectType,subjectId,orgId,ip,userAgent,detail';
+    const lines = entries.map(e => [
+      e.id, e.at, e.actorId, e.actorUsername, e.action, e.subjectType, e.subjectId,
+      e.orgId, e.ip, e.userAgent, JSON.stringify(e.detail || {})
+    ].map(csvEscape).join(','));
+    const body = [header, ...lines].join('\n');
+    res.writeHead(200, {
+      'Content-Type': 'text/csv; charset=utf-8',
+      'Content-Disposition': 'attachment; filename="ortho_audit.csv"',
+      'Cache-Control': 'no-store'
+    });
+    return res.end(body);
   }
 
   if(pathname === '/api/diag' && req.method === 'GET'){
