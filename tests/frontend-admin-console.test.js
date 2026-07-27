@@ -217,11 +217,6 @@ describe('admin overview dashboard', () => {
 describe('admin premium craft: Master Control Overview', () => {
   test('loadAdminView fills telemetry from /api/health and Overview renders AI + storage', async () => {
     const { window, document } = orgAdminEnv();
-    const prevApi = window.api;
-    window.api = async (path, ...rest) => {
-      if(path === '/api/health') return { ok: true, storage: 'mongo', ai: { enabled: true }, flags: { MULTI_TENANT: true } };
-      return prevApi(path, ...rest);
-    };
     // refreshAdminTelemetry uses fetch (public health; not api()) so Overview does not need auth headers
     window.fetch = async (url) => {
       if(String(url).includes('/api/health')){
@@ -247,7 +242,10 @@ describe('admin premium craft: Master Control Overview', () => {
     window.switchAdminSection('overview');
     const tel = document.getElementById('adminTelemetry');
     assert.ok(tel);
-    assert.match(tel.textContent, /—/);
+    assert.match(tel.textContent, /AI/i);
+    assert.match(tel.textContent, /Storage/i);
+    const dashes = tel.textContent.match(/—/g) || [];
+    assert.ok(dashes.length >= 2, `expected ≥2 em dashes for AI + Storage, got ${dashes.length} in: ${tel.textContent}`);
   });
 
   test('empty needs-attention shows All systems clear', async () => {
