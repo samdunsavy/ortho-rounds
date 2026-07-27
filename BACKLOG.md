@@ -20,7 +20,7 @@ Cheapest points on the board. Every item here is a standing finding in a hospita
 | ID | Status | Feature | Effort | Dep |
 |---|---|---|---|---|
 | **T1** | `[x]` | Audit log — write path | M | — |
-| **T2** | `[ ]` | Audit log — read API + admin console view | M | T1 |
+| **T2** | `[x]` | Audit log — read API + admin console view | M | T1 |
 | **T3** | `[ ]` | HTTP security headers | S | — |
 | **T4** | `[ ]` | Signed short-lived image URLs; remove `?token=` fallback | M | — |
 | **T5** | `[ ]` | Access/refresh token split | M | T4 |
