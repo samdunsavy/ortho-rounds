@@ -1,7 +1,7 @@
 # Loading & Busy Feedback — Design
 
 **Date:** 2026-07-29  
-**Status:** Approved for planning (awaiting implementation plan).  
+**Status:** Implemented.  
 **Builds on:** Existing partial patterns — `setAiButtonBusy` / `.ai-btn-busy` in `public/app.js`, admin `setAdminBusy` / `.is-busy` in `public/admin-console.js`, sync chip (`setSyncStatus` / “Syncing…”), and `showToast` for outcomes.
 
 ## Problem
