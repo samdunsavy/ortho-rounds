@@ -152,7 +152,7 @@ async function departmentBranch(store, dep, onlyUnitId, onlyWardId){
   const units = await store.listUnitsByDepartment(dep.id);
   const outUnits = [];
   for(const unit of units){
-    if(onlyUnitId && unit.id !== onlyUnitId) continue;
+    if(onlyUnitId && String(unit.id) !== String(onlyUnitId)) continue;
     outUnits.push(await unitBranch(store, unit, onlyWardId));
   }
   return { id: dep.id, name: dep.name, units: outUnits };
@@ -183,14 +183,17 @@ export async function buildScopeTree(store, node){
       if(!unit) return empty;
       const dep = await store.getDepartment(unit.departmentId);
       if(!dep) return empty;
-      return { departments: [await departmentBranch(store, dep, unit.id, ward.id)] };
+      // Build from the already-fetched unit — do not re-list via
+      // listUnitsByDepartment (that path can return [] while getUnit works,
+      // leaving the patient-form Unit select blank under a named department).
+      return { departments: [{ id: dep.id, name: dep.name, units: [await unitBranch(store, unit, ward.id)] }] };
     }
     case 'unit': {
       const unit = await store.getUnit(node.id);
       if(!unit) return empty;
       const dep = await store.getDepartment(unit.departmentId);
       if(!dep) return empty;
-      return { departments: [await departmentBranch(store, dep, unit.id, null)] };
+      return { departments: [{ id: dep.id, name: dep.name, units: [await unitBranch(store, unit, null)] }] };
     }
     case 'department': {
       const dep = await store.getDepartment(node.id);

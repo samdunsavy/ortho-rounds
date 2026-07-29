@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createStore } from '../storage.js';
-import { buildOrgTree, buildOrgRollups } from '../admin.js';
+import { buildOrgTree, buildOrgRollups, buildScopeTree } from '../admin.js';
 
 describe('admin tree/stats builders', () => {
   let dataDir, store;
@@ -170,5 +170,46 @@ describe('buildOrgTree counting corrections', () => {
     const wardB = units.find(u => u.id === 'c-uB').wards[0];
     assert.equal(wardA.stats.livePatients, 1); // c-p1 only
     assert.equal(wardB.stats.livePatients, 0); // c-p2's wardId is stale, its unit is c-uA
+  });
+});
+
+describe('buildScopeTree unit assignment', () => {
+  let dataDir, store;
+  before(async () => {
+    dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ortho-scope-'));
+    store = await createStore({ dataDir });
+    await store.init();
+    await store.createOrganization({ id: 'o1', name: 'Org', plan: 'free' });
+    await store.createHospital({ id: 'h1', orgId: 'o1', name: 'H' });
+    await store.createDepartment({ id: 'dep1', hospitalId: 'h1', name: 'Orthopaedics' });
+    await store.createUnit({ id: 'u2', departmentId: 'dep1', name: 'II' });
+    await store.createWard({ id: 'w1', unitId: 'u2', name: 'Ward 1' });
+  });
+  after(async () => { await store.close(); fs.rmSync(dataDir, { recursive: true, force: true }); });
+
+  test('unit assignment returns Orthopaedics › II for the patient-form picker', async () => {
+    const tree = await buildScopeTree(store, { type: 'unit', id: 'u2' });
+    assert.equal(tree.departments.length, 1);
+    assert.equal(tree.departments[0].name, 'Orthopaedics');
+    assert.deepEqual(tree.departments[0].units.map(u => ({ id: u.id, name: u.name })), [{ id: 'u2', name: 'II' }]);
+  });
+
+  test('unit assignment still returns the unit when listUnitsByDepartment is empty (must not drop II)', async () => {
+    // Reproduces symptom C: department name shows, Unit select blank — caused when
+    // buildScopeTree re-lists units and misses the already-fetched assignment unit.
+    const wrapped = {
+      getUnit: (id) => store.getUnit(id),
+      getDepartment: (id) => store.getDepartment(id),
+      getWard: (id) => store.getWard(id),
+      listUnitsByDepartment: async () => [],
+      listWardsByUnit: (id) => store.listWardsByUnit(id),
+      listOrganizations: () => store.listOrganizations(),
+      listHospitalsByOrg: (id) => store.listHospitalsByOrg(id),
+      listDepartmentsByHospital: (id) => store.listDepartmentsByHospital(id)
+    };
+    const tree = await buildScopeTree(wrapped, { type: 'unit', id: 'u2' });
+    assert.equal(tree.departments[0]?.name, 'Orthopaedics');
+    assert.deepEqual(tree.departments[0]?.units.map(u => u.id), ['u2'],
+      'assigned unit must appear even if listUnitsByDepartment returns nothing');
   });
 });

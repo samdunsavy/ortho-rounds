@@ -1995,6 +1995,7 @@ async function attemptLogin(){
     localStorage.setItem(LS_USERNAME, data.username);
     localStorage.setItem(LS_ROLE, data.role || 'member');
     localStorage.setItem(LS_ORG_ID, data.orgId || '');
+    invalidateScopeTree();
     void refreshServerFlags();
     updateAccountUI();
     void renderScopeSelector();
@@ -6127,7 +6128,11 @@ async function loadScopeTree(){
     cachedScopeTree = await api('/api/me/scope');
   }catch(err){
     console.error(err);
-    cachedScopeTree = { assignment: null, tree: { departments: [] } };
+    // Do not cache the empty fallback — a transient failure (or a fetch
+    // before auth settled) would otherwise blank the Unit select for the
+    // rest of the page session.
+    cachedScopeTree = null;
+    return { assignment: null, tree: { departments: [] } };
   }
   return cachedScopeTree;
 }
@@ -6392,6 +6397,9 @@ async function populateScopePicker(d){
   const wardEl = document.getElementById('f_ward');
   if(!depEl || !unitEl || !wardEl) return; // legacy free-text form (flag off) — nothing to wire up
 
+  // Always refetch: People assignment can change while this tab stays open,
+  // and a stale cached tree is exactly "Department shows Orthopaedics, Unit blank".
+  invalidateScopeTree();
   const { tree } = await loadScopeTree();
   fillSelect(depEl, tree.departments, 'Select department');
 
