@@ -122,6 +122,42 @@ describe('patient form dept/unit/ward picker (MULTI_TENANT on)', () => {
     assert.equal(saved.wardId, 'ward1');
   });
 
+  test('department and unit show Loading while scope fetch is in flight', async () => {
+    const { window, document } = loadFrontendEnv({ initScript: MODAL_FLOW_INIT_SCRIPT });
+    window.serverFlags = { MULTI_TENANT: true };
+    let release;
+    const gate = new Promise(r => { release = r; });
+    window.fetch = async (url) => {
+      if(String(url).includes('/api/me/scope')){
+        await gate;
+        return {
+          ok: true, status: 200,
+          json: async () => ({ assignment: null, tree: SCOPE_TREE_TWO_UNITS })
+        };
+      }
+      return { ok: false, status: 404, json: async () => ({ error: 'not mocked' }) };
+    };
+
+    const openP = window.openPatientModal(window.blankPatient());
+    await new Promise(r => setTimeout(r, 0));
+    const dep = document.getElementById('f_department');
+    const unit = document.getElementById('f_unit');
+    assert.ok(dep && unit, 'scoped selects must exist');
+    assert.equal(dep.disabled, true);
+    assert.equal(unit.disabled, true);
+    assert.equal(dep.getAttribute('aria-busy'), 'true');
+    assert.equal(unit.getAttribute('aria-busy'), 'true');
+    assert.match(dep.textContent, /Loading/);
+    assert.match(unit.textContent, /Loading/);
+
+    release();
+    await openP;
+    assert.equal(dep.getAttribute('aria-busy'), null);
+    assert.equal(unit.getAttribute('aria-busy'), null);
+    assert.doesNotMatch(dep.textContent, /Loading/);
+    assert.ok([...dep.options].some(o => o.value === 'dep1'));
+  });
+
   test('opening the patient form always refetches scope, so a reassignment to a unit appears without a page reload', async () => {
     const { window, document } = loadFrontendEnv({ initScript: MODAL_FLOW_INIT_SCRIPT });
     window.serverFlags = { MULTI_TENANT: true };

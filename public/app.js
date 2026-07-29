@@ -6417,6 +6417,37 @@ function fillSelect(el, items, placeholder){
   el.innerHTML = opts.join('');
 }
 
+/** Show Loading… on Department/Unit (and disable ward) while /api/me/scope is in flight. */
+function setScopePickerLoading(on){
+  const depEl = document.getElementById('f_department');
+  const unitEl = document.getElementById('f_unit');
+  const wardNameEl = document.getElementById('f_ward_name');
+  const wardCreateEl = document.getElementById('f_ward_create');
+  for(const el of [depEl, unitEl]){
+    if(!el) continue;
+    if(on){
+      el.disabled = true;
+      el.setAttribute('aria-busy', 'true');
+      el.classList.add('is-busy');
+      el.innerHTML = '<option value="">Loading…</option>';
+    }else{
+      el.removeAttribute('aria-busy');
+      el.classList.remove('is-busy');
+    }
+  }
+  if(wardNameEl){
+    if(on){
+      wardNameEl.disabled = true;
+      wardNameEl.setAttribute('aria-busy', 'true');
+      wardNameEl.placeholder = 'Loading…';
+    }else{
+      wardNameEl.removeAttribute('aria-busy');
+      wardNameEl.placeholder = 'Select or type a new ward';
+    }
+  }
+  if(wardCreateEl) wardCreateEl.disabled = !!on;
+}
+
 function populateUnitSelect(tree, departmentId, selectedUnitId, selectedWardId){
   const unitEl = document.getElementById('f_unit');
   const dep = (tree.departments || []).find(x => x.id === departmentId);
@@ -6551,39 +6582,51 @@ async function populateScopePicker(d, opts){
   // first would blank Department/Unit even when we already knew Orthopaedics › II.
   // Callers that just refreshed (refreshScopeAfterWake) pass { force: false }.
   const force = !(opts && opts.force === false);
-  const { tree } = await loadScopeTree(force ? { force: true } : undefined);
-  fillSelect(depEl, tree.departments, 'Select department');
+  setScopePickerLoading(true);
+  try{
+    const { tree } = await loadScopeTree(force ? { force: true } : undefined);
+    setScopePickerLoading(false);
+    fillSelect(depEl, tree.departments, 'Select department');
 
-  const single = findSingleUnitChain(tree);
-  let selDep = d.departmentId || '';
-  let selUnit = d.unitId || '';
-  const selWard = d.wardId || '';
-  if(!selUnit && single){
-    selDep = single.departmentId;
-    selUnit = single.unitId;
+    const single = findSingleUnitChain(tree);
+    let selDep = d.departmentId || '';
+    let selUnit = d.unitId || '';
+    const selWard = d.wardId || '';
+    if(!selUnit && single){
+      selDep = single.departmentId;
+      selUnit = single.unitId;
+    }
+
+    // Auto-select an unambiguous department even when the unit itself still
+    // needs a manual choice (e.g. one department but several units).
+    if(!selDep && (tree.departments || []).length === 1) selDep = tree.departments[0].id;
+
+    depEl.value = selDep;
+    populateUnitSelect(tree, depEl.value, selUnit, selWard);
+
+    depEl.onchange = () => populateUnitSelect(tree, depEl.value, '', '');
+    unitEl.onchange = () => populateWardSelect(tree, depEl.value, unitEl.value, '');
+
+    const wardNameEl = document.getElementById('f_ward_name');
+    const wardCreateEl = document.getElementById('f_ward_create');
+    if(wardNameEl) wardNameEl.oninput = () => updateWardCreateAffordance(tree);
+    if(wardCreateEl) wardCreateEl.onclick = () => createWardFromInput(tree);
+
+    const lock = !!single;
+    depEl.disabled = lock;
+    unitEl.disabled = lock;
+    // Ward stays optional/unlocked regardless — a single-unit member can still
+    // choose, type, or create a ward under that unit.
+    if(wardNameEl) wardNameEl.disabled = false;
+  }finally{
+    // If fill threw mid-way, don't leave aria-busy stuck on.
+    depEl.removeAttribute('aria-busy');
+    unitEl.removeAttribute('aria-busy');
+    depEl.classList.remove('is-busy');
+    unitEl.classList.remove('is-busy');
+    const wardNameEl = document.getElementById('f_ward_name');
+    if(wardNameEl) wardNameEl.removeAttribute('aria-busy');
   }
-
-  // Auto-select an unambiguous department even when the unit itself still
-  // needs a manual choice (e.g. one department but several units).
-  if(!selDep && (tree.departments || []).length === 1) selDep = tree.departments[0].id;
-
-  depEl.value = selDep;
-  populateUnitSelect(tree, depEl.value, selUnit, selWard);
-
-  depEl.onchange = () => populateUnitSelect(tree, depEl.value, '', '');
-  unitEl.onchange = () => populateWardSelect(tree, depEl.value, unitEl.value, '');
-
-  const wardNameEl = document.getElementById('f_ward_name');
-  const wardCreateEl = document.getElementById('f_ward_create');
-  if(wardNameEl) wardNameEl.oninput = () => updateWardCreateAffordance(tree);
-  if(wardCreateEl) wardCreateEl.onclick = () => createWardFromInput(tree);
-
-  const lock = !!single;
-  depEl.disabled = lock;
-  unitEl.disabled = lock;
-  // Ward stays optional/unlocked regardless — a single-unit member can still
-  // choose, type, or create a ward under that unit.
-  if(wardNameEl) wardNameEl.disabled = false;
 }
 
 /* ---------------- ADD / EDIT MODAL ---------------- */
