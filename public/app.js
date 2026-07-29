@@ -5481,6 +5481,12 @@ async function confirmImageType(type){
     showToast('X-ray added');
   }catch(err){
     console.error(err);
+    // Roll back optimistic push + clear placeholder so we never leave a
+    // real thumb + orphan grey box for an image that did not persist.
+    const i = p.images.findIndex(x => x.id === img.id);
+    if(i >= 0) p.images.splice(i, 1);
+    closeImageTypeModal();
+    renderAll();
     showToast('Could not add X-ray — ' + (err.message || 'error'));
   }
 }
