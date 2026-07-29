@@ -1868,6 +1868,8 @@ async function syncNow(opts){
   }
   syncing = true;
   setSyncStatus('syncing');
+  // Re-render so cold-empty lists switch to Loading… while the first sync runs.
+  renderAll();
   try{
     const since = Number(localStorage.getItem(LS_LASTSYNC) || 0);
     const dirty = (await cacheGetAll()).filter(r => r._dirty);
@@ -1916,6 +1918,8 @@ async function syncNow(opts){
     throw err;
   }finally{
     syncing = false;
+    // Resolve Loading… → empty state or keep cards once sync finishes.
+    renderAll();
     if(syncQueued){
       syncQueued = false;
       const fullReconcile = syncQueuedFullReconcile;
@@ -4587,9 +4591,22 @@ function wardAccentColor(ward){
   return `hsl(${WARD_ACCENT_HUES[h % WARD_ACCENT_HUES.length]}, 42%, 48%)`;
 }
 
+function isColdPatientLoad(){
+  return patients.length === 0 && !!syncing;
+}
+
+function renderListLoadingHTML(label){
+  return `<div class="empty-state list-loading" aria-busy="true"><div class="msg">${escapeHTML(label || 'Loading…')}</div></div>`;
+}
+
 function renderRounds(){
   const list = document.getElementById('roundsList');
   const items = getFilteredRoundsItems();
+
+  if(!items.length && isColdPatientLoad()){
+    list.innerHTML = renderListLoadingHTML('Loading…');
+    return;
+  }
 
   if(!items.length){
     let msg = 'No patients here yet.';
@@ -5934,7 +5951,11 @@ function renderWorklist(){
     section('Ready for discharge', readyForDischarge, 'checkmark', 'good'),
   ].join('');
 
-  el.innerHTML = html || `<div class="empty-state"><div class="big">${emptyStateSvg('check')}</div><div class="msg">Nothing pending. All caught up.</div></div>`;
+  if(!html && isColdPatientLoad()){
+    el.innerHTML = renderListLoadingHTML('Loading…');
+  }else{
+    el.innerHTML = html || `<div class="empty-state"><div class="big">${emptyStateSvg('check')}</div><div class="msg">Nothing pending. All caught up.</div></div>`;
+  }
 
   if(!localStorage.getItem(LS_TIP_WORKLIST) && html){
     localStorage.setItem(LS_TIP_WORKLIST, '1');
@@ -6111,7 +6132,9 @@ function renderDischarged(){
   items.sort((a,b)=> (b.dischargeDate||'').localeCompare(a.dischargeDate||''));
 
   if(!items.length){
-    list.innerHTML = `<div class="empty-state"><div class="big">${emptyStateSvg('clipboard')}</div><div class="msg">No discharged patients yet.</div></div>`;
+    list.innerHTML = isColdPatientLoad()
+      ? renderListLoadingHTML('Loading…')
+      : `<div class="empty-state"><div class="big">${emptyStateSvg('clipboard')}</div><div class="msg">No discharged patients yet.</div></div>`;
     return;
   }
 
@@ -8693,7 +8716,9 @@ function renderOtList(){
     </div>`;
 
   if(!list.length){
-    html += `<div class="empty-state">No pre-op patients with surgery date ${escapeHTML(formatOtListDateDisplay(date))}. Add patients below or set surgery date on a pre-op card.</div>`;
+    html += isColdPatientLoad()
+      ? renderListLoadingHTML('Loading…')
+      : `<div class="empty-state">No pre-op patients with surgery date ${escapeHTML(formatOtListDateDisplay(date))}. Add patients below or set surgery date on a pre-op card.</div>`;
   }else{
     html += `<div class="ot-list-rows">` + list.map((p, idx) => {
       const doctors = resolvePatientOtDoctors(p);
