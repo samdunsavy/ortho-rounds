@@ -22,6 +22,7 @@ let modalPendingOtherLabs = []; // AI-read analytes outside the known panel, pen
 let patientActivityOffset = 0; // pagination for patient-modal Activity trail
 let pendingImageSlot = null;  // {type: 'preop'|'postop'|'followup'}
 let modalPendingImages = [];  // { id, dataURL, type } — staged X-rays before modal save
+let modalImagePlaceholder = false; // compress-in-flight thumb in patient modal X-ray row
 let viewingImageContext = null; // { patientId, imgId }
 // X-ray viewer zoom/pan state (pinch-zoom, wheel-zoom, double-tap). Reset
 // whenever a different image is shown (see resetImgViewerZoom) so zoom never
@@ -1581,11 +1582,15 @@ function renderModalPendingXrays(){
       <img src="${item.dataURL}" alt="">
       <span class="tag">pre-op</span>
     </div>`).join('');
-  el.innerHTML = existing + pending + `
+  const placeholder = modalImagePlaceholder
+    ? `<div class="xray-thumb is-placeholder" aria-busy="true" aria-label="Uploading…"></div>`
+    : '';
+  el.innerHTML = existing + pending + placeholder + `
     <div class="xray-add" id="modalAddXrayBtn" role="button" tabindex="0" aria-label="Attach X-ray">
       <svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
     </div>`;
-  el.querySelector('#modalAddXrayBtn')?.addEventListener('click', ()=>{
+  el.querySelector('#modalAddXrayBtn')?.addEventListener('click', (ev)=>{
+    if(isBusy(ev.currentTarget)) return;
     document.getElementById('modalFileInput')?.click();
   });
   el.querySelectorAll('[data-modal-xray-rm]').forEach(btn=>{
@@ -1602,13 +1607,23 @@ async function handleModalImageSelected(e){
   const file = e.target.files[0];
   e.target.value = '';
   if(!file) return;
-  try{
+  modalImagePlaceholder = true;
+  renderModalPendingXrays();
+  const addEl = document.getElementById('modalAddXrayBtn');
+  const compress = async () => {
     const raw = await fileToDataURL(file);
     const compressed = await compressImage(raw);
     modalPendingImages.push({ id: uid(), dataURL: compressed, type: 'preop' });
+  };
+  try{
+    if(addEl) await withBusy(addEl, compress);
+    else await compress();
+    modalImagePlaceholder = false;
     renderModalPendingXrays();
     showToast('X-ray attached — saved with patient');
   }catch(err){
+    modalImagePlaceholder = false;
+    renderModalPendingXrays();
     console.warn('Modal image attach failed:', err);
     showToast('Could not read image — try another file');
   }
@@ -3910,9 +3925,15 @@ function bindEvents(){
   document.getElementById('hiddenFileInput').addEventListener('change', handleImageFileSelected);
   document.getElementById('modalFileInput')?.addEventListener('change', handleModalImageSelected);
   document.getElementById('imgTypeCloseBtn').addEventListener('click', closeImageTypeModal);
-  document.getElementById('imgTypePreop').addEventListener('click', ()=> confirmImageType('preop'));
-  document.getElementById('imgTypePostop').addEventListener('click', ()=> confirmImageType('postop'));
-  document.getElementById('imgTypeFollowup').addEventListener('click', ()=> confirmImageType('followup'));
+  document.getElementById('imgTypePreop').addEventListener('click', async (e)=>{
+    await withBusy(e.currentTarget, async () => { await confirmImageType('preop'); });
+  });
+  document.getElementById('imgTypePostop').addEventListener('click', async (e)=>{
+    await withBusy(e.currentTarget, async () => { await confirmImageType('postop'); });
+  });
+  document.getElementById('imgTypeFollowup').addEventListener('click', async (e)=>{
+    await withBusy(e.currentTarget, async () => { await confirmImageType('followup'); });
+  });
   bindSheets();
   bindBottomNav();
   populateFilterSheet();
@@ -4980,6 +5001,7 @@ function renderCardBody(p){
           <img src="${imageSrc(img)}">
           <div class="tag">${img.type.toUpperCase()}</div>
         </div>`).join('')}
+      ${placeholdersForPatient(p.id).map(renderImagePlaceholderThumb).join('')}
       <div class="xray-add" data-action="add-img" data-id="${p.id}" role="button" tabindex="0" aria-label="Add X-ray">
         <svg viewBox="0 0 24 24"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
         <span>Add X-ray</span>
@@ -5375,21 +5397,53 @@ async function persistAndRerender(p){
 
 /* ---------------- image handling ---------------- */
 
-let pendingImageData = null; // {patientId, compressed} awaiting type confirmation
+let pendingImageData = null; // {patientId, compressed, placeholderId} awaiting type confirmation
+let imagePlaceholders = []; // { id, patientId }
+
+function addImagePlaceholder(patientId){
+  const id = 'ph_' + uid();
+  imagePlaceholders.push({ id, patientId });
+  return id;
+}
+
+function removeImagePlaceholder(id){
+  imagePlaceholders = imagePlaceholders.filter(p => p.id !== id);
+}
+
+function placeholdersForPatient(patientId){
+  return imagePlaceholders.filter(p => p.patientId === patientId);
+}
+
+function renderImagePlaceholderThumb(ph){
+  return `<div class="xray-thumb is-placeholder" data-placeholder-id="${escapeHTML(ph.id)}" aria-busy="true" aria-label="Uploading…"></div>`;
+}
 
 async function handleImageFileSelected(e){
   const file = e.target.files[0];
   e.target.value = '';
   if(!file || !pendingImageSlot) return;
-  try{
+  const patientId = pendingImageSlot.patientId;
+  const phId = addImagePlaceholder(patientId);
+  pendingImageSlot.placeholderId = phId;
+  renderAll();
+  const addEl = document.querySelector(`.xray-add[data-action="add-img"][data-id="${CSS.escape(patientId)}"]`);
+  const compress = async () => {
     const raw = await fileToDataURL(file);
     const compressed = await compressImage(raw);
-    pendingImageData = { patientId: pendingImageSlot.patientId, compressed };
+    pendingImageData = { patientId, compressed, placeholderId: phId };
+    pendingImageSlot = null;
     openImageTypeModal();
+  };
+  try{
+    if(addEl) await withBusy(addEl, compress);
+    else await compress();
   }catch(err){
     console.warn('Image upload failed:', err);
     showToast('Could not read image — try another file');
+    removeImagePlaceholder(phId);
     pendingImageSlot = null;
+    pendingImageData = null;
+    renderAll();
   }
 }
 
@@ -5397,9 +5451,15 @@ function openImageTypeModal(){
   document.getElementById('imgTypeModal').classList.add('active');
 }
 function closeImageTypeModal(){
+  const phId = (pendingImageData && pendingImageData.placeholderId)
+    || (pendingImageSlot && pendingImageSlot.placeholderId);
   document.getElementById('imgTypeModal').classList.remove('active');
   pendingImageData = null;
   pendingImageSlot = null;
+  if(phId){
+    removeImagePlaceholder(phId);
+    renderAll();
+  }
 }
 async function confirmImageType(type){
   if(!pendingImageData) return;

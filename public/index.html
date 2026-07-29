@@ -544,6 +544,18 @@
     position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,0.65);color:#fff;
     font-size:9.5px;text-align:center;padding:2px 0;font-weight:600;letter-spacing:0.03em;
   }
+  .xray-thumb.is-placeholder{
+    display:flex;align-items:center;justify-content:center;
+    background:var(--paper);border:1px dashed var(--line);
+  }
+  .xray-thumb.is-placeholder::after{
+    content:'';width:16px;height:16px;border:2px solid var(--accent);
+    border-top-color:transparent;border-radius:50%;
+    animation:ai-spin 0.7s linear infinite;
+  }
+  @media (prefers-reduced-motion: reduce){
+    .xray-thumb.is-placeholder::after{animation:none;opacity:0.7;}
+  }
   .xray-del{
     position:absolute;top:4px;right:4px;z-index:2;width:22px;height:22px;border-radius:50%;
     border:none;background:rgba(0,0,0,0.72);color:#fff;font-size:15px;line-height:1;cursor:pointer;
