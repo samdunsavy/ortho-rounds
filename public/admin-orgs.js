@@ -86,23 +86,30 @@ document.getElementById('adminOrgsSection')?.addEventListener('click', (e) => {
   }
   if(e.target.closest('#adminAddOrgBtn')){
     e.stopPropagation();
+    const btn = e.target.closest('#adminAddOrgBtn');
     const input = document.getElementById('adminNewOrgName');
     const name = (input && input.value || '').trim();
     if(!name){ showToast('Enter an organization name'); return; }
-    api('/api/admin/orgs', { method: 'POST', body: JSON.stringify({ name }) })
-      .then(() => { input.value = ''; return loadAdminView(); })
-      .catch(err => showToast(err.message));
+    void withBusy(btn, async () => {
+      try{
+        await api('/api/admin/orgs', { method: 'POST', body: JSON.stringify({ name }) });
+        input.value = '';
+        await loadAdminView();
+      }catch(err){ showToast(err.message); }
+    });
     return;
   }
   if(e.target.closest('[data-repair-ancestry]')){
     e.stopPropagation();
-    showConfirm('Repair ancestry', 'Re-derives every patient\'s hospital/department/unit/ward labels and stats from their current unit assignment. Safe to run any time; only fixes migration debris, does not move anyone.', { confirmLabel: 'Repair' })
-      .then(ok => {
-        if(!ok) return;
-        return api('/api/admin/repair-ancestry', { method: 'POST' })
-          .then(res => showToast(`Fixed ancestry for ${res.restamped} patients`))
-          .catch(err => showToast(err.message));
-      });
+    const btn = e.target.closest('[data-repair-ancestry]');
+    void withBusy(btn, async () => {
+      const ok = await showConfirm('Repair ancestry', 'Re-derives every patient\'s hospital/department/unit/ward labels and stats from their current unit assignment. Safe to run any time; only fixes migration debris, does not move anyone.', { confirmLabel: 'Repair' });
+      if(!ok) return;
+      try{
+        const res = await api('/api/admin/repair-ancestry', { method: 'POST' });
+        showToast(`Fixed ancestry for ${res.restamped} patients`);
+      }catch(err){ showToast(err.message); }
+    });
     return;
   }
   const mkOrgAdmin = e.target.closest('[data-create-org-admin]');
@@ -112,10 +119,13 @@ document.getElementById('adminOrgsSection')?.addEventListener('click', (e) => {
     const input = document.querySelector(`[data-new-org-admin="${oid}"]`);
     const username = (input && input.value || '').trim();
     if(!username){ showToast('Enter a username'); return; }
-    api(`/api/admin/orgs/${encodeURIComponent(oid)}/admin`, { method: 'POST', body: JSON.stringify({ username }) })
-      .then(r => showConfirm('Org admin created', `Temporary password for ${r.username}: ${r.temporaryPassword}\nIt is not shown again.`, { confirmLabel: 'Done' }))
-      .then(() => loadAdminView())
-      .catch(err => showToast(err.message));
+    void withBusy(mkOrgAdmin, async () => {
+      try{
+        const r = await api(`/api/admin/orgs/${encodeURIComponent(oid)}/admin`, { method: 'POST', body: JSON.stringify({ username }) });
+        await showConfirm('Org admin created', `Temporary password for ${r.username}: ${r.temporaryPassword}\nIt is not shown again.`, { confirmLabel: 'Done' });
+        await loadAdminView();
+      }catch(err){ showToast(err.message); }
+    });
     return;
   }
 });

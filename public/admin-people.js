@@ -389,15 +389,17 @@ document.getElementById('adminPeopleSection')?.addEventListener('click', (e) => 
   }
   if(e.target.id === 'adminBulkApply'){
     e.stopPropagation();
-    const ids = selectedAdminUserIds();
-    const raw = document.getElementById('adminBulkNode').value;
-    const i = raw.indexOf(':');
-    const nodeType = i === -1 ? null : raw.slice(0, i);
-    const nodeId = i === -1 ? null : raw.slice(i + 1);
-    const groups = buildAssignNodeGroups(adminData.tree, adminData.orgs);
-    const targetLabel = nodeType ? (assignLabelFor(groups, nodeType, nodeId) || 'that place') : 'no placement';
-    api('/api/admin/users/assign-bulk', { method: 'POST', body: JSON.stringify({ userIds: ids, nodeType, nodeId }) })
-      .then(async res => {
+    const btn = e.target;
+    void withBusy(btn, async () => {
+      const ids = selectedAdminUserIds();
+      const raw = document.getElementById('adminBulkNode').value;
+      const i = raw.indexOf(':');
+      const nodeType = i === -1 ? null : raw.slice(0, i);
+      const nodeId = i === -1 ? null : raw.slice(i + 1);
+      const groups = buildAssignNodeGroups(adminData.tree, adminData.orgs);
+      const targetLabel = nodeType ? (assignLabelFor(groups, nodeType, nodeId) || 'that place') : 'no placement';
+      try{
+        const res = await api('/api/admin/users/assign-bulk', { method: 'POST', body: JSON.stringify({ userIds: ids, nodeType, nodeId }) });
         const msg = `Assigned ${res.assigned} ${res.assigned === 1 ? 'person' : 'people'} to ${targetLabel}`;
         showToast(msg);
         await loadAdminView();
@@ -407,8 +409,8 @@ document.getElementById('adminPeopleSection')?.addEventListener('click', (e) => 
           bar.hidden = false;
           bar.textContent = msg;
         }
-      })
-      .catch(err => showToast(err.message));
+      }catch(err){ showToast(err.message); }
+    });
     return;
   }
   const cardToggle = e.target.closest('[data-card-toggle]');
@@ -422,7 +424,7 @@ document.getElementById('adminPeopleSection')?.addEventListener('click', (e) => 
     const id = toggleBtn.dataset.userToggle;
     const user = (adminData.users || []).find(u => u.id === id);
     const path = user && user.active ? 'disable' : 'enable';
-    (async () => {
+    void withBusy(toggleBtn, async () => {
       if(path === 'disable' && !(await showConfirm('Disable this person?', 'They will be signed out.', { confirmLabel: 'Disable', danger: true }))) return;
       try{
         await api(`/api/admin/users/${encodeURIComponent(id)}/${path}`, { method: 'POST' });
@@ -435,37 +437,42 @@ document.getElementById('adminPeopleSection')?.addEventListener('click', (e) => 
         refreshAdminPeopleRowGuards();
         applyAdminPeopleFilters();
       }catch(err){ showToast(err.message); }
-    })();
+    });
     return;
   }
   const resetBtn = e.target.closest('[data-user-reset]');
   if(resetBtn){
     e.stopPropagation();
     const id = resetBtn.dataset.userReset;
-    api(`/api/admin/users/${encodeURIComponent(id)}/reset-password`, { method: 'POST' })
-      .then(res => showAdminSecret('Password reset', res.temporaryPassword))
-      .catch(err => showToast(err.message));
+    void withBusy(resetBtn, async () => {
+      try{
+        const res = await api(`/api/admin/users/${encodeURIComponent(id)}/reset-password`, { method: 'POST' });
+        await showAdminSecret('Password reset', res.temporaryPassword);
+      }catch(err){ showToast(err.message); }
+    });
     return;
   }
   if(e.target.id === 'adminCreateUser'){
     e.stopPropagation();
-    if(adminNeedsOrgChoice()){ showToast('Choose an organization first'); return; }
-    const nameEl = document.getElementById('adminNewUsername');
-    const username = (nameEl.value || '').trim();
-    if(!username){ showToast('Enter a username'); return; }
-    const role = document.getElementById('adminNewUserAdmin').checked ? 'admin' : 'member';
-    const orgId = adminUI.viewedOrgId || (adminData.tree && adminData.tree.org && adminData.tree.org.id) || null;
-    if(!orgId){ showToast('Choose an organization first'); return; }
-    const placement = document.getElementById('adminNewUserPlacement').value;
-    const body = { username, role, orgId };
-    let nodeType = null, nodeId = null;
-    if(placement){
-      const i = placement.indexOf(':');
-      nodeType = placement.slice(0, i);
-      nodeId = placement.slice(i + 1);
-    }
-    api('/api/admin/users', { method: 'POST', body: JSON.stringify(body) })
-      .then(async res => {
+    const btn = e.target;
+    void withBusy(btn, async () => {
+      if(adminNeedsOrgChoice()){ showToast('Choose an organization first'); return; }
+      const nameEl = document.getElementById('adminNewUsername');
+      const username = (nameEl.value || '').trim();
+      if(!username){ showToast('Enter a username'); return; }
+      const role = document.getElementById('adminNewUserAdmin').checked ? 'admin' : 'member';
+      const orgId = adminUI.viewedOrgId || (adminData.tree && adminData.tree.org && adminData.tree.org.id) || null;
+      if(!orgId){ showToast('Choose an organization first'); return; }
+      const placement = document.getElementById('adminNewUserPlacement').value;
+      const body = { username, role, orgId };
+      let nodeType = null, nodeId = null;
+      if(placement){
+        const i = placement.indexOf(':');
+        nodeType = placement.slice(0, i);
+        nodeId = placement.slice(i + 1);
+      }
+      try{
+        const res = await api('/api/admin/users', { method: 'POST', body: JSON.stringify(body) });
         if(nodeType){
           try{
             await api(`/api/admin/users/${res.id}/assign`, { method: 'POST', body: JSON.stringify({ nodeType, nodeId }) });
@@ -481,8 +488,8 @@ document.getElementById('adminPeopleSection')?.addEventListener('click', (e) => 
           showToast(err.message);
         }
         await showAdminSecret('Person created', res.temporaryPassword);
-      })
-      .catch(err => showToast(err.message));
+      }catch(err){ showToast(err.message); }
+    });
     return;
   }
 });
@@ -532,16 +539,18 @@ document.getElementById('adminPeopleSection')?.addEventListener('change', async 
     const user = (adminData.users || []).find(u => u.id === id);
     const newRole = roleSel.value;
     const prevRole = user ? user.role : (newRole === 'admin' ? 'member' : 'admin');
-    const ok = await showConfirm('Change role', `Make ${user ? user.username : 'this person'} ${newRole === 'admin' ? 'an admin' : 'a member'}?`, { confirmLabel: 'Change role' });
-    if(!ok){ syncAdminRoleSelects(id, prevRole); return; }
-    try{
-      await api(`/api/admin/users/${encodeURIComponent(id)}/role`, { method: 'POST', body: JSON.stringify({ role: newRole }) });
-      showToast('Role updated');
-      await loadAdminView();
-    }catch(err){
-      syncAdminRoleSelects(id, prevRole);
-      showToast(err.message);
-    }
+    await withBusy(roleSel, async () => {
+      const ok = await showConfirm('Change role', `Make ${user ? user.username : 'this person'} ${newRole === 'admin' ? 'an admin' : 'a member'}?`, { confirmLabel: 'Change role' });
+      if(!ok){ syncAdminRoleSelects(id, prevRole); return; }
+      try{
+        await api(`/api/admin/users/${encodeURIComponent(id)}/role`, { method: 'POST', body: JSON.stringify({ role: newRole }) });
+        showToast('Role updated');
+        await loadAdminView();
+      }catch(err){
+        syncAdminRoleSelects(id, prevRole);
+        showToast(err.message);
+      }
+    });
     return;
   }
   const sel = e.target.closest('[data-assign-user]');
@@ -552,19 +561,21 @@ document.getElementById('adminPeopleSection')?.addEventListener('change', async 
     const nodeId = sepIdx === -1 ? null : raw.slice(sepIdx + 1);
     const userId = sel.dataset.assignUser;
     const prev = sel.dataset.prev || '';
-    try{
-      await api(`/api/admin/users/${userId}/assign`, { method: 'POST', body: JSON.stringify({ nodeType, nodeId }) });
-      const u = (adminData.users || []).find(x => x.id === userId);
-      if(u){ u.assignmentType = nodeType; u.assignmentId = nodeId; }
-      renderAdminPeopleRow(userId);
-      renderAdminPeopleCard(userId);
-      syncAdminAssignSelects(userId, raw);
-      applyAdminPeopleFilters();
-      showAdminAssignNote(userId, 'Saved', false);
-    }catch(err){
-      syncAdminAssignSelects(userId, prev);
-      showAdminAssignNote(userId, err.message, true);
-    }
+    await withBusy(sel, async () => {
+      try{
+        await api(`/api/admin/users/${userId}/assign`, { method: 'POST', body: JSON.stringify({ nodeType, nodeId }) });
+        const u = (adminData.users || []).find(x => x.id === userId);
+        if(u){ u.assignmentType = nodeType; u.assignmentId = nodeId; }
+        renderAdminPeopleRow(userId);
+        renderAdminPeopleCard(userId);
+        syncAdminAssignSelects(userId, raw);
+        applyAdminPeopleFilters();
+        showAdminAssignNote(userId, 'Saved', false);
+      }catch(err){
+        syncAdminAssignSelects(userId, prev);
+        showAdminAssignNote(userId, err.message, true);
+      }
+    });
     return;
   }
 });

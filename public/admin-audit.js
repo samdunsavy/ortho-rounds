@@ -207,7 +207,8 @@ document.getElementById('adminAuditSection')?.addEventListener('click', (e) => {
   }
   if(e.target.closest('#adminAuditExportCsv')){
     e.stopPropagation();
-    downloadAdminAuditCsv();
+    const btn = e.target.closest('#adminAuditExportCsv');
+    void withBusy(btn, () => downloadAdminAuditCsv());
     return;
   }
   if(e.target.closest('#adminAuditLoadMore')){

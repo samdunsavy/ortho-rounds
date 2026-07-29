@@ -385,15 +385,17 @@ document.getElementById('adminStructureSection')?.addEventListener('click', asyn
     const route = addChildRouteFor(parentType);
     if(!route) return;
     const body = route.parentKey ? { [route.parentKey]: parentId, name } : { name };
-    addBtn.disabled = true;
-    if(input) input.disabled = true;
-    api(route.path, { method: 'POST', body: JSON.stringify(body) })
-      .then(() => { invalidateHierarchyCaches(); return loadAdminView(); })
-      .catch(err => {
+    void withBusy(addBtn, async () => {
+      if(input) input.disabled = true;
+      try{
+        await api(route.path, { method: 'POST', body: JSON.stringify(body) });
+        invalidateHierarchyCaches();
+        await loadAdminView();
+      }catch(err){
         showToast(err.message);
-        addBtn.disabled = false;
         if(input) input.disabled = false;
-      });
+      }
+    });
     return;
   }
   const renameTarget = e.target.closest('[data-rename-target]');
@@ -421,19 +423,20 @@ document.getElementById('adminStructureSection')?.addEventListener('click', asyn
     const type = raw.slice(0, i), id = raw.slice(i + 1);
     if(!(await showConfirm(`Delete this ${humanNodeType(type)}?`, 'This cannot be undone.', { confirmLabel: 'Delete', danger: true }))) return;
     const hitBeforeDelete = findAdminNode(adminData.tree, type, id);
-    api(`/api/admin/nodes/${encodeURIComponent(type)}/${encodeURIComponent(id)}`, { method: 'DELETE' })
-      .then(() => {
+    void withBusy(delBtn, async () => {
+      try{
+        await api(`/api/admin/nodes/${encodeURIComponent(type)}/${encodeURIComponent(id)}`, { method: 'DELETE' });
         invalidateHierarchyCaches();
         adminUI.selectedNode = hitBeforeDelete && hitBeforeDelete.parentType && hitBeforeDelete.parentId
           ? { type: hitBeforeDelete.parentType, id: hitBeforeDelete.parentId }
           : null;
-        return loadAdminView();
-      })
-      .catch(err => {
+        await loadAdminView();
+      }catch(err){
         const el = document.getElementById('adminDeleteBlockers');
         if(el) el.innerHTML = describeDeleteBlockersHTML(err, type, id);
         else showToast(describeDeleteBlock(err) || err.message);
-      });
+      }
+    });
     return;
   }
   const organizeBtn = e.target.closest('[data-organize-unit]');
@@ -456,9 +459,16 @@ document.getElementById('adminStructureSection')?.addEventListener('click', asyn
     const toName = parentOption ? parentOption.textContent : 'the new place';
     const ok = await showConfirm('Move', `Move ${hit ? hit.node.name : 'this'} from ${fromName} to ${toName}?`);
     if(!ok) return;
-    api(`/api/admin/nodes/${encodeURIComponent(type)}/${encodeURIComponent(id)}/move`, { method: 'POST', body: JSON.stringify({ newParentId }) })
-      .then(() => { invalidateHierarchyCaches(); return loadAdminView(); })
-      .catch(err => { showToast(err.message); loadAdminView(); });
+    void withBusy(moveConfirmBtn, async () => {
+      try{
+        await api(`/api/admin/nodes/${encodeURIComponent(type)}/${encodeURIComponent(id)}/move`, { method: 'POST', body: JSON.stringify({ newParentId }) });
+        invalidateHierarchyCaches();
+        await loadAdminView();
+      }catch(err){
+        showToast(err.message);
+        await loadAdminView();
+      }
+    });
     return;
   }
   const row = e.target.closest('[data-node]');
@@ -504,9 +514,12 @@ document.getElementById('adminStructureSection')?.addEventListener('change', asy
     const nameEl = document.querySelector(`[data-rename-target="department:${id}"]`);
     const name = hit ? hit.node.name : (nameEl && nameEl.textContent.trim());
     if(!name) return;
-    api(`/api/admin/nodes/department/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ name, specialty: specialty.value.trim() || 'ortho' }) })
-      .then(() => loadAdminView())
-      .catch(err => showToast(err.message));
+    await withBusy(specialty, async () => {
+      try{
+        await api(`/api/admin/nodes/department/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ name, specialty: specialty.value.trim() || 'ortho' }) });
+        await loadAdminView();
+      }catch(err){ showToast(err.message); }
+    });
     return;
   }
   const moveSel = e.target.closest('[data-move-node]');
@@ -542,10 +555,14 @@ document.getElementById('adminStructureSection')?.addEventListener('keydown', (e
     input.after(msg);
     return;
   }
-  api(`/api/admin/nodes/${encodeURIComponent(type)}/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ name }) })
-    .then(() => restoreAdminFocus(`[data-rename-target="${key}"]`, () => {
-      invalidateHierarchyCaches();
-      return loadAdminView();
-    }, true))
-    .catch(err => showToast(err.message));
+  e.preventDefault();
+  void withBusy(input, async () => {
+    try{
+      await api(`/api/admin/nodes/${encodeURIComponent(type)}/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ name }) });
+      await restoreAdminFocus(`[data-rename-target="${key}"]`, () => {
+        invalidateHierarchyCaches();
+        return loadAdminView();
+      }, true);
+    }catch(err){ showToast(err.message); }
+  });
 });

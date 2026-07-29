@@ -211,6 +211,33 @@ describe('user lifecycle', () => {
     assert.ok(call, 'expected a POST to /api/admin/users');
     assert.deepEqual(JSON.parse(call.opts.body), { username: 'newpg', role: 'member', orgId: 'bfv2-org' });
   });
+
+  test('create user button is busy while the API is in flight', async () => {
+    let release;
+    const gate = new Promise(r => { release = r; });
+    const { window, document } = peopleEnv(CC_USERS);
+    const baseApi = window.api;
+    window.api = async (path, opts) => {
+      if(path === '/api/admin/users' && opts && opts.method === 'POST'){
+        await gate;
+        return { id: 'new', temporaryPassword: 'tmp' };
+      }
+      return baseApi(path, opts);
+    };
+    await window.loadAdminView();
+    window.switchAdminSection('people');
+    document.getElementById('adminNewUsername').value = 'newbie';
+    const btn = document.getElementById('adminCreateUser');
+    btn.click();
+    await new Promise(r => setTimeout(r, 0));
+    assert.equal(window.isBusy(btn), true);
+    release();
+    await new Promise(r => setTimeout(r, 20));
+    // loadAdminView remounts the people panel; the live create control must not stay busy
+    const live = document.getElementById('adminCreateUser');
+    assert.ok(live);
+    assert.equal(window.isBusy(live), false);
+  });
 });
 
 describe('unscoped instance-admin People (Task 1 review fixes)', () => {
