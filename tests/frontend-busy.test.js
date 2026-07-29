@@ -1,6 +1,24 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { loadFrontendEnv } from './helpers/frontend-env.js';
+
+const INDEX_HTML = readFileSync(
+  path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public', 'index.html'),
+  'utf8'
+);
+
+describe('is-busy CSS scoping', () => {
+  test('control busy rules do not use bare .is-busy (spares .admin-view.is-busy)', () => {
+    // Global opacity/spinner must not match #adminView.admin-view.is-busy.
+    assert.equal(/\n\s*\.is-busy\s*\{/.test(INDEX_HTML), false);
+    assert.equal(/\n\s*\.is-busy::after\s*\{/.test(INDEX_HTML), false);
+    assert.match(INDEX_HTML, /button\.is-busy\s*,\s*\.btn\.is-busy\s*,\s*\[role=button\]\.is-busy\s*,\s*\.xray-add\.is-busy\s*\{/);
+    assert.match(INDEX_HTML, /\.admin-view\.is-busy/);
+  });
+});
 
 describe('withBusy', () => {
   test('sets busy class, aria-busy, and disabled on a button then clears', async () => {
