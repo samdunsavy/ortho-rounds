@@ -1924,6 +1924,7 @@ async function syncNow(opts){
     preserveOpenCard();
     renderAll();
     setSyncStatus('online');
+    void refreshScopeAfterWake();
   }catch(err){
     if(err.message !== 'unauthorized') console.warn('Sync failed:', err.message);
     setSyncStatus('offline');
@@ -3544,6 +3545,9 @@ async function init(){
   setInterval(()=>{ refreshSyncChipLabel(); }, 30000);
   window.addEventListener('online', ()=>{ refreshAiStatus(); if(hasToken()) backgroundSync(); });
   window.addEventListener('focus', ()=>{ if(hasToken()) backgroundSync(); });
+  document.addEventListener('visibilitychange', ()=>{
+    if(document.visibilityState === 'visible' && hasToken() && navigator.onLine) backgroundSync();
+  });
 }
 
 function updateStorageNotice(){
@@ -6235,34 +6239,58 @@ function renderDischarged(){
    only ever needs to persist unitId (required) and optionally wardId, never
    trust/write ward/unit strings. */
 
-let cachedScopeTree = null; // { assignment, tree } — fetched once per page session
+let cachedScopeTree = null; // { assignment, tree } — last known good scope for this page session
 
 function scopePickerActive(){
   return !!(serverFlags && serverFlags.MULTI_TENANT);
 }
 
-async function loadScopeTree(){
-  if(cachedScopeTree) return cachedScopeTree;
-  try{
-    cachedScopeTree = await api('/api/me/scope');
-  }catch(err){
-    console.error(err);
-    // Do not cache the empty fallback — a transient failure (or a fetch
-    // before auth settled) would otherwise blank the Unit select for the
-    // rest of the page session.
-    cachedScopeTree = null;
-    return { assignment: null, tree: { departments: [] } };
-  }
-  return cachedScopeTree;
+function scopeTreeHasDepartments(payload){
+  return !!(payload && payload.tree && Array.isArray(payload.tree.departments) && payload.tree.departments.length);
 }
 
-// The scope tree is memoized for the page session. Anything that changes the
-// hierarchy OUTSIDE the patient form (the admin console creating/renaming/
-// deleting/moving a node) must call this so the next picker open refetches
-// instead of serving a stale tree. (Inline ward creation updates the cached
-// tree in place via injectWardIntoScopeTree and does not need this.)
+/** Fetch /api/me/scope. force=true always hits the network (assignment may have
+ *  changed). On failure, keep the last good tree so a Render cold-start blip
+ *  does not blank Department/Unit while sync is still recovering. */
+async function loadScopeTree(opts){
+  const force = !!(opts && opts.force);
+  if(!force && cachedScopeTree) return cachedScopeTree;
+  try{
+    const next = await api('/api/me/scope');
+    cachedScopeTree = next;
+    return next;
+  }catch(err){
+    console.error(err);
+    if(cachedScopeTree) return cachedScopeTree;
+    return { assignment: null, tree: { departments: [] } };
+  }
+}
+
+// Drop the memoized tree so the next loadScopeTree (or force refresh) refetches.
+// Prefer loadScopeTree({ force:true }) for patient-form opens — that keeps the
+// last-good fallback if the network call fails mid-wake.
 function invalidateScopeTree(){
   cachedScopeTree = null;
+}
+
+/** After sync/focus/online recovers (typical Render free-tier wake): refresh
+ *  scope + flags, and if Add/Edit patient is open, refill Department/Unit. */
+async function refreshScopeAfterWake(){
+  if(!hasToken()) return;
+  await refreshServerFlags();
+  if(!scopePickerActive()) return;
+  const prev = cachedScopeTree;
+  const next = await loadScopeTree({ force: true });
+  void renderScopeSelector();
+  void refreshMoveCapability();
+  const modal = document.getElementById('patientModal');
+  const formOpen = modal && modal.classList.contains('active') && document.getElementById('f_department');
+  if(formOpen && (scopeTreeHasDepartments(next) || (prev && next !== prev))){
+    await populateScopePicker(
+      typeof modalWorkingData === 'object' && modalWorkingData ? modalWorkingData : {},
+      { force: false } // already force-refreshed above
+    );
+  }
 }
 
 function getActiveScope(){
@@ -6512,16 +6540,18 @@ function injectWardIntoScopeTree(tree, unitId, ward){
   return false;
 }
 
-async function populateScopePicker(d){
+async function populateScopePicker(d, opts){
   const depEl = document.getElementById('f_department');
   const unitEl = document.getElementById('f_unit');
   const wardEl = document.getElementById('f_ward');
   if(!depEl || !unitEl || !wardEl) return; // legacy free-text form (flag off) — nothing to wire up
 
-  // Always refetch: People assignment can change while this tab stays open,
-  // and a stale cached tree is exactly "Department shows Orthopaedics, Unit blank".
-  invalidateScopeTree();
-  const { tree } = await loadScopeTree();
+  // Default force-refresh so a People reassignment is picked up. Keep last-good
+  // tree if the server is still waking (Render free tier) — wiping the cache
+  // first would blank Department/Unit even when we already knew Orthopaedics › II.
+  // Callers that just refreshed (refreshScopeAfterWake) pass { force: false }.
+  const force = !(opts && opts.force === false);
+  const { tree } = await loadScopeTree(force ? { force: true } : undefined);
   fillSelect(depEl, tree.departments, 'Select department');
 
   const single = findSingleUnitChain(tree);
@@ -8016,8 +8046,16 @@ function isInstanceAdminUser(){
 async function refreshServerFlags(){
   try{
     const res = await fetch('/api/health');
+    if(!res.ok){
+      // Leave last-known flags alone (Render wake: health may fail while
+      // sync already recovered — wiping MULTI_TENANT blanks the unit picker).
+      updateAccountUI();
+      void renderScopeSelector();
+      void refreshMoveCapability();
+      return;
+    }
     const data = await res.json();
-    serverFlags = data.flags || {};
+    if(data && data.flags) serverFlags = data.flags;
   }catch{ /* offline — leave as-is */ }
   updateAccountUI();
   void renderScopeSelector();

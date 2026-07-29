@@ -185,6 +185,70 @@ describe('patient form dept/unit/ward picker (MULTI_TENANT on)', () => {
     assert.equal(calls, 2, 'failed fetch must not stick an empty tree in the session cache');
     assert.equal(document.getElementById('f_unit').value, 'u2');
   });
+
+  test('after a good scope load, a cold-start fetch failure keeps last-good Orthopaedics › II', async () => {
+    // Render free-tier wake: sync may recover while /api/me/scope still fails once.
+    // Clearing cache before every open would blank Department/Unit even though we
+    // already knew the assignment tree from earlier in the session.
+    const { window, document } = loadFrontendEnv({ initScript: MODAL_FLOW_INIT_SCRIPT });
+    window.serverFlags = { MULTI_TENANT: true };
+    let calls = 0;
+    const good = {
+      assignment: { type: 'unit', id: 'u2' },
+      tree: { departments: [{ id: 'dep1', name: 'Orthopaedics', units: [{ id: 'u2', name: 'II', wards: [] }] }] }
+    };
+    window.fetch = async (url) => {
+      if(String(url).includes('/api/me/scope')){
+        calls++;
+        if(calls === 1){
+          return { ok: true, status: 200, json: async () => good };
+        }
+        throw new Error('server waking');
+      }
+      return { ok: false, status: 404, json: async () => ({ error: 'not mocked' }) };
+    };
+
+    await window.openPatientModal(window.blankPatient());
+    assert.equal(document.getElementById('f_unit').value, 'u2');
+
+    await window.openPatientModal(window.blankPatient());
+    assert.ok(calls >= 2, 'second open must attempt a refresh');
+    assert.equal(document.getElementById('f_department').value, 'dep1');
+    assert.equal(document.getElementById('f_unit').value, 'u2', 'must keep last-good unit while server wakes');
+  });
+
+  test('refreshScopeAfterWake refills an open patient form after sync recovers', async () => {
+    const { window, document } = loadFrontendEnv({ initScript: MODAL_FLOW_INIT_SCRIPT });
+    window.localStorage.setItem('ortho_token', 't');
+    window.serverFlags = { MULTI_TENANT: true };
+    let calls = 0;
+    window.fetch = async (url) => {
+      if(String(url).includes('/api/health')){
+        // Wake: health may still be flaky — must not wipe MULTI_TENANT.
+        return { ok: false, status: 503, json: async () => ({ error: 'waking' }) };
+      }
+      if(String(url).includes('/api/me/scope')){
+        calls++;
+        if(calls === 1) throw new Error('server sleeping');
+        return {
+          ok: true, status: 200,
+          json: async () => ({
+            assignment: { type: 'unit', id: 'u2' },
+            tree: { departments: [{ id: 'dep1', name: 'Orthopaedics', units: [{ id: 'u2', name: 'II', wards: [] }] }] }
+          })
+        };
+      }
+      return { ok: false, status: 404, json: async () => ({ error: 'not mocked' }) };
+    };
+
+    await window.openPatientModal(window.blankPatient());
+    assert.deepEqual([...document.getElementById('f_unit').options].map(o => o.value).filter(Boolean), []);
+
+    await window.refreshScopeAfterWake();
+    assert.ok(calls >= 2, 'wake refresh must refetch scope after the failed open');
+    assert.equal(window.serverFlags.MULTI_TENANT, true, 'failed health must not clear MULTI_TENANT');
+    assert.equal(document.getElementById('f_unit').value, 'u2');
+  });
 });
 
 describe('patient form dept/unit/ward picker (MULTI_TENANT off — legacy behavior unchanged)', () => {
