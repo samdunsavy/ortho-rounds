@@ -1385,6 +1385,52 @@ function applySmartPasteDvt(fields){
   return filled;
 }
 
+function normalizeUnitLabel(s){
+  return String(s || '').trim().toLowerCase().replace(/^unit\s+/i, '').replace(/\s+/g, ' ');
+}
+
+/** Match AI free-text unit/ward labels onto MULTI_TENANT selects. Never write
+ *  "IV" into f_unit (that select holds unit ids) — that clears a prior pick. */
+async function applySmartPasteScopeFields(fields){
+  const depEl = document.getElementById('f_department');
+  const unitEl = document.getElementById('f_unit');
+  if(!depEl || !unitEl) return 0;
+  let filled = 0;
+  const { tree } = await loadScopeTree();
+  const unitLabel = normalizeUnitLabel(fields?.unit);
+  let match = null;
+  if(unitLabel){
+    for(const dep of (tree.departments || [])){
+      for(const u of (dep.units || [])){
+        if(normalizeUnitLabel(u.name) === unitLabel){
+          match = { departmentId: dep.id, unitId: u.id };
+          break;
+        }
+      }
+      if(match) break;
+    }
+  }
+  if(match){
+    depEl.value = match.departmentId;
+    populateUnitSelect(tree, match.departmentId, match.unitId, document.getElementById('f_ward')?.value || '');
+    if(modalWorkingData){
+      modalWorkingData.departmentId = match.departmentId;
+      modalWorkingData.unitId = match.unitId;
+    }
+    filled++;
+  }
+  const wardLabel = String(fields?.ward || '').trim();
+  if(wardLabel){
+    const nameEl = document.getElementById('f_ward_name');
+    if(nameEl){
+      nameEl.value = wardLabel;
+      nameEl.dispatchEvent(new Event('input', { bubbles: true }));
+      filled++;
+    }
+  }
+  return filled;
+}
+
 async function runSmartPaste(btn){
   const src = document.getElementById('f_smartPaste');
   const text = (src?.value || '').trim();
@@ -1403,7 +1449,9 @@ async function runSmartPaste(btn){
     try{
       const { fields } = await callAi('parse-admission', { text });
       let filled = 0;
+      const scopeOn = scopePickerActive();
       for(const [key, id] of Object.entries(SMART_PASTE_FIELD_MAP)){
+        if(scopeOn && (key === 'unit' || key === 'ward')) continue;
         const val = fields?.[key];
         if(!val) continue;
         const el = document.getElementById(id);
@@ -1419,6 +1467,7 @@ async function runSmartPaste(btn){
           filled++;
         }
       }
+      if(scopeOn) filled += await applySmartPasteScopeFields(fields);
       modalSmartPasteUsed = true;
       normalizeSmartPasteFormFields();
       filled += applySmartPasteLabs(fields.labs);
@@ -6274,7 +6323,9 @@ function invalidateScopeTree(){
 }
 
 /** After sync/focus/online recovers (typical Render free-tier wake): refresh
- *  scope + flags, and if Add/Edit patient is open, refill Department/Unit. */
+ *  scope + flags. Only re-fill an open patient form when the picker was empty
+ *  (cold-start recovery). Re-filling on every sync would reset an admin's
+ *  in-progress Department/Unit picks back to "Select…". */
 async function refreshScopeAfterWake(){
   if(!hasToken()) return;
   await refreshServerFlags();
@@ -6284,13 +6335,20 @@ async function refreshScopeAfterWake(){
   void renderScopeSelector();
   void refreshMoveCapability();
   const modal = document.getElementById('patientModal');
-  const formOpen = modal && modal.classList.contains('active') && document.getElementById('f_department');
-  if(formOpen && (scopeTreeHasDepartments(next) || (prev && next !== prev))){
-    await populateScopePicker(
-      typeof modalWorkingData === 'object' && modalWorkingData ? modalWorkingData : {},
-      { force: false } // already force-refreshed above
-    );
-  }
+  const depEl = document.getElementById('f_department');
+  const unitEl = document.getElementById('f_unit');
+  const formOpen = modal && modal.classList.contains('active') && depEl;
+  if(!formOpen || !scopeTreeHasDepartments(next)) return;
+  const depOptions = [...depEl.options].filter(o => o.value).length;
+  const wasEmpty = depOptions === 0 || !scopeTreeHasDepartments(prev);
+  if(!wasEmpty) return;
+  const base = typeof modalWorkingData === 'object' && modalWorkingData ? modalWorkingData : {};
+  await populateScopePicker({
+    ...base,
+    departmentId: depEl.value || base.departmentId || '',
+    unitId: (unitEl && unitEl.value) || base.unitId || '',
+    wardId: document.getElementById('f_ward')?.value || base.wardId || ''
+  }, { force: false });
 }
 
 function getActiveScope(){
@@ -6604,8 +6662,21 @@ async function populateScopePicker(d, opts){
     depEl.value = selDep;
     populateUnitSelect(tree, depEl.value, selUnit, selWard);
 
-    depEl.onchange = () => populateUnitSelect(tree, depEl.value, '', '');
-    unitEl.onchange = () => populateWardSelect(tree, depEl.value, unitEl.value, '');
+    depEl.onchange = () => {
+      populateUnitSelect(tree, depEl.value, '', '');
+      if(modalWorkingData){
+        modalWorkingData.departmentId = depEl.value || '';
+        modalWorkingData.unitId = '';
+        delete modalWorkingData.wardId;
+      }
+    };
+    unitEl.onchange = () => {
+      populateWardSelect(tree, depEl.value, unitEl.value, '');
+      if(modalWorkingData){
+        modalWorkingData.departmentId = depEl.value || '';
+        modalWorkingData.unitId = unitEl.value || '';
+      }
+    };
 
     const wardNameEl = document.getElementById('f_ward_name');
     const wardCreateEl = document.getElementById('f_ward_create');
@@ -6677,6 +6748,7 @@ function readModalFieldsToObject(){
   d.name = document.getElementById('f_name')?.value.trim() || '';
   d.bed = document.getElementById('f_bed')?.value.trim() || '';
   if(scopePickerActive()){
+    d.departmentId = document.getElementById('f_department')?.value || '';
     d.unitId = document.getElementById('f_unit')?.value || '';
     const wardVal = document.getElementById('f_ward')?.value || '';
     if(wardVal) d.wardId = wardVal; else delete d.wardId;

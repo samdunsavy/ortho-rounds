@@ -285,6 +285,72 @@ describe('patient form dept/unit/ward picker (MULTI_TENANT on)', () => {
     assert.equal(window.serverFlags.MULTI_TENANT, true, 'failed health must not clear MULTI_TENANT');
     assert.equal(document.getElementById('f_unit').value, 'u2');
   });
+
+  test('refreshScopeAfterWake must not reset an admin multi-unit pick on routine sync', async () => {
+    // Admins have several units; every sync used to re-run populateScopePicker from
+    // empty modalWorkingData and bounce Department/Unit back to "Select…".
+    const { window, document } = loadFrontendEnv({ initScript: MODAL_FLOW_INIT_SCRIPT });
+    window.localStorage.setItem('ortho_token', 't');
+    window.serverFlags = { MULTI_TENANT: true };
+    window.fetch = stubScopeFetch(SCOPE_TREE_TWO_UNITS, null);
+
+    await window.openPatientModal(window.blankPatient());
+    const depEl = document.getElementById('f_department');
+    const unitEl = document.getElementById('f_unit');
+    depEl.value = 'dep1';
+    depEl.dispatchEvent(new window.Event('change', { bubbles: true }));
+    unitEl.value = 'u2';
+    unitEl.dispatchEvent(new window.Event('change', { bubbles: true }));
+    assert.equal(unitEl.value, 'u2');
+
+    await window.refreshScopeAfterWake();
+    assert.equal(document.getElementById('f_department').value, 'dep1');
+    assert.equal(document.getElementById('f_unit').value, 'u2', 'routine wake must not clear admin unit pick');
+  });
+
+  test('smart fill must not clear a selected unit when AI returns free-text "IV"', async () => {
+    const { window, document } = loadFrontendEnv({ initScript: MODAL_FLOW_INIT_SCRIPT });
+    window.serverFlags = { MULTI_TENANT: true };
+    window.fetch = stubScopeFetch(SCOPE_TREE_TWO_UNITS, null);
+    window.canUseAi = () => true;
+    window.callAi = async () => ({ fields: { name: 'Test Pt', unit: 'IV', ward: '7FOW' } });
+
+    await window.openPatientModal(window.blankPatient());
+    const depEl = document.getElementById('f_department');
+    const unitEl = document.getElementById('f_unit');
+    depEl.value = 'dep1';
+    depEl.dispatchEvent(new window.Event('change', { bubbles: true }));
+    unitEl.value = 'u1';
+    unitEl.dispatchEvent(new window.Event('change', { bubbles: true }));
+
+    document.getElementById('f_smartPaste').value = 'admission note';
+    await window.runSmartPaste(document.getElementById('smartPasteBtn'));
+    assert.equal(document.getElementById('f_name').value, 'Test Pt');
+    assert.equal(document.getElementById('f_unit').value, 'u1', 'unmatched AI unit label must leave the select alone');
+  });
+
+  test('smart fill matches AI unit label onto the scope select when names align', async () => {
+    const { window, document } = loadFrontendEnv({ initScript: MODAL_FLOW_INIT_SCRIPT });
+    window.serverFlags = { MULTI_TENANT: true };
+    window.fetch = stubScopeFetch({
+      departments: [{
+        id: 'dep1', name: 'Ortho',
+        units: [
+          { id: 'u1', name: 'Unit One', wards: [] },
+          { id: 'u4', name: 'IV', wards: [{ id: 'w1', name: '7FOW' }] }
+        ]
+      }]
+    }, null);
+    window.canUseAi = () => true;
+    window.callAi = async () => ({ fields: { name: 'Matched', unit: 'IV', ward: '7FOW' } });
+
+    await window.openPatientModal(window.blankPatient());
+    document.getElementById('f_smartPaste').value = 'admission note';
+    await window.runSmartPaste(document.getElementById('smartPasteBtn'));
+    assert.equal(document.getElementById('f_unit').value, 'u4');
+    assert.equal(document.getElementById('f_ward_name').value, '7FOW');
+    assert.equal(document.getElementById('f_ward').value, 'w1');
+  });
 });
 
 describe('patient form dept/unit/ward picker (MULTI_TENANT off — legacy behavior unchanged)', () => {
