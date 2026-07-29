@@ -3922,7 +3922,7 @@ function bindEvents(){
   document.getElementById('imgViewerDelete').addEventListener('click', (e)=>{
     e.stopPropagation();
     if(!viewingImageContext) return;
-    void removePatientImage(viewingImageContext.patientId, viewingImageContext.imgId);
+    void withBusy(e.currentTarget, () => removePatientImage(viewingImageContext.patientId, viewingImageContext.imgId));
   });
   document.getElementById('imgViewer').addEventListener('click', (e)=>{ if(e.target.id==='imgViewer') closeImgViewer(); });
   document.getElementById('imgViewerPrev').addEventListener('click', (e)=>{ e.stopPropagation(); stepImgViewer(-1); });
