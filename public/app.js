@@ -111,6 +111,8 @@ const FULL_RECONCILE_INTERVAL_MS = 5 * 60 * 1000; // periodic full reconcile
 let idb = null;
 let wardMeta = { handoverNote: '', defaultUnit: '', defaultOtDoctors: [...DEFAULT_OT_DOCTORS], pgRoster: [], presentedToday: { date: '', ids: [] }, updatedAt: 0 };
 let syncing = false;
+// Gap between empty cache paint and syncNow flipping `syncing` (ping / AI status).
+let awaitingFirstNetworkSync = false;
 let presentationUnpresentedOnly = localStorage.getItem(LS_PRESENT_UNPRESENTED) === '1';
 let presentationReadAloud = localStorage.getItem(LS_READ_ALOUD) === '1';
 // Presentation mode's own type scale is already larger than the everyday
@@ -310,6 +312,7 @@ async function reloadFromCache(){
   patients = all
     .filter(r => r && r.id && !r.deleted && !String(r.id).startsWith('__'))
     .map(r => { const o = Object.assign({}, r); delete o._dirty; return o; });
+  if(patients.length) awaitingFirstNetworkSync = false;
   const libRec = all.find(r => r && r.id === TEMPLATE_LIBRARY_ID);
   loadTemplateLibraryFromRecord(libRec);
   patients.forEach(p => {
@@ -1927,6 +1930,7 @@ async function syncNow(opts){
     throw err;
   }finally{
     syncing = false;
+    awaitingFirstNetworkSync = false;
     // Resolve Loading… → empty state or keep cards once sync finishes.
     renderAll();
     if(syncQueued){
@@ -3504,6 +3508,8 @@ async function init(){
     idb = await openCache();
     await migrateLegacyRecords();
     await reloadFromCache();
+    // Empty cache + logged in: keep Loading… until first sync settles (or ping fails).
+    if(patients.length === 0 && hasToken()) awaitingFirstNetworkSync = true;
     renderAll();
     updateStickyHeaderOffset();
   }catch(err){
@@ -3513,6 +3519,7 @@ async function init(){
 
   const reachable = await pingServer();
   await refreshAiStatus();
+  if(!reachable || !hasToken()) awaitingFirstNetworkSync = false;
   renderAll();
   if(reachable){
     if(hasToken()){
@@ -4604,7 +4611,7 @@ function wardAccentColor(ward){
 }
 
 function isColdPatientLoad(){
-  return patients.length === 0 && !!syncing;
+  return patients.length === 0 && (!!syncing || awaitingFirstNetworkSync);
 }
 
 function renderListLoadingHTML(label){

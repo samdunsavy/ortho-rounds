@@ -15,11 +15,21 @@ describe('cold vs warm list loading', () => {
 
   test('empty patients when not syncing shows finished empty state', () => {
     const { window, document } = loadFrontendEnv({
-      initScript: `patients = []; syncing = false; currentFilter = 'all';`
+      initScript: `patients = []; syncing = false; awaitingFirstNetworkSync = false; currentFilter = 'all';`
     });
     window.renderRounds();
     const text = document.getElementById('roundsList').textContent;
     assert.match(text, /No patients here yet/);
+  });
+
+  test('empty patients awaiting first network sync shows Loading, not No patients', () => {
+    const { window, document } = loadFrontendEnv({
+      initScript: `patients = []; syncing = false; awaitingFirstNetworkSync = true; currentFilter = 'all';`
+    });
+    window.renderRounds();
+    const text = document.getElementById('roundsList').textContent;
+    assert.match(text, /Loading/i);
+    assert.doesNotMatch(text, /No patients here yet/);
   });
 
   test('cached patients remain visible while syncing', () => {
