@@ -529,7 +529,7 @@ function renderBulkDraftReviewRow(p, draft){
 
 let bulkDraftRunning = false;
 
-async function runBulkDraftPlans(){
+async function runBulkDraftPlans(btn){
   if(bulkDraftRunning) return;
   if(!canUseAi()){
     showToast('AI not available — check server key or connection');
@@ -547,36 +547,42 @@ async function runBulkDraftPlans(){
   const ok = await showConfirm('Draft all missing plans', msg, { confirmLabel: 'Draft all' });
   if(!ok) return;
 
-  bulkDraftRunning = true;
-  openBulkDraftModal();
-  const progressEl = document.getElementById('bulkDraftProgress');
-  const listEl = document.getElementById('bulkDraftList');
-  const saveBtn = document.getElementById('bulkDraftSaveBtn');
-  if(listEl) listEl.innerHTML = '';
-  if(saveBtn) saveBtn.disabled = true;
+  const trigger = btn || document.getElementById('worklistBulkDraftBtn');
+  await withBusy(trigger, async () => {
+    bulkDraftRunning = true;
+    openBulkDraftModal();
+    const progressEl = document.getElementById('bulkDraftProgress');
+    const listEl = document.getElementById('bulkDraftList');
+    const saveBtn = document.getElementById('bulkDraftSaveBtn');
+    if(listEl) listEl.innerHTML = '';
+    if(saveBtn) saveBtn.disabled = true;
 
-  const drafts = [];
-  for(let i = 0; i < capped.length; i++){
-    const { p } = capped[i];
-    if(progressEl){
-      progressEl.textContent = `Drafting ${i + 1} / ${capped.length}…`;
-      progressEl.classList.add('busy');
-    }
+    const drafts = [];
     try{
-      const { text } = await callAi('draft-plan', { patient: buildPatientAiSnapshot(p) });
-      drafts.push({ p, ok: true, text });
-    }catch(err){
-      drafts.push({ p, ok: false, text: '', error: err.message || 'Failed' });
-    }
-  }
+      for(let i = 0; i < capped.length; i++){
+        const { p } = capped[i];
+        if(progressEl){
+          progressEl.textContent = `Drafting ${i + 1} / ${capped.length}…`;
+          progressEl.classList.add('busy');
+        }
+        try{
+          const { text } = await callAi('draft-plan', { patient: buildPatientAiSnapshot(p) });
+          drafts.push({ p, ok: true, text });
+        }catch(err){
+          drafts.push({ p, ok: false, text: '', error: err.message || 'Failed' });
+        }
+      }
 
-  if(progressEl){
-    progressEl.classList.remove('busy');
-    progressEl.textContent = `Review ${drafts.filter(d => d.ok).length} draft(s) — uncheck any you don't want to save.`;
-  }
-  if(listEl) listEl.innerHTML = drafts.map(d => renderBulkDraftReviewRow(d.p, d)).join('');
-  if(saveBtn) saveBtn.disabled = !drafts.some(d => d.ok);
-  bulkDraftRunning = false;
+      if(progressEl){
+        progressEl.classList.remove('busy');
+        progressEl.textContent = `Review ${drafts.filter(d => d.ok).length} draft(s) — uncheck any you don't want to save.`;
+      }
+      if(listEl) listEl.innerHTML = drafts.map(d => renderBulkDraftReviewRow(d.p, d)).join('');
+      if(saveBtn) saveBtn.disabled = !drafts.some(d => d.ok);
+    }finally{
+      bulkDraftRunning = false;
+    }
+  });
 }
 
 async function saveBulkDraftPlans(){
@@ -1182,68 +1188,71 @@ function renderScribeReview(p, r){
 async function applyScribeResult(){
   const p = patients.find(x => x.id === scribePatientId);
   if(!p || !scribeResult) return;
-  const applied = [];
-  try{
-    const planEl = document.getElementById('scribePlan');
-    const newPlan = planEl ? planEl.value.trim() : '';
-    if(newPlan && newPlan !== (p.dailyPlan || '').trim()){
-      if(p.dailyPlan && p.dailyPlanDate && (p.dailyPlan !== newPlan || p.dailyPlanDate !== todayISO())){
-        archivePlanToHistory(p, p.dailyPlan, p.dailyPlanDate, getPgInitials());
+  const btn = document.getElementById('scribeApplyBtn');
+  await withBusy(btn, async () => {
+    const applied = [];
+    try{
+      const planEl = document.getElementById('scribePlan');
+      const newPlan = planEl ? planEl.value.trim() : '';
+      if(newPlan && newPlan !== (p.dailyPlan || '').trim()){
+        if(p.dailyPlan && p.dailyPlanDate && (p.dailyPlan !== newPlan || p.dailyPlanDate !== todayISO())){
+          archivePlanToHistory(p, p.dailyPlan, p.dailyPlanDate, getPgInitials());
+        }
+        p.dailyPlan = newPlan;
+        p.dailyPlanDate = todayISO();
+        p.planUpdatedAt = Date.now();
+        applied.push('plan');
       }
-      p.dailyPlan = newPlan;
-      p.dailyPlanDate = todayISO();
-      p.planUpdatedAt = Date.now();
-      applied.push('plan');
-    }
 
-    const handEl = document.getElementById('scribeHandover');
-    const hand = handEl ? handEl.value.trim() : '';
-    if(hand){
-      p.handoverNote = (p.handoverNote || '').trim() ? `${p.handoverNote.trim()} · ${hand}` : hand;
-      applied.push('handover');
-    }
+      const handEl = document.getElementById('scribeHandover');
+      const hand = handEl ? handEl.value.trim() : '';
+      if(hand){
+        p.handoverNote = (p.handoverNote || '').trim() ? `${p.handoverNote.trim()} · ${hand}` : hand;
+        applied.push('handover');
+      }
 
-    let msCount = 0;
-    document.querySelectorAll('#scribeReview [data-scribe-ms]:checked').forEach(cb => {
-      const c = (p.postOpChecks || []).find(x => x.id === cb.dataset.scribeMs);
-      if(c && c.status !== 'done'){ c.status = 'done'; c.doneAt = todayISO(); msCount++; }
-    });
-    document.querySelectorAll('#scribeReview [data-scribe-dc]:checked').forEach(cb => {
-      const c = (p.dischargeChecks || []).find(x => x.id === cb.dataset.scribeDc);
-      if(c && c.status !== 'done'){ c.status = 'done'; c.doneAt = todayISO(); msCount++; }
-    });
-    if(msCount) applied.push(`${msCount} milestone${msCount > 1 ? 's' : ''}`);
+      let msCount = 0;
+      document.querySelectorAll('#scribeReview [data-scribe-ms]:checked').forEach(cb => {
+        const c = (p.postOpChecks || []).find(x => x.id === cb.dataset.scribeMs);
+        if(c && c.status !== 'done'){ c.status = 'done'; c.doneAt = todayISO(); msCount++; }
+      });
+      document.querySelectorAll('#scribeReview [data-scribe-dc]:checked').forEach(cb => {
+        const c = (p.dischargeChecks || []).find(x => x.id === cb.dataset.scribeDc);
+        if(c && c.status !== 'done'){ c.status = 'done'; c.doneAt = todayISO(); msCount++; }
+      });
+      if(msCount) applied.push(`${msCount} milestone${msCount > 1 ? 's' : ''}`);
 
-    if(document.getElementById('scribeCompCheck')?.checked){
-      const type = document.getElementById('scribeCompType')?.value.trim() || 'Complication';
-      const note = document.getElementById('scribeCompNote')?.value.trim() || '';
-      p.complications = p.complications || [];
-      p.complications.push({ type, note, date: todayISO() });
-      applied.push('complication');
-    }
+      if(document.getElementById('scribeCompCheck')?.checked){
+        const type = document.getElementById('scribeCompType')?.value.trim() || 'Complication';
+        const note = document.getElementById('scribeCompNote')?.value.trim() || '';
+        p.complications = p.complications || [];
+        p.complications.push({ type, note, date: todayISO() });
+        applied.push('complication');
+      }
 
-    if(document.getElementById('scribeForDischarge')?.checked){
-      p.status = 'fordischarge';
-      p.statusUpdatedAt = Date.now();
-      if(!(p.dischargeChecks || []).length) applyDischargeTemplate(p);
-      applied.push('for-discharge');
-    }
+      if(document.getElementById('scribeForDischarge')?.checked){
+        p.status = 'fordischarge';
+        p.statusUpdatedAt = Date.now();
+        if(!(p.dischargeChecks || []).length) applyDischargeTemplate(p);
+        applied.push('for-discharge');
+      }
 
-    if(!applied.length){
-      showToast('Nothing selected to apply');
-      return;
+      if(!applied.length){
+        showToast('Nothing selected to apply');
+        return;
+      }
+      await savePatient(p);
+      closeScribeModal();
+      renderAll();
+      if(document.getElementById('presentationOverlay')?.classList.contains('active')){
+        renderPresentationSlide();
+      }
+      showToast(`Applied: ${applied.join(', ')}`);
+    }catch(err){
+      console.error(err);
+      showToast('Could not apply — ' + (err.message || 'error'));
     }
-    await savePatient(p);
-    closeScribeModal();
-    renderAll();
-    if(document.getElementById('presentationOverlay')?.classList.contains('active')){
-      renderPresentationSlide();
-    }
-    showToast(`Applied: ${applied.join(', ')}`);
-  }catch(err){
-    console.error(err);
-    showToast('Could not apply — ' + (err.message || 'error'));
-  }
+  });
 }
 
 /* ---------------- smart admission intake ---------------- */
@@ -3587,7 +3596,7 @@ function bindAuthEvents(){
   });
   document.getElementById('morePushToggleBtn')?.addEventListener('click', ()=>{
     closeSheet('moreSheetOverlay');
-    void togglePushReminders();
+    void togglePushReminders(document.getElementById('morePushToggleBtn'));
   });
   document.getElementById('changePasswordClose')?.addEventListener('click', closeChangePasswordModal);
   document.getElementById('changePasswordCancelBtn')?.addEventListener('click', closeChangePasswordModal);
@@ -3674,7 +3683,7 @@ async function updatePushToggleUI(){
   }
 }
 
-async function togglePushReminders(){
+async function togglePushReminders(btn){
   if(!isPushEligible()){
     showToast('Reminders need a secure (https) connection');
     return;
@@ -3683,25 +3692,28 @@ async function togglePushReminders(){
     showToast('Reminders are not available on this server');
     return;
   }
-  try{
-    const reg = await navigator.serviceWorker.ready;
-    const existing = await reg.pushManager.getSubscription();
-    if(existing){
-      await existing.unsubscribe();
-      await api('/api/push/unsubscribe', { method: 'POST', body: JSON.stringify({ endpoint: existing.endpoint }) }).catch(()=>{});
-      showToast('Reminders turned off');
-    }else{
-      const sub = await reg.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(vapidPublicKey)
-      });
-      await api('/api/push/subscribe', { method: 'POST', body: JSON.stringify({ subscription: sub.toJSON() }) });
-      showToast('Reminders turned on', { success: true });
+  const trigger = btn || document.getElementById('desktopPushToggleBtn') || document.getElementById('morePushToggleBtn');
+  await withBusy(trigger, async () => {
+    try{
+      const reg = await navigator.serviceWorker.ready;
+      const existing = await reg.pushManager.getSubscription();
+      if(existing){
+        await existing.unsubscribe();
+        await api('/api/push/unsubscribe', { method: 'POST', body: JSON.stringify({ endpoint: existing.endpoint }) }).catch(()=>{});
+        showToast('Reminders turned off');
+      }else{
+        const sub = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(vapidPublicKey)
+        });
+        await api('/api/push/subscribe', { method: 'POST', body: JSON.stringify({ subscription: sub.toJSON() }) });
+        showToast('Reminders turned on', { success: true });
+      }
+    }catch(err){
+      showToast(err.message || 'Could not update reminders');
     }
-  }catch(err){
-    showToast(err.message || 'Could not update reminders');
-  }
-  await updatePushToggleUI();
+    await updatePushToggleUI();
+  });
 }
 
 function openChangePasswordModal(){
@@ -3807,20 +3819,20 @@ function bindEvents(){
   });
   document.getElementById('desktopPushToggleBtn')?.addEventListener('click', ()=>{
     document.getElementById('moreMenuPanel')?.classList.remove('open');
-    void togglePushReminders();
+    void togglePushReminders(document.getElementById('desktopPushToggleBtn'));
   });
   document.getElementById('presentBtn').addEventListener('click', openPresentationMode);
   document.getElementById('censusBtn').addEventListener('click', exportCensus);
   document.getElementById('templatesBtn').addEventListener('click', openTemplateManager);
   document.getElementById('handoverSheetBtn')?.addEventListener('click', printHandoverSheet);
-  document.getElementById('pgRosterBtn')?.addEventListener('click', editPgRoster);
-  document.getElementById('defaultUnitBtn')?.addEventListener('click', ()=>{
+  document.getElementById('pgRosterBtn')?.addEventListener('click', (e)=> void withBusy(e.currentTarget, () => editPgRoster()));
+  document.getElementById('defaultUnitBtn')?.addEventListener('click', (e)=>{
     document.getElementById('moreMenuPanel')?.classList.remove('open');
-    void editDefaultUnit();
+    void withBusy(e.currentTarget, () => editDefaultUnit());
   });
-  document.getElementById('defaultOtDoctorsBtn')?.addEventListener('click', ()=>{
+  document.getElementById('defaultOtDoctorsBtn')?.addEventListener('click', (e)=>{
     document.getElementById('moreMenuPanel')?.classList.remove('open');
-    void editDefaultOtDoctors();
+    void withBusy(e.currentTarget, () => editDefaultOtDoctors());
   });
   document.getElementById('bulkPlanBtn')?.addEventListener('click', toggleBulkSelectMode);
   document.getElementById('organizePatientsBtn')?.addEventListener('click', ()=>{
@@ -3828,7 +3840,7 @@ function bindEvents(){
     if(!bulkSelectMode) toggleBulkSelectMode();
     showToast('Select patients, then tap Move to unit');
   });
-  document.getElementById('bulkPlanApplyBtn')?.addEventListener('click', applyBulkPlan);
+  document.getElementById('bulkPlanApplyBtn')?.addEventListener('click', (e)=> void applyBulkPlan(e.currentTarget));
   document.getElementById('whatsappHandoverBtn')?.addEventListener('click', copyHandoverWhatsApp);
   document.getElementById('consultantModeBtn')?.addEventListener('click', ()=> setConsultantMode(!isConsultantMode()));
   document.getElementById('darkModeBtn')?.addEventListener('click', toggleDarkMode);
@@ -3840,8 +3852,8 @@ function bindEvents(){
   document.addEventListener('click', ()=> document.getElementById('moreMenuPanel')?.classList.remove('open'));
   document.getElementById('pgScopeBtn')?.addEventListener('click', ()=> setPgScope(!isPgScopeMine()));
   document.getElementById('pgScopeBtnMobile')?.addEventListener('click', ()=> setPgScope(!isPgScopeMine()));
-  document.getElementById('bulkBarApplyBtn')?.addEventListener('click', ()=> void applyBulkPlan());
-  document.getElementById('bulkBarMoveBtn')?.addEventListener('click', ()=> void bulkMoveToUnit());
+  document.getElementById('bulkBarApplyBtn')?.addEventListener('click', (e)=> void applyBulkPlan(e.currentTarget));
+  document.getElementById('bulkBarMoveBtn')?.addEventListener('click', (e)=> void bulkMoveToUnit(e.currentTarget));
   document.getElementById('bulkBarCancelBtn')?.addEventListener('click', ()=>{
     bulkSelectMode = false;
     bulkSelectedIds.clear();
@@ -3878,8 +3890,8 @@ function bindEvents(){
   document.getElementById('wardHandoverDismiss').addEventListener('click', ()=>{
     document.getElementById('wardHandoverBanner').style.display = 'none';
   });
-  document.getElementById('wardHandoverEditBtn').addEventListener('click', editWardHandover);
-  document.getElementById('worklistWardHandoverBtn').addEventListener('click', editWardHandover);
+  document.getElementById('wardHandoverEditBtn').addEventListener('click', (e)=> void withBusy(e.currentTarget, () => editWardHandover()));
+  document.getElementById('worklistWardHandoverBtn').addEventListener('click', (e)=> void withBusy(e.currentTarget, () => editWardHandover()));
   document.getElementById('presentationClose').addEventListener('click', closePresentationMode);
   document.getElementById('presentationPrev').addEventListener('click', ()=> stepPresentation(-1));
   document.getElementById('presentationNext').addEventListener('click', presentationNextAction);
@@ -4704,8 +4716,9 @@ function bindCardListEvents(root){
       if(!p) return;
       const newVal = inp.value.trim();
       if(newVal === (p.dailyPlan||'').trim() && hasPlanToday(p)) return;
-      const { prevPlan, prevDate } = saveCardPlan(p, newVal);
-      void persistAndRerender(p).then(()=>{
+      void withBusy(inp, async () => {
+        const { prevPlan, prevDate } = saveCardPlan(p, newVal);
+        await persistAndRerender(p);
         showToast('Plan saved', { success: true,
           undo: ()=>{
             p.dailyPlan = prevPlan;
@@ -5135,25 +5148,26 @@ function handleCardAction(action, id, el){
   if(!p) return;
 
   if(action==='cycle-status'){
-    void cycleCardStatus(p);
+    void withBusy(el, () => cycleCardStatus(p));
     return;
   }
   if(action==='cycle-pg'){
-    void cycleCardPg(p);
+    void withBusy(el, () => cycleCardPg(p));
     return;
   }
   if(action==='cycle-milestone'){
     const checkId = el.dataset.checkId;
     const c = (p.postOpChecks||[]).find(x=>x.id===checkId);
     if(!c) return;
-    const prev = { status: c.status, doneAt: c.doneAt };
-    c.status = cycleChecklistStatus(c.status);
-    c.doneAt = c.status === 'done' ? todayISO() : '';
-    touchChecklistItem(c);
-    if(c.status === 'done' && navigator.vibrate){
-      try{ navigator.vibrate(10); }catch{ /* ignore */ }
-    }
-    void persistAndRerender(p).then(()=>{
+    void withBusy(el, async () => {
+      const prev = { status: c.status, doneAt: c.doneAt };
+      c.status = cycleChecklistStatus(c.status);
+      c.doneAt = c.status === 'done' ? todayISO() : '';
+      touchChecklistItem(c);
+      if(c.status === 'done' && navigator.vibrate){
+        try{ navigator.vibrate(10); }catch{ /* ignore */ }
+      }
+      await persistAndRerender(p);
       showToast('Milestone updated', { success: c.status === 'done',
         undo: ()=>{
           c.status = prev.status;
@@ -5168,12 +5182,15 @@ function handleCardAction(action, id, el){
   if(action==='copy-yesterday-plan'){
     const y = getYesterdayPlan(p);
     if(!y){ showToast('No previous plan'); return; }
-    const { prevPlan, prevDate } = saveCardPlan(p, y.text);
-    void persistAndRerender(p).then(()=> showToast('Copied yesterday\'s plan'));
+    void withBusy(el, async () => {
+      saveCardPlan(p, y.text);
+      await persistAndRerender(p);
+      showToast('Copied yesterday\'s plan');
+    });
     return;
   }
   if(action==='mark-abx-stopped'){
-    void markAntibioticStopped(p, el.dataset.abxId);
+    void withBusy(el, () => markAntibioticStopped(p, el.dataset.abxId));
     return;
   }
   if(action==='bulk-toggle'){
@@ -5184,15 +5201,15 @@ function handleCardAction(action, id, el){
     return;
   }
   if(action==='clone-patient'){
-    void clonePatientRecord(p);
+    void withBusy(el, () => clonePatientRecord(p));
     return;
   }
   if(action==='copy-admission'){
-    void copyAdmissionWhatsApp(p);
+    void withBusy(el, () => copyAdmissionWhatsApp(p));
     return;
   }
   if(action==='share-admission'){
-    void shareAdmissionWhatsApp(p);
+    void withBusy(el, () => shareAdmissionWhatsApp(p));
     return;
   }
 
@@ -5200,40 +5217,52 @@ function handleCardAction(action, id, el){
   if(action==='cycle-inv'){
     const idx = +el.dataset.idx;
     if(!p.investigations || !p.investigations[idx]) return;
-    const order = ['pending','done','abnormal'];
-    p.investigations[idx].status = order[(order.indexOf(p.investigations[idx].status)+1)%order.length];
-    persistAndRerender(p);
+    void withBusy(el, async () => {
+      const order = ['pending','done','abnormal'];
+      p.investigations[idx].status = order[(order.indexOf(p.investigations[idx].status)+1)%order.length];
+      await persistAndRerender(p);
+    });
+    return;
   }
   if(action==='cycle-fit'){
     const idx = +el.dataset.idx;
     if(!p.fitness || !p.fitness[idx]) return;
-    const order = ['pending','done'];
-    p.fitness[idx].status = order[(order.indexOf(p.fitness[idx].status)+1)%order.length];
-    persistAndRerender(p);
+    void withBusy(el, async () => {
+      const order = ['pending','done'];
+      p.fitness[idx].status = order[(order.indexOf(p.fitness[idx].status)+1)%order.length];
+      await persistAndRerender(p);
+    });
+    return;
   }
   if(action==='cycle-postop'){
     const idx = +el.dataset.idx;
     const c = p.postOpChecks?.[idx];
     if(!c) return;
-    const wasDone = c.status === 'done';
-    c.status = cycleChecklistStatus(c.status);
-    c.doneAt = (c.status === 'done') ? todayISO() : '';
-    touchChecklistItem(c);
-    if(c.status === 'done' && !wasDone){
-      el.classList.add('flash-done');
-      setTimeout(()=> el.classList.remove('flash-done'), 400);
-      if(navigator.vibrate){ try{ navigator.vibrate(10); }catch{ /* ignore */ } }
-    }
-    persistAndRerender(p);
+    void withBusy(el, async () => {
+      const wasDone = c.status === 'done';
+      c.status = cycleChecklistStatus(c.status);
+      c.doneAt = (c.status === 'done') ? todayISO() : '';
+      touchChecklistItem(c);
+      if(c.status === 'done' && !wasDone){
+        el.classList.add('flash-done');
+        setTimeout(()=> el.classList.remove('flash-done'), 400);
+        if(navigator.vibrate){ try{ navigator.vibrate(10); }catch{ /* ignore */ } }
+      }
+      await persistAndRerender(p);
+    });
+    return;
   }
   if(action==='cycle-discharge'){
     const idx = +el.dataset.idx;
     const c = p.dischargeChecks?.[idx];
     if(!c) return;
-    c.status = cycleChecklistStatus(c.status);
-    c.doneAt = (c.status === 'done') ? todayISO() : '';
-    touchChecklistItem(c);
-    persistAndRerender(p);
+    void withBusy(el, async () => {
+      c.status = cycleChecklistStatus(c.status);
+      c.doneAt = (c.status === 'done') ? todayISO() : '';
+      touchChecklistItem(c);
+      await persistAndRerender(p);
+    });
+    return;
   }
   if(action==='toggle-plan-history'){
     expandedPlanHistory[id] = !expandedPlanHistory[id];
@@ -5241,9 +5270,10 @@ function handleCardAction(action, id, el){
     return;
   }
   if(action==='clear-handover'){
-    const prev = p.handoverNote || '';
-    p.handoverNote = '';
-    void persistAndRerender(p).then(()=>{
+    void withBusy(el, async () => {
+      const prev = p.handoverNote || '';
+      p.handoverNote = '';
+      await persistAndRerender(p);
       showToast('Handover cleared', {
         undo: ()=>{
           p.handoverNote = prev;
@@ -5251,27 +5281,34 @@ function handleCardAction(action, id, el){
         }
       });
     });
+    return;
   }
   if(action==='mark-fordischarge'){
     if(p.status !== 'fordischarge'){
-      p.statusBeforeDischarge = p.status;
-      p.status = 'fordischarge';
-      p.statusUpdatedAt = Date.now();
-      applyDischargeTemplate(p);
-      persistAndRerender(p);
-      showToast('Marked for discharge');
+      void withBusy(el, async () => {
+        p.statusBeforeDischarge = p.status;
+        p.status = 'fordischarge';
+        p.statusUpdatedAt = Date.now();
+        applyDischargeTemplate(p);
+        await persistAndRerender(p);
+        showToast('Marked for discharge');
+      });
     }
+    return;
   }
   if(action==='unmark-fordischarge'){
-    p.status = p.statusBeforeDischarge || (p.surgeryDate ? 'postop' : 'preop');
-    if(!p.statusBeforeDischarge && !p.surgeryDate && (p.postOpChecks||[]).length) p.status = 'conservative';
-    p.statusUpdatedAt = Date.now();
-    delete p.statusBeforeDischarge;
-    persistAndRerender(p);
-    showToast('Removed from discharge list');
+    void withBusy(el, async () => {
+      p.status = p.statusBeforeDischarge || (p.surgeryDate ? 'postop' : 'preop');
+      if(!p.statusBeforeDischarge && !p.surgeryDate && (p.postOpChecks||[]).length) p.status = 'conservative';
+      p.statusUpdatedAt = Date.now();
+      delete p.statusBeforeDischarge;
+      await persistAndRerender(p);
+      showToast('Removed from discharge list');
+    });
+    return;
   }
   if(action==='mark-conservative'){
-    void (async ()=>{
+    void withBusy(el, async ()=>{
       p.status = 'conservative';
       p.statusUpdatedAt = Date.now();
       if(!p.admissionDate) p.admissionDate = todayISO();
@@ -5296,11 +5333,11 @@ function handleCardAction(action, id, el){
       }
       await persistAndRerender(p);
       showToast('Marked conservative');
-    })();
+    });
     return;
   }
   if(action==='mark-postop'){
-    void (async ()=>{
+    void withBusy(el, async ()=>{
       p.status='postop';
       p.statusUpdatedAt = Date.now();
       if(!p.surgeryDate) p.surgeryDate = todayISO();
@@ -5330,11 +5367,11 @@ function handleCardAction(action, id, el){
       }
       await persistAndRerender(p);
       showToast('Marked as operated');
-    })();
+    });
     return;
   }
   if(action==='mark-discharged'){
-    void (async ()=>{
+    void withBusy(el, async ()=>{
       const pendingInv = (p.investigations||[]).filter(i=>i.status==='pending');
       const pendingFit = (p.fitness||[]).filter(f=>f.status==='pending');
       const pendingDis = getPendingRequiredDischargeChecks(p);
@@ -5364,7 +5401,7 @@ function handleCardAction(action, id, el){
           showToast('Discharge undone');
         }
       });
-    })();
+    });
     return;
   }
   if(action==='add-img'){
@@ -5376,7 +5413,7 @@ function handleCardAction(action, id, el){
     if(img) openImgViewer(p.id, img);
   }
   if(action==='delete-img'){
-    void removePatientImage(p.id, el.dataset.imgid);
+    void withBusy(el, () => removePatientImage(p.id, el.dataset.imgid));
   }
 }
 
@@ -5983,7 +6020,7 @@ function renderWorklist(){
 
   document.getElementById('worklistBulkDraftBtn')?.addEventListener('click', (e)=>{
     e.stopPropagation();
-    void runBulkDraftPlans();
+    void runBulkDraftPlans(e.currentTarget);
   });
 
   const clearBtn = document.getElementById('clearWardHandoverBtn');
@@ -5991,18 +6028,20 @@ function renderWorklist(){
     clearBtn.addEventListener('click', async ()=>{
       const ok = await showConfirm('Clear unit handover?', 'Remove the unit-wide handover note from the worklist.', { confirmLabel: 'Clear', danger: true });
       if(!ok) return;
-      const prev = wardMeta.handoverNote || '';
-      await saveWardMeta({ handoverNote: '' });
-      renderWardHandoverBanner();
-      renderWorklist();
-      updateCounts();
-      showToast('Unit handover cleared', {
-        undo: async ()=>{
-          await saveWardMeta({ handoverNote: prev });
-          renderWardHandoverBanner();
-          renderWorklist();
-          updateCounts();
-        }
+      await withBusy(clearBtn, async () => {
+        const prev = wardMeta.handoverNote || '';
+        await saveWardMeta({ handoverNote: '' });
+        renderWardHandoverBanner();
+        renderWorklist();
+        updateCounts();
+        showToast('Unit handover cleared', {
+          undo: async ()=>{
+            await saveWardMeta({ handoverNote: prev });
+            renderWardHandoverBanner();
+            renderWorklist();
+            updateCounts();
+          }
+        });
       });
     });
   }
@@ -6012,14 +6051,16 @@ function renderWorklist(){
     inp.addEventListener('change', async ()=>{
       const p = patients.find(x=>x.id===inp.dataset.labEdit);
       if(!p) return;
-      p.labs = p.labs || {};
-      p.labs[inp.dataset.labKey] = inp.value.trim();
-      p.labs.updatedAt = todayISO();
-      if(p.labs[inp.dataset.labKey]){
-        upsertLabsHistoryEntry(p, { [inp.dataset.labKey]: p.labs[inp.dataset.labKey] }, p.labs.updatedAt);
-      }
-      await persistAndRerender(p);
-      showToast('Lab updated');
+      await withBusy(inp, async () => {
+        p.labs = p.labs || {};
+        p.labs[inp.dataset.labKey] = inp.value.trim();
+        p.labs.updatedAt = todayISO();
+        if(p.labs[inp.dataset.labKey]){
+          upsertLabsHistoryEntry(p, { [inp.dataset.labKey]: p.labs[inp.dataset.labKey] }, p.labs.updatedAt);
+        }
+        await persistAndRerender(p);
+        showToast('Lab updated');
+      });
     });
   });
 
@@ -6027,7 +6068,7 @@ function renderWorklist(){
     btn.addEventListener('click', async (e)=>{
       e.stopPropagation();
       const p = patients.find(x => x.id === btn.dataset.abxStop);
-      if(p) await markAntibioticStopped(p, btn.dataset.abxCourseId);
+      if(p) await withBusy(btn, () => markAntibioticStopped(p, btn.dataset.abxCourseId));
     });
   });
 
@@ -6040,18 +6081,20 @@ function renderWorklist(){
       if(!p) return;
       const c = (p.postOpChecks || []).find(x => x.id === checkId);
       if(!c) return;
-      const prevStatus = c.status;
-      const prevDoneAt = c.doneAt || '';
-      c.status = 'done';
-      c.doneAt = todayISO();
-      touchChecklistItem(c);
-      await persistAndRerender(p);
-      showToast(`Done: ${c.label}`, {
-        undo: async ()=>{
-          c.status = prevStatus;
-          c.doneAt = prevDoneAt;
-          await persistAndRerender(p);
-        }
+      await withBusy(btn, async () => {
+        const prevStatus = c.status;
+        const prevDoneAt = c.doneAt || '';
+        c.status = 'done';
+        c.doneAt = todayISO();
+        touchChecklistItem(c);
+        await persistAndRerender(p);
+        showToast(`Done: ${c.label}`, {
+          undo: async ()=>{
+            c.status = prevStatus;
+            c.doneAt = prevDoneAt;
+            await persistAndRerender(p);
+          }
+        });
       });
     });
   });
@@ -6066,9 +6109,11 @@ function renderWorklist(){
       if(!p) return;
       const val = inp.value.trim();
       if(!val) return;
-      saveCardPlan(p, val);
-      await persistAndRerender(p);
-      showToast('Plan saved');
+      await withBusy(inp, async () => {
+        saveCardPlan(p, val);
+        await persistAndRerender(p);
+        showToast('Plan saved');
+      });
     });
   });
 
@@ -6080,9 +6125,11 @@ function renderWorklist(){
       const name = btn.dataset.invName;
       p.investigations = p.investigations || [];
       if(!p.investigations.some(i => i.name === name)){
-        p.investigations.push({ name, status: 'pending', value: '' });
-        await persistAndRerender(p);
-        showToast(`Added ${name}`);
+        await withBusy(btn, async () => {
+          p.investigations.push({ name, status: 'pending', value: '' });
+          await persistAndRerender(p);
+          showToast(`Added ${name}`);
+        });
       }
     });
   });
@@ -6092,10 +6139,12 @@ function renderWorklist(){
       e.stopPropagation();
       const p = patients.find(x => x.id === btn.dataset.clearHandover);
       if(!p) return;
-      const prev = p.handoverNote || '';
-      p.handoverNote = '';
-      await persistAndRerender(p);
-      showToast('Handover cleared', { undo: async ()=>{ p.handoverNote = prev; await persistAndRerender(p); } });
+      await withBusy(btn, async () => {
+        const prev = p.handoverNote || '';
+        p.handoverNote = '';
+        await persistAndRerender(p);
+        showToast('Handover cleared', { undo: async ()=>{ p.handoverNote = prev; await persistAndRerender(p); } });
+      });
     });
   });
 
@@ -6162,9 +6211,11 @@ function renderDischarged(){
     btn.addEventListener('click', async ()=>{
       const p = patients.find(x=>x.id===btn.dataset.id);
       if(!p) return;
-      p.status = 'fordischarge';
-      await persistAndRerender(p);
-      showToast('Patient reopened to active list');
+      await withBusy(btn, async () => {
+        p.status = 'fordischarge';
+        await persistAndRerender(p);
+        showToast('Patient reopened to active list');
+      });
     });
   });
 }
@@ -6296,7 +6347,7 @@ function movePatientToUnit(p, unitId){
   return p;
 }
 
-async function bulkMoveToUnit(){
+async function bulkMoveToUnit(btn){
   if(!bulkSelectedIds.size){ showToast('Select patients first'); return; }
   const { tree } = await loadScopeTree();
   const units = flatUnitsFromScopeTree(tree);
@@ -6307,18 +6358,21 @@ async function bulkMoveToUnit(){
   ]);
   if(!fields || !fields.unit) return;
   const count = bulkSelectedIds.size;
-  for(const id of bulkSelectedIds){
-    const p = patients.find(x => x.id === id);
-    if(!p) continue;
-    movePatientToUnit(p, fields.unit);
-    await savePatient(p);
-  }
-  bulkSelectMode = false;
-  bulkSelectedIds.clear();
-  document.getElementById('bulkPlanBtn')?.classList.remove('active');
-  updateBulkBar();
-  renderAll();
-  showToast(`Moved ${count} patient(s)`);
+  const trigger = btn || document.getElementById('bulkBarMoveBtn');
+  await withBusy(trigger, async () => {
+    for(const id of bulkSelectedIds){
+      const p = patients.find(x => x.id === id);
+      if(!p) continue;
+      movePatientToUnit(p, fields.unit);
+      await savePatient(p);
+    }
+    bulkSelectMode = false;
+    bulkSelectedIds.clear();
+    document.getElementById('bulkPlanBtn')?.classList.remove('active');
+    updateBulkBar();
+    renderAll();
+    showToast(`Moved ${count} patient(s)`);
+  });
 }
 
 function fillSelect(el, items, placeholder){
@@ -6392,24 +6446,23 @@ async function createWardFromInput(tree){
   const unitId = nameEl.dataset.unitId || '';
   const name = nameEl.value.trim();
   if(!unitId || !name) return;
-  if(btn) btn.disabled = true;
-  try{
-    const ward = await api('/api/wards', { method: 'POST', body: JSON.stringify({ unitId, name }) });
-    injectWardIntoScopeTree(tree, unitId, ward);
-    const listEl = document.getElementById('f_ward_list');
-    if(listEl){
-      listEl.innerHTML = wardsForUnit(tree, unitId)
-        .map(w => `<option value="${escapeHTML(w.name)}"></option>`).join('');
+  await withBusy(btn, async () => {
+    try{
+      const ward = await api('/api/wards', { method: 'POST', body: JSON.stringify({ unitId, name }) });
+      injectWardIntoScopeTree(tree, unitId, ward);
+      const listEl = document.getElementById('f_ward_list');
+      if(listEl){
+        listEl.innerHTML = wardsForUnit(tree, unitId)
+          .map(w => `<option value="${escapeHTML(w.name)}"></option>`).join('');
+      }
+      idEl.value = ward.id;
+      nameEl.value = ward.name;
+      if(btn) btn.style.display = 'none';
+      if(msg) msg.style.display = 'none';
+    }catch(err){
+      if(msg){ msg.textContent = (err && err.message) || 'Could not create ward'; msg.style.display = 'block'; }
     }
-    idEl.value = ward.id;
-    nameEl.value = ward.name;
-    if(btn) btn.style.display = 'none';
-    if(msg) msg.style.display = 'none';
-  }catch(err){
-    if(msg){ msg.textContent = (err && err.message) || 'Could not create ward'; msg.style.display = 'block'; }
-  }finally{
-    if(btn) btn.disabled = false;
-  }
+  });
 }
 
 // Returns the {departmentId,unitId} chain when the scope tree contains
@@ -7813,15 +7866,18 @@ async function deleteCurrentPatient(){
     { confirmLabel: 'Delete', danger: true }
   );
   if(!ok) return;
-  try{
-    await softDeletePatient(d.id);
-    await closePatientModal({ force: true });
-    renderAll();
-    showToast('Patient deleted');
-  }catch(err){
-    console.error(err);
-    showToast('Could not delete — ' + (err.message || 'error'));
-  }
+  const btn = document.getElementById('deletePatientBtn');
+  await withBusy(btn, async () => {
+    try{
+      await softDeletePatient(d.id);
+      await closePatientModal({ force: true });
+      renderAll();
+      showToast('Patient deleted');
+    }catch(err){
+      console.error(err);
+      showToast('Could not delete — ' + (err.message || 'error'));
+    }
+  });
 }
 
 /* ---------------- WARD HANDOVER (unit meta) ---------------- */
@@ -8326,19 +8382,19 @@ function renderTemplateManagerList(){
     </div>`).join('') || `<div class="empty-state compact"><div class="msg">No templates match your search.</div></div>`;
 
   el.querySelectorAll('[data-tpl-default]').forEach(btn=>{
-    btn.addEventListener('click', ()=> setDefaultPostOpTemplate(btn.getAttribute('data-tpl-default')));
+    btn.addEventListener('click', ()=> void withBusy(btn, () => setDefaultPostOpTemplate(btn.getAttribute('data-tpl-default'))));
   });
   el.querySelectorAll('[data-tpl-edit]').forEach(btn=>{
     btn.addEventListener('click', ()=> openTemplateEditor(btn.getAttribute('data-tpl-edit')));
   });
   el.querySelectorAll('[data-tpl-dup]').forEach(btn=>{
-    btn.addEventListener('click', ()=> duplicateWardTemplate(btn.getAttribute('data-tpl-dup')));
+    btn.addEventListener('click', ()=> void withBusy(btn, () => duplicateWardTemplate(btn.getAttribute('data-tpl-dup'))));
   });
   el.querySelectorAll('[data-tpl-hide]').forEach(btn=>{
-    btn.addEventListener('click', ()=> hideBuiltinTemplate(btn.getAttribute('data-tpl-hide')));
+    btn.addEventListener('click', ()=> void withBusy(btn, () => hideBuiltinTemplate(btn.getAttribute('data-tpl-hide'))));
   });
   el.querySelectorAll('[data-tpl-del]').forEach(btn=>{
-    btn.addEventListener('click', ()=> deleteWardTemplate(btn.getAttribute('data-tpl-del')));
+    btn.addEventListener('click', ()=> void withBusy(btn, () => deleteWardTemplate(btn.getAttribute('data-tpl-del'))));
   });
 }
 
@@ -8501,45 +8557,51 @@ async function deleteWardTemplate(id){
 }
 
 function exportTemplatePack(){
-  downloadJSON(buildTemplateLibraryExport(), `ortho_templates_${todayISO()}.json`);
-  showToast('Template pack downloaded');
+  const btn = document.getElementById('templateExportBtn');
+  void withBusy(btn, () => {
+    downloadJSON(buildTemplateLibraryExport(), `ortho_templates_${todayISO()}.json`);
+    showToast('Template pack downloaded');
+  });
 }
 
 async function importTemplatePack(e){
   const file = e.target.files[0];
   if(!file) return;
+  const btn = document.getElementById('templateImportBtn');
   const reader = new FileReader();
   reader.onload = async ()=>{
-    try{
-      const payload = JSON.parse(reader.result);
-      const incoming = payload.templates || payload;
-      if(!Array.isArray(incoming)) throw new Error('Invalid format');
-      const choice = await showMergeReplaceDialog(
-        'Import templates',
-        `Import ${incoming.length} template(s) into the ward library?`
-      );
-      if(choice === 'cancel') return;
-      const merge = choice === 'merge';
-      if(merge){
-        const byId = new Map((wardTemplateLibrary.templates||[]).map(t=>[t.id,t]));
-        for(const t of incoming){
-          if(t && t.id) byId.set(t.id, Object.assign({}, t, { builtin: false }));
+    await withBusy(btn, async () => {
+      try{
+        const payload = JSON.parse(reader.result);
+        const incoming = payload.templates || payload;
+        if(!Array.isArray(incoming)) throw new Error('Invalid format');
+        const choice = await showMergeReplaceDialog(
+          'Import templates',
+          `Import ${incoming.length} template(s) into the ward library?`
+        );
+        if(choice === 'cancel') return;
+        const merge = choice === 'merge';
+        if(merge){
+          const byId = new Map((wardTemplateLibrary.templates||[]).map(t=>[t.id,t]));
+          for(const t of incoming){
+            if(t && t.id) byId.set(t.id, Object.assign({}, t, { builtin: false }));
+          }
+          wardTemplateLibrary.templates = [...byId.values()];
+        }else{
+          wardTemplateLibrary.templates = incoming.map(t=>Object.assign({}, t, { builtin: false }));
         }
-        wardTemplateLibrary.templates = [...byId.values()];
-      }else{
-        wardTemplateLibrary.templates = incoming.map(t=>Object.assign({}, t, { builtin: false }));
+        if(Array.isArray(payload.disabledIds)) wardTemplateLibrary.disabledIds = payload.disabledIds;
+        if(payload.defaultPostOpTemplateId) wardTemplateLibrary.defaultPostOpTemplateId = payload.defaultPostOpTemplateId;
+        if(payload.autoApplyPostOp === false) wardTemplateLibrary.autoApplyPostOp = false;
+        await saveTemplateLibrary();
+        renderTemplateWardSettings();
+        renderTemplateManagerList();
+        showToast('Templates imported');
+      }catch(err){
+        showToast('Import failed: ' + err.message);
       }
-      if(Array.isArray(payload.disabledIds)) wardTemplateLibrary.disabledIds = payload.disabledIds;
-      if(payload.defaultPostOpTemplateId) wardTemplateLibrary.defaultPostOpTemplateId = payload.defaultPostOpTemplateId;
-      if(payload.autoApplyPostOp === false) wardTemplateLibrary.autoApplyPostOp = false;
-      await saveTemplateLibrary();
-      renderTemplateWardSettings();
-      renderTemplateManagerList();
-      showToast('Templates imported');
-    }catch(err){
-      showToast('Import failed: ' + err.message);
-    }
-    e.target.value = '';
+      e.target.value = '';
+    });
   };
   reader.readAsText(file);
 }
@@ -8548,12 +8610,14 @@ function bindTemplateManagerEvents(){
   document.getElementById('templateManagerClose').addEventListener('click', closeTemplateManager);
   document.getElementById('templateSearchInput').addEventListener('input', renderTemplateManagerList);
   document.getElementById('templateAutoApplyPostOp').addEventListener('change', async (e)=>{
-    wardTemplateLibrary.autoApplyPostOp = e.target.checked;
-    await saveTemplateLibrary();
-    renderTemplateWardSettings();
-    showToast(e.target.checked ? 'Auto-apply on' : 'Auto-apply off — pick template per patient');
+    await withBusy(e.currentTarget, async () => {
+      wardTemplateLibrary.autoApplyPostOp = e.target.checked;
+      await saveTemplateLibrary();
+      renderTemplateWardSettings();
+      showToast(e.target.checked ? 'Auto-apply on' : 'Auto-apply off — pick template per patient');
+    });
   });
-  document.getElementById('templateClearDefaultBtn').addEventListener('click', clearDefaultPostOpTemplate);
+  document.getElementById('templateClearDefaultBtn').addEventListener('click', (e)=> void withBusy(e.currentTarget, () => clearDefaultPostOpTemplate()));
   document.getElementById('templateNewBtn').addEventListener('click', ()=>{
     editingTemplateId = null;
     const body = document.getElementById('templateEditorBody');
@@ -8578,7 +8642,7 @@ function bindTemplateManagerEvents(){
       bindTemplateItemRemoveButtons();
     });
   });
-  document.getElementById('templateEditorSave').addEventListener('click', saveTemplateEditor);
+  document.getElementById('templateEditorSave').addEventListener('click', (e)=> void withBusy(e.currentTarget, () => saveTemplateEditor()));
   document.getElementById('templateEditorCancel').addEventListener('click', ()=>{
     document.getElementById('templateEditorPanel').style.display = 'none';
   });
@@ -8629,7 +8693,7 @@ function openOrganizeForUnit(unitId){
   showToast('Showing this unit\'s patients — select some, then tap Move to unit');
 }
 
-async function applyBulkPlan(){
+async function applyBulkPlan(btn){
   if(!bulkSelectedIds.size){ showToast('Select patients first'); return; }
   const fields = await showPromptFields('Bulk plan', [
     { id: 'plan', label: `Plan for ${bulkSelectedIds.size} selected patient(s)`, value: '', placeholder: 'Same instruction for everyone' }
@@ -8637,18 +8701,21 @@ async function applyBulkPlan(){
   if(!fields || !fields.plan?.trim()) return;
   const text = fields.plan.trim();
   const count = bulkSelectedIds.size;
-  for(const id of bulkSelectedIds){
-    const p = patients.find(x=>x.id===id);
-    if(!p) continue;
-    saveCardPlan(p, text);
-    await savePatient(p);
-  }
-  bulkSelectMode = false;
-  bulkSelectedIds.clear();
-  document.getElementById('bulkPlanBtn')?.classList.remove('active');
-  updateBulkBar();
-  renderAll();
-  showToast(`Plan applied to ${count} patient(s)`);
+  const trigger = btn || document.getElementById('bulkBarApplyBtn') || document.getElementById('bulkPlanApplyBtn');
+  await withBusy(trigger, async () => {
+    for(const id of bulkSelectedIds){
+      const p = patients.find(x=>x.id===id);
+      if(!p) continue;
+      saveCardPlan(p, text);
+      await savePatient(p);
+    }
+    bulkSelectMode = false;
+    bulkSelectedIds.clear();
+    document.getElementById('bulkPlanBtn')?.classList.remove('active');
+    updateBulkBar();
+    renderAll();
+    showToast(`Plan applied to ${count} patient(s)`);
+  });
 }
 
 async function editPgRoster(){
@@ -8923,6 +8990,8 @@ async function downloadOtListDocx(){
 }
 
 function printOtListPdf(){
+  const btn = document.getElementById('otListPdfBtn');
+  void withBusy(btn, () => {
   const payload = buildOtExportPayload();
   if(!payload.patients.length){
     showToast('No patients on the OT list for this date');
@@ -9013,6 +9082,7 @@ function printOtListPdf(){
   if(!w){ showToast('Allow pop-ups to print / save PDF'); return; }
   w.document.write(html);
   w.document.close();
+  });
 }
 
 function bindOtListUi(){
@@ -9022,23 +9092,23 @@ function bindOtListUi(){
   });
   document.getElementById('otListDocxBtn')?.addEventListener('click', ()=> void downloadOtListDocx());
   document.getElementById('otListPdfBtn')?.addEventListener('click', ()=> printOtListPdf());
-  document.getElementById('otListUnitBtn')?.addEventListener('click', ()=> void editDefaultUnit());
-  document.getElementById('otListDoctorsBtn')?.addEventListener('click', ()=> void editDefaultOtDoctors());
+  document.getElementById('otListUnitBtn')?.addEventListener('click', (e)=> void withBusy(e.currentTarget, () => editDefaultUnit()));
+  document.getElementById('otListDoctorsBtn')?.addEventListener('click', (e)=> void withBusy(e.currentTarget, () => editDefaultOtDoctors()));
   document.getElementById('otListContent')?.addEventListener('click', (e)=>{
     const add = e.target.closest('[data-ot-add]');
-    if(add){ void addPatientToOtList(add.dataset.otAdd); return; }
+    if(add){ void withBusy(add, () => addPatientToOtList(add.dataset.otAdd)); return; }
     const rm = e.target.closest('[data-ot-remove]');
-    if(rm){ void removePatientFromOtList(rm.dataset.otRemove); return; }
+    if(rm){ void withBusy(rm, () => removePatientFromOtList(rm.dataset.otRemove)); return; }
     const edit = e.target.closest('[data-ot-edit]');
-    if(edit){ void editOtListFields(edit.dataset.otEdit); return; }
+    if(edit){ void withBusy(edit, () => editOtListFields(edit.dataset.otEdit)); return; }
     const carm = e.target.closest('[data-ot-carm]');
-    if(carm){ void toggleOtCArm(carm.dataset.otCarm); return; }
+    if(carm){ void withBusy(carm, () => toggleOtCArm(carm.dataset.otCarm)); return; }
     const arthro = e.target.closest('[data-ot-arthro]');
-    if(arthro){ void toggleOtArthroMonitor(arthro.dataset.otArthro); return; }
+    if(arthro){ void withBusy(arthro, () => toggleOtArthroMonitor(arthro.dataset.otArthro)); return; }
     const up = e.target.closest('[data-ot-up]');
-    if(up){ void moveOtListPatient(up.dataset.otUp, -1); return; }
+    if(up){ void withBusy(up, () => moveOtListPatient(up.dataset.otUp, -1)); return; }
     const down = e.target.closest('[data-ot-down]');
-    if(down){ void moveOtListPatient(down.dataset.otDown, 1); return; }
+    if(down){ void withBusy(down, () => moveOtListPatient(down.dataset.otDown, 1)); return; }
   });
 }
 
@@ -9158,8 +9228,10 @@ async function exportData(){
 function importData(e){
   const file = e.target.files[0];
   if(!file) return;
+  const btn = document.getElementById('importBtn');
   const reader = new FileReader();
   reader.onload = async ()=>{
+    await withBusy(btn, async () => {
     try{
       const payload = JSON.parse(reader.result);
       if(!payload.patients || !Array.isArray(payload.patients)) throw new Error('Invalid file format');
@@ -9214,6 +9286,7 @@ function importData(e){
       showToast('Could not read file: ' + err.message);
     }
     e.target.value = '';
+    });
   };
   reader.readAsText(file);
 }
