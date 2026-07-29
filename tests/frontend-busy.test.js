@@ -20,6 +20,11 @@ describe('is-busy CSS scoping', () => {
   });
 });
 
+test('setAiButtonBusy is not defined (migrated to withBusy)', () => {
+  const { window } = loadFrontendEnv();
+  assert.equal(typeof window.setAiButtonBusy, 'undefined');
+});
+
 describe('withBusy', () => {
   test('sets busy class, aria-busy, and disabled on a button then clears', async () => {
     const { window, document } = loadFrontendEnv();

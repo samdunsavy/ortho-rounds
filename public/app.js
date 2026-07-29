@@ -417,12 +417,6 @@ async function callAi(endpoint, body){
   return api('/api/ai/' + endpoint, { method: 'POST', body: JSON.stringify(body) });
 }
 
-function setAiButtonBusy(btn, busy){
-  if(!btn) return;
-  btn.disabled = busy;
-  btn.classList.toggle('ai-btn-busy', busy);
-}
-
 function buildPatientAiSnapshot(p){
   const dayInfo = getClinicalDayInfo(p);
   const abxStatuses = getActiveAntibioticCourseStatuses(p);
@@ -602,11 +596,7 @@ async function saveBulkDraftPlans(){
     return;
   }
   const saveBtn = document.getElementById('bulkDraftSaveBtn');
-  if(saveBtn){
-    saveBtn.disabled = true;
-    saveBtn.classList.add('ai-btn-busy');
-  }
-  try{
+  await withBusy(saveBtn, async () => {
     for(const { p, text } of toSave){
       saveCardPlan(p, text);
       await savePatient(p);
@@ -614,12 +604,7 @@ async function saveBulkDraftPlans(){
     closeBulkDraftModal();
     renderAll();
     showToast(`Plans saved for ${toSave.length} patient(s)`, { success: true });
-  }finally{
-    if(saveBtn){
-      saveBtn.disabled = false;
-      saveBtn.classList.remove('ai-btn-busy');
-    }
-  }
+  });
 }
 
 function aiDraftPlanButtonHtml(patientId, target){
@@ -824,17 +809,16 @@ function bindAiEvents(){
       }else{
         input = document.querySelector(`.card-plan-edit[data-id="${pid}"]`);
       }
-      setAiButtonBusy(draftBtn, true);
-      try{
-        const { text } = await callAi('draft-plan', { patient: buildPatientAiSnapshot(p) });
-        if(input) input.value = text;
-        if(draftBtn.dataset.target === 'modal') renderPlanStatus();
-        showToast('Draft ready — review and save');
-      }catch(err){
-        showToast(err.message || 'AI draft failed');
-      }finally{
-        setAiButtonBusy(draftBtn, false);
-      }
+      await withBusy(draftBtn, async () => {
+        try{
+          const { text } = await callAi('draft-plan', { patient: buildPatientAiSnapshot(p) });
+          if(input) input.value = text;
+          if(draftBtn.dataset.target === 'modal') renderPlanStatus();
+          showToast('Draft ready — review and save');
+        }catch(err){
+          showToast(err.message || 'AI draft failed');
+        }
+      });
       return;
     }
 
@@ -845,25 +829,24 @@ function bindAiEvents(){
       const style = polishBtn.dataset.style === 'compact' ? 'compact' : 'full';
       const p = patients.find(x => x.id === pid);
       if(!p || !canUseAi()) return;
-      setAiButtonBusy(polishBtn, true);
-      try{
-        const seed = style === 'compact'
-          ? generateCompactPresentationScript(p).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
-          : generatePresentationScript(p);
-        const { text } = await callAi('polish-presentation', {
-          patient: buildPatientAiSnapshot(p),
-          style,
-          seedScript: seed
-        });
-        presentationAiCache.set(`${pid}:${style}`, text);
-        renderPresentationSlide();
-        if(presentationReadAloud) speakCurrentPresentation();
-        showToast('Script polished');
-      }catch(err){
-        showToast(err.message || 'AI polish failed');
-      }finally{
-        setAiButtonBusy(polishBtn, false);
-      }
+      await withBusy(polishBtn, async () => {
+        try{
+          const seed = style === 'compact'
+            ? generateCompactPresentationScript(p).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
+            : generatePresentationScript(p);
+          const { text } = await callAi('polish-presentation', {
+            patient: buildPatientAiSnapshot(p),
+            style,
+            seedScript: seed
+          });
+          presentationAiCache.set(`${pid}:${style}`, text);
+          renderPresentationSlide();
+          if(presentationReadAloud) speakCurrentPresentation();
+          showToast('Script polished');
+        }catch(err){
+          showToast(err.message || 'AI polish failed');
+        }
+      });
       return;
     }
 
@@ -884,19 +867,18 @@ function bindAiEvents(){
         showToast('AI not available — check server key or connection');
         return;
       }
-      setAiButtonBusy(dischargeBtn, true);
-      try{
-        const { text } = await callAi('discharge-summary', { patient: buildDischargeAiSnapshot(p) });
-        openAiResultModal(
-          `Discharge summary — ${p.name || 'patient'}`,
-          text,
-          'AI draft from the recorded course. Review, edit and fill any [placeholders] before use.'
-        );
-      }catch(err){
-        showToast(err.message || 'AI discharge summary failed');
-      }finally{
-        setAiButtonBusy(dischargeBtn, false);
-      }
+      await withBusy(dischargeBtn, async () => {
+        try{
+          const { text } = await callAi('discharge-summary', { patient: buildDischargeAiSnapshot(p) });
+          openAiResultModal(
+            `Discharge summary — ${p.name || 'patient'}`,
+            text,
+            'AI draft from the recorded course. Review, edit and fill any [placeholders] before use.'
+          );
+        }catch(err){
+          showToast(err.message || 'AI discharge summary failed');
+        }
+      });
       return;
     }
 
@@ -912,19 +894,18 @@ function bindAiEvents(){
         showToast('No inpatients to brief on');
         return;
       }
-      setAiButtonBusy(briefBtn, true);
-      try{
-        const { text } = await callAi('ward-brief', { patients: list.map(buildPatientAiSnapshot) });
-        openAiResultModal(
-          'Morning ward brief',
-          text,
-          `Generated from ${list.length} inpatient${list.length > 1 ? 's' : ''} — verify before acting.`
-        );
-      }catch(err){
-        showToast(err.message || 'AI brief failed');
-      }finally{
-        setAiButtonBusy(briefBtn, false);
-      }
+      await withBusy(briefBtn, async () => {
+        try{
+          const { text } = await callAi('ward-brief', { patients: list.map(buildPatientAiSnapshot) });
+          openAiResultModal(
+            'Morning ward brief',
+            text,
+            `Generated from ${list.length} inpatient${list.length > 1 ? 's' : ''} — verify before acting.`
+          );
+        }catch(err){
+          showToast(err.message || 'AI brief failed');
+        }
+      });
       return;
     }
 
@@ -940,23 +921,22 @@ function bindAiEvents(){
         showToast('No inpatients to check');
         return;
       }
-      setAiButtonBusy(riskBtn, true);
-      try{
-        // wardRiskFlags identifies patients by `bed` when talking to OpenAI
-        // (only allow-listed fields leave the server), but needs the real
-        // `id` back in the raw request body to resolve bed -> patientId.
-        const patients = list.map(p => Object.assign(buildPatientAiSnapshot(p), { id: p.id }));
-        const { flags } = await callAi('risk-flags', { patients });
-        lastRiskFlags = new Map((flags || []).map(f => [f.patientId, f.flag]));
-        lastRiskFlagsCheckedAt = Date.now();
-        updateRiskFlagsLastCheckedLabel();
-        renderAll();
-        showToast(flags && flags.length ? `${flags.length} risk${flags.length > 1 ? 's' : ''} flagged` : 'No risks flagged right now');
-      }catch(err){
-        showToast(err.message || 'AI risk check failed');
-      }finally{
-        setAiButtonBusy(riskBtn, false);
-      }
+      await withBusy(riskBtn, async () => {
+        try{
+          // wardRiskFlags identifies patients by `bed` when talking to OpenAI
+          // (only allow-listed fields leave the server), but needs the real
+          // `id` back in the raw request body to resolve bed -> patientId.
+          const patients = list.map(p => Object.assign(buildPatientAiSnapshot(p), { id: p.id }));
+          const { flags } = await callAi('risk-flags', { patients });
+          lastRiskFlags = new Map((flags || []).map(f => [f.patientId, f.flag]));
+          lastRiskFlagsCheckedAt = Date.now();
+          updateRiskFlagsLastCheckedLabel();
+          renderAll();
+          showToast(flags && flags.length ? `${flags.length} risk${flags.length > 1 ? 's' : ''} flagged` : 'No risks flagged right now');
+        }catch(err){
+          showToast(err.message || 'AI risk check failed');
+        }
+      });
       return;
     }
 
@@ -1005,20 +985,19 @@ function bindAiEvents(){
         showToast('AI not available — check server key or connection');
         return;
       }
-      setAiButtonBusy(genHandoverBtn, true);
-      try{
-        const text = await generateWardHandoverNote();
-        if(!text) return;
-        await saveWardMeta({ handoverNote: text.trim() });
-        renderWardHandoverBanner();
-        renderWorklist();
-        updateCounts();
-        showToast('Handover generated — review on worklist');
-      }catch(err){
-        showToast(err.message || 'AI handover failed');
-      }finally{
-        setAiButtonBusy(genHandoverBtn, false);
-      }
+      await withBusy(genHandoverBtn, async () => {
+        try{
+          const text = await generateWardHandoverNote();
+          if(!text) return;
+          await saveWardMeta({ handoverNote: text.trim() });
+          renderWardHandoverBanner();
+          renderWorklist();
+          updateCounts();
+          showToast('Handover generated — review on worklist');
+        }catch(err){
+          showToast(err.message || 'AI handover failed');
+        }
+      });
     }
   });
 
@@ -1144,16 +1123,15 @@ async function runScribeParse(btn){
     return;
   }
   stopScribeDictation();
-  setAiButtonBusy(btn, true);
-  try{
-    const { result } = await callAi('scribe', { patient: buildScribeAiSnapshot(p), transcript });
-    scribeResult = result;
-    renderScribeReview(p, result);
-  }catch(err){
-    showToast(err.message || 'Scribe failed');
-  }finally{
-    setAiButtonBusy(btn, false);
-  }
+  await withBusy(btn, async () => {
+    try{
+      const { result } = await callAi('scribe', { patient: buildScribeAiSnapshot(p), transcript });
+      scribeResult = result;
+      renderScribeReview(p, result);
+    }catch(err){
+      showToast(err.message || 'Scribe failed');
+    }
+  });
 }
 
 function renderScribeReview(p, r){
@@ -1408,37 +1386,36 @@ async function runSmartPaste(btn){
     showToast('AI not available — check server key or connection');
     return;
   }
-  setAiButtonBusy(btn, true);
-  try{
-    const { fields } = await callAi('parse-admission', { text });
-    let filled = 0;
-    for(const [key, id] of Object.entries(SMART_PASTE_FIELD_MAP)){
-      const val = fields?.[key];
-      if(!val) continue;
-      const el = document.getElementById(id);
-      if(!el) continue;
-      el.value = val;
-      filled++;
-    }
-    for(const key of ['sex', 'status']){
-      const val = fields?.[key];
-      const el = document.getElementById(key === 'sex' ? 'f_sex' : 'f_status');
-      if(val && el && [...el.options].some(o => o.value === val)){
+  await withBusy(btn, async () => {
+    try{
+      const { fields } = await callAi('parse-admission', { text });
+      let filled = 0;
+      for(const [key, id] of Object.entries(SMART_PASTE_FIELD_MAP)){
+        const val = fields?.[key];
+        if(!val) continue;
+        const el = document.getElementById(id);
+        if(!el) continue;
         el.value = val;
         filled++;
       }
+      for(const key of ['sex', 'status']){
+        const val = fields?.[key];
+        const el = document.getElementById(key === 'sex' ? 'f_sex' : 'f_status');
+        if(val && el && [...el.options].some(o => o.value === val)){
+          el.value = val;
+          filled++;
+        }
+      }
+      modalSmartPasteUsed = true;
+      normalizeSmartPasteFormFields();
+      filled += applySmartPasteLabs(fields.labs);
+      filled += applySmartPasteAntibiotics(fields.antibioticCourses);
+      filled += applySmartPasteDvt(fields);
+      showToast(filled ? `Filled ${filled} field${filled > 1 ? 's' : ''} — review before saving` : 'Nothing recognisable in that note');
+    }catch(err){
+      showToast(err.message || 'Smart fill failed');
     }
-    modalSmartPasteUsed = true;
-    normalizeSmartPasteFormFields();
-    filled += applySmartPasteLabs(fields.labs);
-    filled += applySmartPasteAntibiotics(fields.antibioticCourses);
-    filled += applySmartPasteDvt(fields);
-    showToast(filled ? `Filled ${filled} field${filled > 1 ? 's' : ''} — review before saving` : 'Nothing recognisable in that note');
-  }catch(err){
-    showToast(err.message || 'Smart fill failed');
-  }finally{
-    setAiButtonBusy(btn, false);
-  }
+  });
 }
 
 function getDefaultUnit(){
@@ -1647,34 +1624,33 @@ async function handleLabPhotoSelected(file){
     return 0;
   }
   const btn = document.getElementById('labPhotoBtn');
-  setAiButtonBusy(btn, true);
-  try{
-    const raw = await fileToDataURL(file);
-    const compressed = await compressImage(raw);
-    const { labs, otherLabs, reportDate } = await callAi('parse-labs-image', { image: compressed });
-    const filled = applySmartPasteLabs(labs);
-    mergePendingOtherLabs(otherLabs);
-    if(reportDate && reportDate !== todayISO()){
-      const useReportDate = await showConfirm(
-        'Use report date?',
-        `This report is dated ${reportDate} — use that date for this lab entry instead of today?`,
-        { confirmLabel: 'Use report date' }
-      );
-      setModalLabReportDate(useReportDate ? reportDate : null);
-    }else{
-      setModalLabReportDate(null);
+  return await withBusy(btn, async () => {
+    try{
+      const raw = await fileToDataURL(file);
+      const compressed = await compressImage(raw);
+      const { labs, otherLabs, reportDate } = await callAi('parse-labs-image', { image: compressed });
+      const filled = applySmartPasteLabs(labs);
+      mergePendingOtherLabs(otherLabs);
+      if(reportDate && reportDate !== todayISO()){
+        const useReportDate = await showConfirm(
+          'Use report date?',
+          `This report is dated ${reportDate} — use that date for this lab entry instead of today?`,
+          { confirmLabel: 'Use report date' }
+        );
+        setModalLabReportDate(useReportDate ? reportDate : null);
+      }else{
+        setModalLabReportDate(null);
+      }
+      const extraCount = Array.isArray(otherLabs) ? otherLabs.length : 0;
+      showToast(filled || extraCount
+        ? `Filled ${filled} field${filled === 1 ? '' : 's'}${extraCount ? ` + ${extraCount} other lab${extraCount === 1 ? '' : 's'}` : ''} — review before saving`
+        : 'Nothing recognisable in that photo');
+      return filled;
+    }catch(err){
+      showToast(err.message || 'Could not read that lab report photo');
+      return 0;
     }
-    const extraCount = Array.isArray(otherLabs) ? otherLabs.length : 0;
-    showToast(filled || extraCount
-      ? `Filled ${filled} field${filled === 1 ? '' : 's'}${extraCount ? ` + ${extraCount} other lab${extraCount === 1 ? '' : 's'}` : ''} — review before saving`
-      : 'Nothing recognisable in that photo');
-    return filled;
-  }catch(err){
-    showToast(err.message || 'Could not read that lab report photo');
-    return 0;
-  }finally{
-    setAiButtonBusy(btn, false);
-  }
+  });
 }
 
 /* ---------------- sync engine ---------------- */
@@ -2226,12 +2202,9 @@ function showAppDialog(opts){
           const el = document.getElementById('adf_' + f.id);
           if(el) out.fields[f.id] = el.value;
         }
-        setAiButtonBusy(btn, true);
-        try{
+        await withBusy(btn, async () => {
           await b.onClick(out);
-        }finally{
-          setAiButtonBusy(btn, false);
-        }
+        });
       });
       btnRow.appendChild(btn);
     });
