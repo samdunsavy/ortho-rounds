@@ -72,6 +72,7 @@ export function loadFrontendEnv(options){
   window.__ORTHO_SKIP_AUTOINIT__ = true;
 
   const appJs = readFileSync(path.join(PUBLIC_DIR, 'app.js'), 'utf8');
+  const busyJs = readFileSync(path.join(PUBLIC_DIR, 'busy.js'), 'utf8');
   const milestonesJs = readFileSync(path.join(PUBLIC_DIR, 'milestones.js'), 'utf8');
   // The four admin-*.js files are separate <script> tags in index.html, so
   // in a real browser they share one top-level lexical scope (the same
@@ -82,6 +83,7 @@ export function loadFrontendEnv(options){
   // `adminData`/`adminUI`, exactly like appJs+initScript already are below.
   const adminFiles = ['admin-console.js', 'admin-people.js', 'admin-structure.js', 'admin-orgs.js', 'admin-audit.js']
     .map(f => readFileSync(path.join(PUBLIC_DIR, f), 'utf8'));
+  window.eval(busyJs);
   window.eval(milestonesJs);
   window.eval(adminFiles.join('\n'));
   window.eval(initScript ? `${appJs}\n${initScript}` : appJs);
