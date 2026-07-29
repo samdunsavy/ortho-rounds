@@ -95,3 +95,25 @@ describe('withBusy', () => {
     assert.equal(window.isBusy(btn), false);
   });
 });
+
+describe('clinical busy wiring', () => {
+  test('attemptLogin wraps the login button via withBusy (busy during slow fetch)', async () => {
+    const { window, document } = loadFrontendEnv();
+    document.getElementById('loginUsername').value = 'admin';
+    document.getElementById('loginPassword').value = 'secret';
+    let release;
+    const gate = new Promise(r => { release = r; });
+    window.fetch = async () => {
+      await gate;
+      return { ok: false, json: async () => ({ error: 'nope' }) };
+    };
+    const btn = document.getElementById('loginBtn');
+    const p = window.attemptLogin();
+    // yield to allow withBusy to mark busy
+    await new Promise(r => setTimeout(r, 0));
+    assert.equal(window.isBusy(btn), true);
+    release();
+    await p;
+    assert.equal(window.isBusy(btn), false);
+  });
+});

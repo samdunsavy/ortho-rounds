@@ -1972,33 +1972,30 @@ async function attemptLogin(){
   const btn = document.getElementById('loginBtn');
   errEl.textContent = '';
   if(!username || !pw){ errEl.textContent = 'Enter your username and password'; return; }
-  btn.disabled = true;
-  btn.classList.add('btn-busy');
-  try{
-    const res = await fetch('/api/login', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ username, password: pw })
-    });
-    const data = await res.json().catch(()=> ({}));
-    if(!res.ok){ errEl.textContent = data.error || 'Login failed'; return; }
-    localStorage.setItem(LS_TOKEN, data.token);
-    localStorage.setItem(LS_USERNAME, data.username);
-    localStorage.setItem(LS_ROLE, data.role || 'member');
-    localStorage.setItem(LS_ORG_ID, data.orgId || '');
-    invalidateScopeTree();
-    void refreshServerFlags();
-    updateAccountUI();
-    void renderScopeSelector();
-    hideLogin();
-    await refreshAiStatus();
-    await syncNow({ fullReconcile: true });
-  }catch{
-    errEl.textContent = 'Cannot reach the server';
-  }finally{
-    btn.disabled = false;
-    btn.classList.remove('btn-busy');
-  }
+  await withBusy(btn, async () => {
+    try{
+      const res = await fetch('/api/login', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ username, password: pw })
+      });
+      const data = await res.json().catch(()=> ({}));
+      if(!res.ok){ errEl.textContent = data.error || 'Login failed'; return; }
+      localStorage.setItem(LS_TOKEN, data.token);
+      localStorage.setItem(LS_USERNAME, data.username);
+      localStorage.setItem(LS_ROLE, data.role || 'member');
+      localStorage.setItem(LS_ORG_ID, data.orgId || '');
+      invalidateScopeTree();
+      void refreshServerFlags();
+      updateAccountUI();
+      void renderScopeSelector();
+      hideLogin();
+      await refreshAiStatus();
+      await syncNow({ fullReconcile: true });
+    }catch{
+      errEl.textContent = 'Cannot reach the server';
+    }
+  });
 }
 function logout(){
   localStorage.removeItem(LS_TOKEN);
@@ -3734,29 +3731,31 @@ async function submitChangePassword(){
     resultEl.textContent = 'New passwords do not match';
     return;
   }
-  btn.disabled = true;
-  try{
-    const res = await api('/api/account/change-password', {
-      method: 'POST',
-      body: JSON.stringify({ currentPassword, newPassword })
-    });
-    if(res.token) localStorage.setItem(LS_TOKEN, res.token);
-    closeChangePasswordModal();
-    showToast('Password updated — other devices were logged out', { success: true });
-  }catch(err){
-    resultEl.textContent = err.message || 'Could not change password';
-  }finally{
-    btn.disabled = false;
-  }
+  await withBusy(btn, async () => {
+    try{
+      const res = await api('/api/account/change-password', {
+        method: 'POST',
+        body: JSON.stringify({ currentPassword, newPassword })
+      });
+      if(res.token) localStorage.setItem(LS_TOKEN, res.token);
+      closeChangePasswordModal();
+      showToast('Password updated — other devices were logged out', { success: true });
+    }catch(err){
+      resultEl.textContent = err.message || 'Could not change password';
+    }
+  });
 }
 
 async function revokeSessionsEverywhere(){
   if(!confirm('Log out of every device using your account? You will need to log in again here too.')) return;
-  try{
-    await api('/api/account/revoke-sessions', { method: 'POST' });
-  }catch{ /* token is about to be discarded regardless */ }
-  closeChangePasswordModal();
-  logout();
+  const btn = document.getElementById('changePasswordRevokeBtn');
+  await withBusy(btn, async () => {
+    try{
+      await api('/api/account/revoke-sessions', { method: 'POST' });
+    }catch{ /* token is about to be discarded regardless */ }
+    closeChangePasswordModal();
+    logout();
+  });
 }
 
 function bindEvents(){
@@ -7622,6 +7621,8 @@ function renderComplicationList(){
 }
 
 async function savePatientFromModal(){
+  const btn = document.getElementById('savePatientBtn');
+  await withBusy(btn, async () => {
   const isNew = !editingPatientId;
   try{
     const d = getWorkingData();
@@ -7778,6 +7779,7 @@ async function savePatientFromModal(){
     console.error(err);
     showToast('Could not save patient — ' + (err.message || 'error'));
   }
+  });
 }
 
 async function deleteCurrentPatient(){
@@ -8852,11 +8854,13 @@ function buildOtExportPayload(){
 }
 
 async function downloadOtListDocx(){
+  const btn = document.getElementById('otListDocxBtn');
   const payload = buildOtExportPayload();
   if(!payload.patients.length){
     showToast('No patients on the OT list for this date');
     return;
   }
+  await withBusy(btn, async () => {
   try{
     const token = localStorage.getItem(LS_TOKEN);
     const res = await fetch('/api/ot-list/docx', {
@@ -8890,6 +8894,7 @@ async function downloadOtListDocx(){
   }catch(err){
     if(err.message !== 'unauthorized') showToast('Could not export Word — ' + (err.message || 'error'));
   }
+  });
 }
 
 function printOtListPdf(){
@@ -9062,6 +9067,8 @@ function copyHandoverWhatsApp(){
 /* ---------------- MORNING CENSUS ---------------- */
 
 function exportCensus(){
+  const btn = document.getElementById('censusBtn');
+  void withBusy(btn, () => {
   const groups = groupPatientsByWard(getActiveRoundsItems());
   const csvRows = [['Ward','Bed','Name','Age/Sex','Diagnosis','POD/Status','Plan today','PG']];
   for(const [ward, pts] of groups){
@@ -9091,6 +9098,7 @@ function exportCensus(){
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
   showToast('Census CSV downloaded');
+  });
 }
 
 function csvEscape(val){
@@ -9102,6 +9110,8 @@ function csvEscape(val){
 /* ---------------- EXPORT / IMPORT ---------------- */
 
 async function exportData(){
+  const btn = document.getElementById('exportBtn');
+  await withBusy(btn, async () => {
   try{
     const payload = await api('/api/export');
     downloadJSON(payload, `ortho_rounds_backup_${todayISO()}.json`);
@@ -9117,6 +9127,7 @@ async function exportData(){
     localStorage.setItem(LS_LAST_EXPORT, String(Date.now()));
     showToast('Backup from local cache — server export failed', { warn: true, duration: 6000 });
   }
+  });
 }
 
 function importData(e){

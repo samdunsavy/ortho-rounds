@@ -1881,9 +1881,11 @@
     to{opacity:1;transform:translateY(0);}
   }
 
-  /* --- login busy state --- */
-  .btn.btn-busy{position:relative;color:transparent !important;pointer-events:none;}
-  .btn.btn-busy::after{
+  /* --- login / primary btn busy state (centered spinner) --- */
+  .btn.is-busy,.btn.btn-busy{
+    position:relative;color:transparent !important;pointer-events:none;
+  }
+  .btn.is-busy::after,.btn.btn-busy::after{
     content:"";position:absolute;inset:0;margin:auto;width:18px;height:18px;
     border:2px solid rgba(255,255,255,0.35);border-top-color:#fff;border-radius:50%;
     animation:spin 0.7s linear infinite;
