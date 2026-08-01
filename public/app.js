@@ -5904,6 +5904,23 @@ function bindImgViewerGestures(){
     toggleImgViewerZoom(e.clientX, e.clientY);
   });
 
+  // iOS Safari is the case touch-action:none does NOT cover. It ignores
+  // user-scalable=no / maximum-scale entirely (kept on for accessibility since
+  // iOS 10) and does not honour touch-action:none for every pinch pattern, so
+  // a two-finger gesture in here can still zoom the *page* underneath our own
+  // JS zoom. That's doubly bad: the page zoom fights our zoom (the original
+  // "zoom xray and site" bug), and because this overlay is position:fixed it
+  // then anchors to the enlarged layout viewport — so the "centered" X-ray
+  // ends up shoved toward the right edge of the phone screen. The iOS-only
+  // gesture events are the one hook Safari does respect; cancelling them while
+  // the viewer is open keeps the page at 1x so our zoom is the only zoom and
+  // the image stays centered. These events don't exist off WebKit, so this is
+  // a no-op on Android/desktop (where touch-action:none already suffices).
+  const cancelNativePageZoom = (e)=>{ if(viewer.classList.contains('active')) e.preventDefault(); };
+  viewer.addEventListener('gesturestart', cancelNativePageZoom, { passive: false });
+  viewer.addEventListener('gesturechange', cancelNativePageZoom, { passive: false });
+  viewer.addEventListener('gestureend', cancelNativePageZoom, { passive: false });
+
   document.addEventListener('keydown', (e)=>{
     if(!viewer.classList.contains('active')) return;
     if(e.key === 'ArrowRight' && ivScale <= 1.001) stepImgViewer(1);
@@ -8447,6 +8464,23 @@ function bindPresentationSwipe(){
     if(dx > 0) stepPresentation(-1);
     else stepPresentation(1, true);
   }, { passive: true });
+
+  // Stop a pinch on an inline X-ray thumbnail from zooming the whole page.
+  // The presentation body scrolls, so touch-action:none can't be used here
+  // (it would kill scrolling) — but pinch-zoom of the page is still harmful:
+  // it leaves the page at >1x, and when the user then taps a thumbnail open,
+  // the position:fixed X-ray viewer anchors to the enlarged layout viewport
+  // and the image looks pushed to the right edge instead of centered. Cancel
+  // only the zoom gestures, never single-finger scrolling. iOS: the gesture
+  // events (WebKit-only). Android/Chrome: a two-finger touchmove — guarded on
+  // touches.length > 1 so one-finger vertical scroll is untouched.
+  const cancelPresPageZoom = (e)=>{ if(overlay.classList.contains('active')) e.preventDefault(); };
+  overlay.addEventListener('gesturestart', cancelPresPageZoom, { passive: false });
+  overlay.addEventListener('gesturechange', cancelPresPageZoom, { passive: false });
+  overlay.addEventListener('gestureend', cancelPresPageZoom, { passive: false });
+  overlay.addEventListener('touchmove', (e)=>{
+    if(overlay.classList.contains('active') && e.touches.length > 1) e.preventDefault();
+  }, { passive: false });
 }
 
 /* ---------------- TEMPLATE MANAGER ---------------- */

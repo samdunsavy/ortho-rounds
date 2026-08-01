@@ -114,6 +114,54 @@ describe('X-ray viewer — zoom/pan state machine', () => {
     assert.equal(rules.image, 'none', 'the image must set touch-action:none so it hands off native page-zoom');
   });
 
+  test('while open, the viewer cancels iOS native page-zoom gestures so the page cannot zoom under the fixed overlay', () => {
+    // This is the fix for the phone-only "X-ray sits near the right border
+    // instead of centered" report. The overlay is position:fixed and centres
+    // its image correctly — but iOS Safari ignores user-scalable=no and does
+    // not honour touch-action:none for every pinch, so a pinch could still
+    // zoom the *page*. A zoomed page anchors this fixed overlay to the
+    // enlarged layout viewport, and the centred image visually shifts toward
+    // the right edge. Cancelling the WebKit-only gesture events while the
+    // viewer is open keeps the page at 1x, so the image stays centred.
+    const { window, document } = loadFrontendEnv();
+    // init() (and thus the gesture wiring) is skipped in this harness — wire
+    // it explicitly, exactly as a real page load would.
+    window.bindImgViewerGestures();
+    const viewer = document.getElementById('imgViewer');
+    const fire = (type)=>{
+      const ev = new window.Event(type, { bubbles: true, cancelable: true });
+      viewer.dispatchEvent(ev);
+      return ev.defaultPrevented;
+    };
+
+    viewer.classList.remove('active');
+    assert.equal(fire('gesturestart'), false, 'must not interfere with the page while the viewer is closed');
+
+    viewer.classList.add('active');
+    assert.equal(fire('gesturestart'), true, 'gesturestart cancelled while open');
+    assert.equal(fire('gesturechange'), true, 'gesturechange cancelled while open');
+    assert.equal(fire('gestureend'), true, 'gestureend cancelled while open');
+  });
+
+  test('presentation overlay cancels pinch-zoom gestures while active (thumbnail pinch must not zoom the page)', () => {
+    const { window, document } = loadFrontendEnv();
+    window.bindPresentationSwipe();
+    const overlay = document.getElementById('presentationOverlay');
+    const fire = (type)=>{
+      const ev = new window.Event(type, { bubbles: true, cancelable: true });
+      overlay.dispatchEvent(ev);
+      return ev.defaultPrevented;
+    };
+
+    overlay.classList.remove('active');
+    assert.equal(fire('gesturestart'), false, 'must not interfere while presentation mode is closed');
+
+    overlay.classList.add('active');
+    assert.equal(fire('gesturestart'), true, 'gesturestart cancelled while presenting');
+    assert.equal(fire('gesturechange'), true, 'gesturechange cancelled while presenting');
+    assert.equal(fire('gestureend'), true, 'gestureend cancelled while presenting');
+  });
+
   test('this test suite intentionally does not simulate raw touchstart/touchmove/touchend', () => {
     // Synthetic multi-touch events in jsdom are unreliable enough (no real
     // Touch/TouchEvent geometry, no real gesture timing) that testing the
