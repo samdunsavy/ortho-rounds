@@ -1,0 +1,888 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Ortho Rounds — v2 full prototype</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Fraunces:opsz,wght@9..144,500;9..144,600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --font-sans:"DM Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  --font-display:"Fraunces",Georgia,serif;
+  --mono:"JetBrains Mono","SF Mono",Consolas,monospace;
+  --ink:#1c2230; --ink-soft:#5a6478; --ink-faint:#8b94a5;
+  --line:#e2e5eb; --line-soft:#eef0f4;
+  --paper:#f4f5f7; --card:#ffffff; --sunk:#fafbfc;
+  --accent:#2c5f6e; --accent-soft:#e7f0f0; --on-accent:#ffffff;
+  --bone:#f1ece2; --bone-line:#d8cfb8; --bone-ink:#796943;
+  --good:#3d7959; --good-bg:#e8f3ec;
+  --warn:#9f5e28; --warn-bg:#fbf0e2;
+  --bad:#a33d3d;  --bad-bg:#faeaea;
+  --film-bg:#12161c; --film-frame:rgba(0,0,0,.35);
+  --radius:14px; --radius-sm:9px; --radius-chip:6px;
+  --shadow-sm:0 1px 2px rgba(28,34,48,.05),0 1px 4px rgba(28,34,48,.04);
+  --shadow-md:0 4px 14px rgba(28,34,48,.09),0 2px 4px rgba(28,34,48,.04);
+  --shadow-lg:0 18px 44px rgba(28,34,48,.17);
+  --ease:cubic-bezier(.32,.72,0,1);
+  --spring:cubic-bezier(.34,1.4,.64,1);
+}
+[data-theme="dark"]{
+  --ink:#e8edf4; --ink-soft:#9aa6b8; --ink-faint:#6d798d;
+  --line:#1e2732; --line-soft:#18202a;
+  --paper:#080b0f; --card:#101720; --sunk:#0b1119;
+  --accent:#6fd3c7; --accent-soft:#122b2e; --on-accent:#04211f;
+  --bone:#1a1f27; --bone-line:#2a323d; --bone-ink:#b9a97f;
+  --good:#5fc08d; --good-bg:#0f2419;
+  --warn:#e0a35c; --warn-bg:#2a1e0e;
+  --bad:#f0857f;  --bad-bg:#2c1315;
+  --film-bg:#070a0e; --film-frame:rgba(255,255,255,.06);
+  --shadow-sm:0 1px 2px rgba(0,0,0,.5);
+  --shadow-md:0 6px 18px rgba(0,0,0,.55);
+  --shadow-lg:0 22px 52px rgba(0,0,0,.72);
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+html,body{margin:0;height:100%;}
+body{font-family:var(--font-sans);color:var(--ink);background:var(--paper);
+  -webkit-font-smoothing:antialiased;overflow:hidden;
+  transition:background .5s var(--ease),color .5s var(--ease);}
+button{font-family:inherit;color:inherit;border:0;background:none;cursor:pointer;padding:0;}
+input,select,textarea{font-family:inherit;color:inherit;}
+svg{fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;}
+.ico{width:19px;height:19px;flex-shrink:0;}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);}
+
+/* ══ shell ══ */
+.app{height:100dvh;display:grid;grid-template-rows:1fr auto;grid-template-columns:1fr;position:relative;}
+.rail{display:none;}
+.main{min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden;background:var(--paper);}
+
+@media(min-width:760px){
+  .app{grid-template-columns:76px 1fr;grid-template-rows:1fr;}
+  .rail{display:flex;flex-direction:column;align-items:center;gap:4px;padding:16px 8px;
+    background:var(--card);border-right:1px solid var(--line);}
+  .nav{display:none;}
+}
+@media(min-width:1280px){
+  .app{grid-template-columns:212px 1fr;}
+  .rail{align-items:stretch;padding:18px 12px;}
+}
+
+.rl-brand{display:flex;align-items:center;gap:9px;padding:2px 6px 18px;}
+.rl-mk{width:30px;height:30px;border-radius:9px;background:var(--accent);color:var(--on-accent);
+  display:grid;place-items:center;flex-shrink:0;font-family:var(--font-display);font-weight:600;font-size:14px;}
+.rl-tx{display:none;min-width:0;}
+@media(min-width:1280px){.rl-tx{display:block;}}
+.rl-tx b{display:block;font-family:var(--font-display);font-size:14px;font-weight:600;letter-spacing:-.01em;}
+.rl-tx span{font-size:10.5px;color:var(--ink-faint);}
+.rl{display:flex;align-items:center;gap:11px;padding:9px 10px;border-radius:10px;color:var(--ink-soft);
+  font-size:13px;font-weight:500;transition:background .18s,color .18s;width:100%;justify-content:center;}
+@media(min-width:1280px){.rl{justify-content:flex-start;}}
+.rl-lb{display:none;}
+@media(min-width:1280px){.rl-lb{display:block;}}
+.rl:hover{background:var(--line-soft);color:var(--ink);}
+.rl.on{background:var(--accent-soft);color:var(--accent);}
+.rl-sp{flex:1;}
+.rl-div{height:1px;background:var(--line);margin:10px 4px;}
+
+/* ══ header ══ */
+.hd{display:flex;align-items:center;gap:14px;padding:13px 16px 11px;flex-shrink:0;
+  border-bottom:1px solid var(--line);background:var(--card);}
+@media(min-width:760px){.hd{padding:15px 22px 13px;}}
+.hd-ti{flex:1;min-width:0;}
+.hd-ti b{display:block;font-family:var(--font-display);font-size:18px;font-weight:600;letter-spacing:-.02em;line-height:1.2;}
+.hd-ti span{font-size:11.5px;color:var(--ink-faint);}
+.hd-ac{display:flex;align-items:center;gap:7px;}
+.ib{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;color:var(--ink-soft);
+  transition:background .18s,color .18s,transform .18s var(--spring);}
+.ib:hover{background:var(--line-soft);color:var(--ink);}
+.ib:active{transform:scale(.9);}
+.ring{width:34px;height:34px;transform:rotate(-90deg);}
+.ring circle{fill:none;stroke-width:3.2;stroke-linecap:round;}
+.ring .bg{stroke:var(--line);}
+.ring .fg{stroke:var(--accent);transition:stroke-dashoffset .75s var(--ease);}
+.ringw{display:flex;align-items:center;gap:9px;}
+.ringw b{font-size:13.5px;font-weight:600;font-variant-numeric:tabular-nums;line-height:1.1;display:block;}
+.ringw span{font-size:10px;color:var(--ink-faint);letter-spacing:.05em;text-transform:uppercase;}
+.pill-btn{display:flex;align-items:center;gap:7px;border:1px solid var(--line);border-radius:9px;
+  padding:7px 12px;font-size:12.5px;font-weight:500;color:var(--ink-soft);transition:all .18s;}
+.pill-btn:hover{border-color:var(--accent);color:var(--accent);}
+.pill-btn kbd{font-family:var(--mono);font-size:10px;color:var(--ink-faint);}
+
+/* ══ spine ══ */
+.spine{display:flex;gap:4px;padding:10px 16px;overflow-x:auto;scrollbar-width:none;flex-shrink:0;
+  background:var(--card);border-bottom:1px solid var(--line);}
+@media(min-width:760px){.spine{padding:10px 22px;}}
+.spine::-webkit-scrollbar{display:none;}
+.sp{flex-shrink:0;min-width:31px;height:36px;border-radius:8px;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:2px;background:var(--paper);border:1px solid var(--line);
+  font-family:var(--mono);font-size:10.5px;color:var(--ink-faint);transition:all .26s var(--spring);}
+.sp .d{width:4px;height:4px;border-radius:50%;background:var(--line);transition:background .26s;}
+.sp.seen{background:var(--accent-soft);border-color:transparent;color:var(--accent);}
+.sp.seen .d{background:var(--accent);}
+.sp.flag .d{background:var(--bad);}
+.sp.now{background:var(--accent);border-color:var(--accent);color:var(--on-accent);transform:scale(1.13);}
+.sp.now .d{background:currentColor;}
+
+/* ══ panes ══ */
+.body{flex:1;min-height:0;display:flex;overflow:hidden;}
+.pane-list{width:100%;overflow-y:auto;padding:14px 16px 96px;}
+.pane-det{display:none;}
+@media(min-width:760px){.pane-list{padding:16px 22px 24px;}}
+@media(min-width:1100px){
+  .split .pane-list{width:344px;flex-shrink:0;border-right:1px solid var(--line);padding:14px 14px 24px;}
+  .split .pane-det{display:block;flex:1;min-width:0;overflow-y:auto;padding:20px 26px 40px;background:var(--sunk);}
+}
+.full{flex:1;overflow-y:auto;padding:16px 16px 96px;}
+@media(min-width:760px){.full{padding:20px 22px 30px;}}
+.view{display:none;flex:1;min-height:0;}
+.view.on{display:flex;animation:vi .34s var(--ease);}
+@keyframes vi{from{opacity:0;transform:translateY(7px);}to{opacity:1;transform:none;}}
+
+.lbl{font-size:10.5px;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-faint);
+  font-weight:600;margin:0 0 9px 2px;}
+.lbl.mt{margin-top:20px;}
+
+/* ══ hero (mobile round) ══ */
+.hero{background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow-md);
+  border:1px solid var(--line);overflow:hidden;animation:sw .44s var(--ease);}
+@keyframes sw{from{opacity:0;transform:translateX(22px) scale(.986);}to{opacity:1;transform:none;}}
+.hero-lb{display:flex;align-items:center;gap:7px;padding:11px 15px 0;font-size:10.5px;
+  letter-spacing:.11em;text-transform:uppercase;color:var(--accent);font-weight:600;}
+.pls{width:6px;height:6px;border-radius:50%;background:var(--accent);animation:pl 2.1s ease-in-out infinite;}
+@keyframes pl{0%,100%{opacity:1;transform:scale(1);}50%{opacity:.35;transform:scale(.7);}}
+.hero-tp{display:flex;gap:14px;padding:11px 15px 13px;}
+
+/* film */
+.film{width:104px;flex-shrink:0;}
+.fbox{height:132px;background:var(--film-bg);border-radius:10px;position:relative;overflow:hidden;
+  box-shadow:inset 0 0 0 1px var(--film-frame);transition:transform .3s var(--spring);}
+.fbox:active{transform:scale(.97);}
+.fbox svg{position:absolute;inset:0;width:100%;height:100%;stroke:none;}
+.fbox::after{content:"";position:absolute;inset:0;
+  background:radial-gradient(ellipse 68% 58% at 50% 42%,rgba(255,255,255,.075),transparent 72%);}
+.fnone{height:132px;background:var(--bone);border:1px dashed var(--bone-line);border-radius:10px;
+  display:grid;place-items:center;color:var(--bone-ink);}
+.fnone svg{width:28px;height:28px;opacity:.55;}
+.fcap{font-size:10.5px;color:var(--ink-faint);text-align:center;margin-top:6px;}
+
+.who{min-width:0;flex:1;}
+.w-bed{font-family:var(--mono);font-size:11.5px;color:var(--ink-faint);letter-spacing:.04em;}
+.w-nm{font-family:var(--font-display);font-size:23px;font-weight:600;letter-spacing:-.02em;line-height:1.14;margin:1px 0 3px;}
+.w-mt{font-size:12.5px;color:var(--ink-soft);}
+.w-dx{font-size:14px;font-weight:500;margin-top:6px;line-height:1.32;}
+.w-pr{font-size:12px;color:var(--ink-soft);margin-top:2px;}
+
+/* track */
+.trk{margin:15px 15px 0;}
+.trk-r{position:relative;height:2px;background:var(--line);border-radius:2px;}
+.trk-f{position:absolute;left:0;top:0;height:2px;background:var(--accent);border-radius:2px;transition:width .8s var(--ease);}
+.st{position:absolute;top:50%;transform:translate(-50%,-50%);}
+.st i{display:block;width:9px;height:9px;border-radius:50%;background:var(--line);
+  border:2px solid var(--card);box-sizing:content-box;transition:all .4s var(--spring);}
+.st.done i{background:var(--accent);}
+.st.now i{background:var(--accent);width:11px;height:11px;box-shadow:0 0 0 4px var(--accent-soft);}
+.st.due i{background:var(--bad);}
+.st b{position:absolute;top:13px;left:50%;transform:translateX(-50%);white-space:nowrap;
+  font-size:10.5px;font-weight:500;color:var(--ink-faint);}
+.st.now b{color:var(--accent);font-weight:600;}
+.st.due b{color:var(--bad);font-weight:600;}
+.trk-lg{height:22px;}
+
+.flags{display:flex;flex-wrap:wrap;gap:6px;padding:0 15px;margin-top:8px;}
+.fl{font-size:11px;font-weight:500;padding:4px 9px;border-radius:var(--radius-chip);}
+.fl.bad{background:var(--bad-bg);color:var(--bad);}
+.fl.warn{background:var(--warn-bg);color:var(--warn);}
+.fl.ok{background:var(--good-bg);color:var(--good);}
+
+.plan{margin:13px 15px 0;}
+.pin{width:100%;border:1px solid var(--line);background:var(--paper);border-radius:var(--radius-sm);
+  padding:11px 12px;font-size:14px;outline:none;transition:border-color .2s,box-shadow .2s,background .2s;}
+.pin::placeholder{color:var(--ink-faint);}
+.pin:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft);background:var(--card);}
+.pyest{margin-top:7px;font-size:11.5px;color:var(--ink-faint);}
+.pyest button{color:var(--accent);font-weight:600;}
+
+.bar{display:flex;gap:9px;padding:14px 15px 15px;}
+.btn{border-radius:var(--radius-sm);padding:12px 16px;font-size:13.5px;font-weight:600;
+  transition:transform .18s var(--spring),background .2s,border-color .2s;}
+.btn:active{transform:scale(.965);}
+.btn.pri{background:var(--accent);color:var(--on-accent);flex:1;}
+.btn.gh{border:1px solid var(--line);color:var(--ink-soft);}
+.btn.gh:hover{border-color:var(--accent);color:var(--accent);}
+.btn.sq{flex:0 0 46px;display:grid;place-items:center;padding:0;}
+
+/* rows */
+.qr{display:flex;align-items:center;gap:11px;background:var(--card);border:1px solid var(--line);
+  border-radius:var(--radius-sm);padding:10px 12px;text-align:left;width:100%;margin-bottom:7px;
+  transition:transform .2s var(--spring),box-shadow .2s,border-color .2s;}
+.qr:hover{box-shadow:var(--shadow-sm);transform:translateY(-1px);}
+.qr.on{border-color:var(--accent);background:var(--accent-soft);}
+.qr.seen{opacity:.5;}
+.qb{font-family:var(--mono);font-size:11.5px;color:var(--ink-faint);width:21px;flex-shrink:0;}
+.qm{width:26px;height:32px;border-radius:5px;background:var(--film-bg);flex-shrink:0;position:relative;overflow:hidden;}
+.qm.none{background:var(--bone);border:1px dashed var(--bone-line);}
+.qm svg{position:absolute;inset:0;width:100%;height:100%;stroke:none;}
+.qi{min-width:0;flex:1;}
+.qn{font-size:13.5px;font-weight:500;}
+.qs{font-size:11.5px;color:var(--ink-faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.qt{font-size:10.5px;font-weight:600;padding:3px 7px;border-radius:5px;flex-shrink:0;}
+
+/* detail pane */
+.dt-hd{display:flex;gap:16px;margin-bottom:20px;}
+.dt-gal{display:flex;gap:8px;flex-shrink:0;}
+.dt-f{width:96px;height:124px;background:var(--film-bg);border-radius:9px;position:relative;overflow:hidden;
+  box-shadow:inset 0 0 0 1px var(--film-frame);transition:transform .25s var(--spring);}
+.dt-f:hover{transform:scale(1.03);}
+.dt-f svg{position:absolute;inset:0;width:100%;height:100%;stroke:none;}
+.dt-f span{position:absolute;left:0;right:0;bottom:0;padding:4px 6px;font-size:10px;color:#b6c0cb;
+  background:rgba(0,0,0,.5);text-align:center;letter-spacing:.04em;}
+.dt-nm{font-family:var(--font-display);font-size:29px;font-weight:600;letter-spacing:-.025em;line-height:1.1;}
+.dt-sub{font-size:13px;color:var(--ink-soft);margin-top:4px;}
+.dt-dx{font-size:16px;font-weight:500;margin-top:10px;}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:16px;margin-bottom:14px;}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:13px;}
+.fld label{display:block;font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-faint);font-weight:600;margin-bottom:3px;}
+.fld div{font-size:13.5px;}
+.ck{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--line-soft);font-size:13.5px;}
+.ck:last-child{border:0;}
+.ck-b{width:19px;height:19px;border-radius:6px;border:1.6px solid var(--line);flex-shrink:0;display:grid;place-items:center;transition:all .2s var(--spring);}
+.ck.done .ck-b{background:var(--accent);border-color:var(--accent);color:var(--on-accent);}
+.ck.done span{color:var(--ink-faint);text-decoration:line-through;}
+.ck-b svg{width:11px;height:11px;stroke-width:3;opacity:0;transition:opacity .2s;}
+.ck.done .ck-b svg{opacity:1;}
+.ck-p{margin-left:auto;font-size:10.5px;font-family:var(--mono);color:var(--ink-faint);}
+.ck.due .ck-p{color:var(--bad);font-weight:700;}
+.hist{font-size:12.5px;color:var(--ink-soft);padding:7px 0;border-bottom:1px solid var(--line-soft);display:flex;gap:11px;}
+.hist b{font-family:var(--mono);font-size:11px;color:var(--ink-faint);flex-shrink:0;width:52px;font-weight:500;}
+
+/* board */
+.board{display:grid;grid-template-columns:1fr 1fr;gap:11px;}
+@media(min-width:1100px){.board{grid-template-columns:repeat(4,1fr);}}
+.ch{display:flex;align-items:baseline;gap:7px;margin-bottom:9px;}
+.ch b{font-size:11px;letter-spacing:.09em;text-transform:uppercase;font-weight:600;}
+.ch span{font-family:var(--mono);font-size:11px;color:var(--ink-faint);}
+.tile{background:var(--card);border:1px solid var(--line);border-left:3px solid var(--accent);
+  border-radius:0 var(--radius-sm) var(--radius-sm) 0;padding:9px 11px;margin-bottom:7px;width:100%;
+  text-align:left;transition:transform .2s var(--spring),box-shadow .2s;}
+.tile:hover{transform:translateX(2px);box-shadow:var(--shadow-sm);}
+.tile-t{display:flex;align-items:baseline;gap:6px;}
+.tile-t b{font-family:var(--mono);font-size:11px;color:var(--ink-faint);font-weight:500;}
+.tile-t span{font-size:13px;font-weight:500;}
+.tile-s{font-size:11px;color:var(--ink-faint);margin-top:2px;}
+
+/* table */
+.tbl{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;}
+.tbl th{font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-faint);
+  font-weight:600;text-align:left;padding:11px 13px;border-bottom:1px solid var(--line);background:var(--sunk);}
+.tbl td{padding:11px 13px;font-size:13px;border-bottom:1px solid var(--line-soft);}
+.tbl tr:last-child td{border:0;}
+.tbl tr:hover td{background:var(--sunk);}
+.mono{font-family:var(--mono);font-size:12px;}
+.tbwrap{overflow-x:auto;}
+
+.toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:16px;}
+.inp{border:1px solid var(--line);background:var(--card);border-radius:var(--radius-sm);padding:9px 12px;font-size:13px;outline:none;transition:border-color .2s,box-shadow .2s;}
+.inp:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft);}
+
+/* handover sheet */
+.sheet{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:24px;max-width:660px;}
+.sheet h3{font-family:var(--font-display);font-size:19px;font-weight:600;margin:0 0 3px;}
+.sheet .meta{font-size:12px;color:var(--ink-faint);margin-bottom:18px;padding-bottom:14px;border-bottom:1px solid var(--line);}
+.ho{padding:11px 0;border-bottom:1px solid var(--line-soft);}
+.ho-t{display:flex;align-items:baseline;gap:8px;}
+.ho-t b{font-family:var(--mono);font-size:11.5px;color:var(--ink-faint);font-weight:500;}
+.ho-t strong{font-size:14px;font-weight:600;}
+.ho-t em{font-size:11.5px;color:var(--ink-soft);font-style:normal;}
+.ho-p{font-size:13px;color:var(--ink-soft);margin-top:4px;line-height:1.5;}
+.ho-f{display:inline-block;font-size:11px;font-weight:600;color:var(--bad);background:var(--bad-bg);padding:2px 7px;border-radius:5px;margin-top:5px;}
+
+/* done */
+.done{padding:56px 12px;text-align:center;animation:di .7s var(--spring);}
+@keyframes di{from{opacity:0;transform:scale(.9);}to{opacity:1;transform:none;}}
+.dring{width:104px;height:104px;margin:0 auto 22px;transform:rotate(-90deg);}
+.dring circle{fill:none;stroke-width:4;stroke-linecap:round;}
+.dring .bg{stroke:var(--line);}
+.dring .fg{stroke:var(--accent);stroke-dasharray:295;stroke-dashoffset:295;animation:dr 1.3s .18s var(--ease) forwards;}
+@keyframes dr{to{stroke-dashoffset:0;}}
+.done h2{font-family:var(--font-display);font-size:27px;font-weight:600;letter-spacing:-.02em;margin:0;}
+.done p{font-size:14px;color:var(--ink-soft);margin:8px 0 0;line-height:1.55;}
+.dstats{display:flex;justify-content:center;gap:30px;margin-top:26px;}
+.dstat b{display:block;font-family:var(--mono);font-size:21px;font-weight:700;}
+.dstat span{font-size:10.5px;color:var(--ink-faint);letter-spacing:.05em;text-transform:uppercase;}
+
+/* nav */
+.nav{display:grid;grid-template-columns:repeat(5,1fr);background:color-mix(in srgb,var(--card) 93%,transparent);
+  backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);border-top:1px solid var(--line);
+  padding:7px 0 max(7px,env(safe-area-inset-bottom));z-index:20;}
+.nv{display:flex;flex-direction:column;align-items:center;gap:3px;padding:4px 0;color:var(--ink-faint);
+  font-size:10.5px;font-weight:500;transition:color .2s,transform .2s var(--spring);}
+.nv .ico{width:21px;height:21px;}
+.nv.on,.nv.add{color:var(--accent);}
+.nv:active{transform:scale(.88);}
+
+/* overlays */
+.scrim{position:fixed;inset:0;background:rgba(10,14,20,.5);backdrop-filter:blur(4px);z-index:40;
+  opacity:0;pointer-events:none;transition:opacity .3s;}
+.scrim.on{opacity:1;pointer-events:auto;}
+.pal{position:fixed;left:50%;top:70px;transform:translate(-50%,-14px) scale(.97);width:min(560px,calc(100vw - 24px));
+  background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow-lg);border:1px solid var(--line);
+  overflow:hidden;z-index:41;opacity:0;pointer-events:none;
+  transition:opacity .3s var(--ease),transform .34s var(--spring);}
+.pal.on{opacity:1;transform:translate(-50%,0) scale(1);pointer-events:auto;}
+.pal-in{display:flex;align-items:center;gap:10px;padding:14px 15px;border-bottom:1px solid var(--line);}
+.pal-in input{flex:1;border:0;outline:none;background:none;font-size:15px;}
+.pal-in input::placeholder{color:var(--ink-faint);}
+.kbd{font-family:var(--mono);font-size:10.5px;color:var(--ink-faint);border:1px solid var(--line);border-radius:5px;padding:2px 5px;}
+.pal-l{max-height:min(420px,58vh);overflow-y:auto;padding:6px;}
+.pal-g{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint);font-weight:600;padding:9px 9px 5px;}
+.pi{display:flex;align-items:center;gap:11px;padding:9px 10px;border-radius:var(--radius-sm);width:100%;text-align:left;transition:background .14s;}
+.pi:hover{background:var(--accent-soft);}
+.pi-ic{width:26px;height:26px;border-radius:7px;background:var(--paper);display:grid;place-items:center;flex-shrink:0;color:var(--ink-soft);}
+.pi:hover .pi-ic{color:var(--accent);}
+.pi-ic .ico{width:15px;height:15px;}
+.pi-t{font-size:13.5px;font-weight:500;flex:1;}
+.pi-h{font-size:10.5px;color:var(--ink-faint);font-family:var(--mono);}
+
+.modal{position:fixed;left:50%;top:50%;transform:translate(-50%,-46%) scale(.97);width:min(520px,calc(100vw - 24px));
+  max-height:84vh;overflow-y:auto;background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow-lg);
+  border:1px solid var(--line);z-index:41;opacity:0;pointer-events:none;
+  transition:opacity .3s var(--ease),transform .34s var(--spring);}
+.modal.on{opacity:1;transform:translate(-50%,-50%) scale(1);pointer-events:auto;}
+.md-h{display:flex;align-items:center;padding:16px 18px;border-bottom:1px solid var(--line);}
+.md-h h3{margin:0;font-family:var(--font-display);font-size:17px;font-weight:600;flex:1;}
+.md-b{padding:18px;}
+.md-f{display:flex;gap:9px;justify-content:flex-end;padding:14px 18px;border-top:1px solid var(--line);}
+.frow{margin-bottom:13px;}
+.frow label{display:block;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint);font-weight:600;margin-bottom:5px;}
+.frow input,.frow select{width:100%;border:1px solid var(--line);background:var(--paper);border-radius:var(--radius-sm);padding:10px 12px;font-size:14px;outline:none;}
+.frow input:focus,.frow select:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft);}
+.smart{background:var(--accent-soft);border-radius:var(--radius-sm);padding:11px 13px;font-size:12.5px;color:var(--accent);margin-bottom:15px;display:flex;gap:9px;align-items:flex-start;}
+
+/* present */
+.present{position:fixed;inset:0;background:#05080c;z-index:60;display:none;flex-direction:column;padding:min(5vh,38px) min(5vw,42px);}
+.present.on{display:flex;animation:vi .5s var(--ease);}
+.pr-t{display:flex;align-items:center;justify-content:space-between;color:#4a5b6e;font-size:11px;letter-spacing:.16em;text-transform:uppercase;font-weight:600;}
+.pr-b{flex:1;display:flex;align-items:center;gap:min(5vw,40px);flex-wrap:wrap;}
+.pr-f{width:min(30vw,240px);height:min(42vh,304px);background:#0a0e13;border-radius:13px;flex-shrink:0;position:relative;overflow:hidden;
+  box-shadow:0 0 70px rgba(150,200,230,.12),inset 0 0 0 1px rgba(255,255,255,.07);}
+.pr-f svg{position:absolute;inset:0;width:100%;height:100%;stroke:none;}
+.pr-i{min-width:260px;flex:1;}
+.pr-bd{font-family:var(--mono);font-size:13px;color:#5f7286;letter-spacing:.1em;}
+.pr-n{font-family:var(--font-display);font-size:clamp(30px,5.2vw,54px);font-weight:600;color:#f0f4f8;letter-spacing:-.03em;line-height:1.03;margin:6px 0 12px;}
+.pr-d{font-size:clamp(16px,2vw,22px);color:#b9c6d4;line-height:1.35;}
+.pr-p{font-size:15px;color:#6d7f92;margin-top:7px;}
+.pr-pod{display:inline-block;margin-top:18px;font-family:var(--mono);font-size:14px;font-weight:700;color:#7fe0d2;border:1px solid rgba(127,224,210,.32);border-radius:7px;padding:6px 13px;letter-spacing:.05em;}
+.pr-pl{border-top:1px solid #16202b;margin-top:22px;padding-top:16px;color:#8fa0b3;font-size:16px;line-height:1.5;}
+.pr-pl b{display:block;font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:#4a5b6e;margin-bottom:7px;}
+.pr-nv{display:flex;gap:10px;margin-top:16px;}
+.pr-btn{border:1px solid #1c2836;color:#93a4b7;border-radius:9px;padding:11px 20px;font-size:13.5px;font-weight:600;transition:background .2s,color .2s;}
+.pr-btn:hover{background:#111a24;color:#dce6f0;}
+
+.toast{position:fixed;left:50%;bottom:92px;transform:translate(-50%,14px);background:var(--ink);color:var(--paper);
+  font-size:12.5px;font-weight:500;padding:9px 16px;border-radius:22px;z-index:70;opacity:0;pointer-events:none;
+  transition:all .3s var(--spring);white-space:nowrap;}
+@media(min-width:760px){.toast{bottom:28px;}}
+.toast.on{opacity:1;transform:translate(-50%,0);}
+</style>
+</head>
+<body>
+
+<div class="app">
+
+  <aside class="rail">
+    <div class="rl-brand">
+      <div class="rl-mk">O</div>
+      <div class="rl-tx"><b>Ortho rounds</b><span>Unit II · Ward 3</span></div>
+    </div>
+    <button class="rl on" data-go="round"><svg class="ico"><use href="#i-route"/></svg><span class="rl-lb">Round</span></button>
+    <button class="rl" data-go="ward"><svg class="ico"><use href="#i-board"/></svg><span class="rl-lb">Ward</span></button>
+    <button class="rl" data-go="work"><svg class="ico"><use href="#i-check"/></svg><span class="rl-lb">Work</span></button>
+    <div class="rl-div"></div>
+    <button class="rl" data-go="ot"><svg class="ico"><use href="#i-doc"/></svg><span class="rl-lb">OT list</span></button>
+    <button class="rl" data-go="handover"><svg class="ico"><use href="#i-hand"/></svg><span class="rl-lb">Handover</span></button>
+    <button class="rl" data-go="disch"><svg class="ico"><use href="#i-out"/></svg><span class="rl-lb">Discharged</span></button>
+    <div class="rl-sp"></div>
+    <button class="rl" data-go="admin"><svg class="ico"><use href="#i-set"/></svg><span class="rl-lb">Admin</span></button>
+    <button class="rl" data-act="pal"><svg class="ico"><use href="#i-cmd"/></svg><span class="rl-lb">Go to…</span></button>
+  </aside>
+
+  <div class="main">
+    <header class="hd">
+      <div class="hd-ti"><b id="hTitle">Morning round</b><span id="hSub">Sunday 2 August · Unit II</span></div>
+      <div class="ringw" id="ringWrap">
+        <svg class="ring" viewBox="0 0 36 36"><circle class="bg" cx="18" cy="18" r="15.5"/><circle class="fg" id="ringFg" cx="18" cy="18" r="15.5" stroke-dasharray="97.4" stroke-dashoffset="97.4"/></svg>
+        <div><b id="ringNum">0/8</b><span>seen</span></div>
+      </div>
+      <div class="hd-ac">
+        <button class="ib" id="themeBtn" aria-label="Reading room"><svg class="ico"><use href="#i-moon"/></svg></button>
+        <button class="ib" data-act="pal" aria-label="Command palette"><svg class="ico"><use href="#i-cmd"/></svg></button>
+      </div>
+    </header>
+
+    <div class="spine" id="spine"></div>
+
+    <div class="body">
+      <div class="view on split" id="v-round">
+        <div class="pane-list" id="roundList"></div>
+        <div class="pane-det" id="roundDet"></div>
+      </div>
+      <div class="view" id="v-ward"><div class="full"><div class="board" id="board"></div></div></div>
+      <div class="view split" id="v-work">
+        <div class="pane-list" id="workList"></div>
+        <div class="pane-det" id="workDet"></div>
+      </div>
+      <div class="view" id="v-ot"><div class="full" id="otPane"></div></div>
+      <div class="view" id="v-handover"><div class="full" id="hoPane"></div></div>
+      <div class="view" id="v-disch"><div class="full" id="dcPane"></div></div>
+      <div class="view" id="v-admin"><div class="full" id="adPane"></div></div>
+    </div>
+
+    <nav class="nav">
+      <button class="nv on" data-go="round"><svg class="ico"><use href="#i-route"/></svg>Round</button>
+      <button class="nv" data-go="ward"><svg class="ico"><use href="#i-board"/></svg>Ward</button>
+      <button class="nv add" data-act="add"><svg class="ico"><use href="#i-plus"/></svg>Add</button>
+      <button class="nv" data-go="work"><svg class="ico"><use href="#i-check"/></svg>Work</button>
+      <button class="nv" data-act="pal"><svg class="ico"><use href="#i-cmd"/></svg>Go</button>
+    </nav>
+  </div>
+</div>
+
+<div class="scrim" id="scrim"></div>
+
+<div class="pal" id="pal">
+  <div class="pal-in">
+    <svg class="ico" style="color:var(--ink-faint)"><use href="#i-search"/></svg>
+    <input id="palIn" placeholder="Search patients, or type a command…" autocomplete="off">
+    <span class="kbd">esc</span>
+  </div>
+  <div class="pal-l" id="palList"></div>
+</div>
+
+<div class="modal" id="addModal">
+  <div class="md-h"><h3>New admission</h3><button class="ib" data-close="1"><svg class="ico"><use href="#i-x"/></svg></button></div>
+  <div class="md-b">
+    <div class="smart"><svg class="ico" style="width:16px;height:16px;flex-shrink:0"><use href="#i-spark"/></svg>
+      <span>Paste the admission note or photograph the case sheet — name, age, diagnosis and unit fill themselves.</span></div>
+    <div class="frow"><label>Bed</label><input placeholder="e.g. 15"></div>
+    <div class="frow"><label>Name</label><input placeholder="Patient name"></div>
+    <div class="frow"><label>Age / sex</label><input placeholder="e.g. 45/M"></div>
+    <div class="frow"><label>Diagnosis</label><input placeholder="e.g. Distal femur fracture, left"></div>
+    <div class="frow"><label>Status</label><select><option>Pre-op</option><option>Post-op</option><option>Conservative</option><option>For discharge</option></select></div>
+  </div>
+  <div class="md-f"><button class="btn gh" data-close="1">Cancel</button><button class="btn pri" style="flex:0 0 auto" data-close="1">Add patient</button></div>
+</div>
+
+<div class="present" id="present">
+  <div class="pr-t"><span>Presentation mode</span><span id="prCount">1 of 8</span></div>
+  <div class="pr-b" id="prBody"></div>
+  <div class="pr-nv">
+    <button class="pr-btn" id="prPrev">← Previous</button>
+    <button class="pr-btn" id="prNext">Next →</button>
+    <button class="pr-btn" id="prExit" style="margin-left:auto">Exit</button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<svg class="sr" aria-hidden="true">
+<symbol id="i-route" viewBox="0 0 24 24"><path d="M4 19h5a3 3 0 0 0 0-6H5a3 3 0 0 1 0-6h5"/><circle cx="18.5" cy="17.5" r="2.5"/><circle cx="17" cy="5.5" r="2.5"/></symbol>
+<symbol id="i-board" viewBox="0 0 24 24"><rect x="3" y="4" width="7" height="16" rx="1.5"/><rect x="14" y="4" width="7" height="9" rx="1.5"/></symbol>
+<symbol id="i-check" viewBox="0 0 24 24"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h10"/></symbol>
+<symbol id="i-doc" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></symbol>
+<symbol id="i-hand" viewBox="0 0 24 24"><path d="M14 5l7 7-7 7"/><path d="M21 12H3"/></symbol>
+<symbol id="i-out" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5M21 12H9"/></symbol>
+<symbol id="i-set" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.6 1.7 1.7 0 0 0-1.9.4l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1.1 1.7 1.7 0 0 0-.4-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></symbol>
+<symbol id="i-cmd" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8.5 9.5L11 12l-2.5 2.5M13 15h3"/></symbol>
+<symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></symbol>
+<symbol id="i-moon" viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/></symbol>
+<symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+<symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></symbol>
+<symbol id="i-skip" viewBox="0 0 24 24"><path d="M5 4l10 8-10 8V4zM19 5v14"/></symbol>
+<symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21v-2a5 5 0 0 1 5-5h6a5 5 0 0 1 5 5v2"/></symbol>
+<symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/></symbol>
+<symbol id="i-img" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 15l5-5 4 4 3-3 6 6"/></symbol>
+<symbol id="i-tick" viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></symbol>
+<symbol id="i-list" viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/></symbol>
+</svg>
+
+<script>
+const FILMS={
+ pfn:`<svg viewBox="0 0 60 76" preserveAspectRatio="xMidYMid slice"><ellipse cx="20" cy="17" rx="13" ry="11" fill="#5e646c"/><path d="M14 20L22 68H34L26 20Z" fill="#9aa0a7"/><ellipse cx="21" cy="16" rx="9" ry="8" fill="#c3c8ce"/><rect x="19" y="12" width="4.6" height="56" rx="2.3" fill="#eef1f4" transform="rotate(-5 21 40)"/><rect x="12" y="17" width="22" height="3.4" rx="1.7" fill="#eef1f4" transform="rotate(-32 23 19)"/><circle cx="23" cy="63" r="2.1" fill="#eef1f4"/><circle cx="24" cy="54" r="2.1" fill="#eef1f4"/><path d="M34 8H52V70H36Z" fill="#4a5057" opacity=".5"/></svg>`,
+ plate:`<svg viewBox="0 0 60 76" preserveAspectRatio="xMidYMid slice"><path d="M22 4L20 70H32L31 4Z" fill="#a3a9b0"/><path d="M33 8L34 68H39L38 8Z" fill="#767d85"/><ellipse cx="26" cy="7" rx="9" ry="5" fill="#c9ced3"/><rect x="17" y="22" width="4" height="34" rx="2" fill="#f0f3f6"/><circle cx="19" cy="27" r="2.4" fill="#fbfcfd"/><circle cx="19" cy="37" r="2.4" fill="#fbfcfd"/><circle cx="19" cy="47" r="2.4" fill="#fbfcfd"/><path d="M20 40L31 42" stroke="#3d434a" stroke-width="1.6"/></svg>`,
+ wrist:`<svg viewBox="0 0 60 76" preserveAspectRatio="xMidYMid slice"><path d="M20 68L18 30L28 28L30 68Z" fill="#a0a6ad"/><path d="M32 68L33 32H40L39 68Z" fill="#868d95"/><ellipse cx="27" cy="23" rx="13" ry="8" fill="#c6cbd1"/><rect x="14" y="16" width="26" height="3.2" rx="1.6" fill="#eff2f5"/><rect x="15" y="18" width="3" height="26" rx="1.5" fill="#eff2f5"/><circle cx="21" cy="12" r="3.4" fill="#b5bbc2"/><circle cx="29" cy="10" r="3.4" fill="#b5bbc2"/><circle cx="36" cy="13" r="3.2" fill="#b5bbc2"/></svg>`,
+ spine:`<svg viewBox="0 0 60 76" preserveAspectRatio="xMidYMid slice"><rect x="22" y="8" width="17" height="9" rx="2" fill="#aeb4bb"/><rect x="22" y="20" width="17" height="9" rx="2" fill="#aeb4bb"/><rect x="21" y="32" width="18" height="10" rx="2" fill="#c4c9cf"/><rect x="21" y="45" width="18" height="10" rx="2" fill="#aeb4bb"/><rect x="21" y="58" width="18" height="10" rx="2" fill="#aeb4bb"/><rect x="17" y="30" width="3.4" height="40" rx="1.7" fill="#f0f3f6"/><rect x="40" y="30" width="3.4" height="40" rx="1.7" fill="#f0f3f6"/><circle cx="19" cy="35" r="2.6" fill="#fafbfc"/><circle cx="42" cy="35" r="2.6" fill="#fafbfc"/><circle cx="19" cy="61" r="2.6" fill="#fafbfc"/><circle cx="42" cy="61" r="2.6" fill="#fafbfc"/></svg>`,
+ knee:`<svg viewBox="0 0 60 76" preserveAspectRatio="xMidYMid slice"><path d="M20 2L18 30H36L34 2Z" fill="#9ba1a8"/><ellipse cx="21" cy="34" rx="9" ry="7" fill="#c6cbd1"/><ellipse cx="34" cy="34" rx="9" ry="7" fill="#c6cbd1"/><path d="M19 42L21 74H35L34 42Z" fill="#9ba1a8"/><ellipse cx="27" cy="28" rx="6" ry="4" fill="#dfe2e6"/><rect x="16" y="30" width="24" height="5" rx="2.5" fill="#eef1f4"/></svg>`
+};
+const P=[
+ {bed:'07',name:'A. Iyer',age:'71/F',sex:'F',uhid:'MH-241087',adm:'30 Jul',surgeon:'Dr Menon',unit:'Unit II',
+  dx:'Neck of femur fracture, left',proc:'Hemiarthroplasty · 30 Jul · OT 08:15',implant:'Bipolar prosthesis, cemented',
+  films:['pfn','plate'],pod:3,status:'postop',stat:'Post-op',
+  track:[['op',0,'done'],['POD 3',34,'now'],['suture',60,'due'],['discharge',100,'']],
+  flags:[['bad','Ceftriaxone day 5 — stop today'],['warn','Hb 8.4, recheck']],
+  checks:[['Drain removal','POD 1',1],['Sit out of bed','POD 2',1],['Suture removal','POD 12',0],['Hip X-ray check','POD 14',0]],
+  dcChecks:[['Discharge summary',0],['Physio handout',0],['Follow-up date',0]],
+  labs:'Hb 8.4 · TLC 11.2 · Cr 0.9 · Na 138',plan:'',
+  hist:[['1 Aug','Mobilise with walker, chest physio, review Hb'],['31 Jul','Drain out, start sitting'],['30 Jul','Post-op day 0, monitor vitals']]},
+
+ {bed:'09',name:'S. Devi',age:'34/F',sex:'F',uhid:'MH-241102',adm:'1 Aug',surgeon:'Dr Rao',unit:'Unit II',
+  dx:'Distal radius fracture, right',proc:'For ORIF · OT today 11:00',implant:'Volar locking plate planned',
+  films:[],pod:null,status:'preop',stat:'Pre-op',
+  track:[['admit',0,'done'],['consent',30,'now'],['surgery',62,'due'],['POD 1',100,'']],
+  flags:[['warn','Consent not signed'],['bad','Anaesthesia fitness pending']],
+  checks:[['Pre-op labs','on admission',1],['Consent','before OT',0],['Anaesthesia fitness','before OT',0],['NBM from midnight','pre-op',1]],
+  dcChecks:[],labs:'Hb 12.1 · TLC 8.4 · PT/INR 1.0',plan:'',
+  hist:[['1 Aug','NBM from midnight, pre-op labs sent']]},
+
+ {bed:'12',name:'R. Kumar',age:'62/M',sex:'M',uhid:'MH-240981',adm:'29 Jul',surgeon:'Dr Menon',unit:'Unit II',
+  dx:'Intertrochanteric femur fracture, right',proc:'PFN · 29 Jul · OT 09:30',implant:'Proximal femoral nail, long',
+  films:['pfn'],pod:4,status:'postop',stat:'Post-op',
+  track:[['op',0,'done'],['POD 4',42,'now'],['suture',68,''],['discharge',100,'']],
+  flags:[['ok','Wound healthy'],['warn','Not yet mobilised']],
+  checks:[['Drain removal','POD 1',1],['Sit out of bed','POD 2',1],['Stand with walker','POD 4',0],['Suture removal','POD 12',0]],
+  dcChecks:[['Discharge summary',0],['Follow-up date',0]],
+  labs:'Hb 10.8 · TLC 9.1 · Cr 1.1',plan:'',
+  hist:[['1 Aug','Sit-out of bed, physio review, continue analgesia'],['31 Jul','Dressing change, wound clean']]},
+
+ {bed:'14',name:'M. Bose',age:'28/M',sex:'M',uhid:'MH-240874',adm:'27 Jul',surgeon:'Dr Shah',unit:'Unit II',
+  dx:'Tibial shaft fracture, left',proc:'Plating · 27 Jul · OT 14:00',implant:'Locking compression plate, 4.5mm',
+  films:['plate','knee'],pod:6,status:'discharge',stat:'For discharge',
+  track:[['op',0,'done'],['suture',48,'done'],['POD 6',66,'now'],['discharge',100,'due']],
+  flags:[['ok','Sutures removed'],['ok','Full weight bearing']],
+  checks:[['Drain removal','POD 1',1],['Suture removal','POD 5',1],['Weight bearing','POD 6',1]],
+  dcChecks:[['Discharge summary',1],['Physio handout',1],['Follow-up date',0],['Medication list',0]],
+  labs:'Hb 13.2 · TLC 7.6',plan:'',
+  hist:[['1 Aug','Discharge planning, wound check, physio handout'],['30 Jul','Sutures out, wound healthy']]},
+
+ {bed:'17',name:'P. Nair',age:'55/F',sex:'F',uhid:'MH-240912',adm:'28 Jul',surgeon:'Dr Rao',unit:'Unit II',
+  dx:'Lumbar canal stenosis L4–L5',proc:'Decompression · 28 Jul · OT 10:45',implant:'None — decompression only',
+  films:['spine'],pod:5,status:'postop',stat:'Post-op',
+  track:[['op',0,'done'],['drain out',36,'done'],['POD 5',58,'now'],['discharge',100,'']],
+  flags:[['warn','Backache on mobilising']],
+  checks:[['Drain removal','POD 2',1],['Brace fitting','POD 2',1],['Independent walk','POD 5',0],['Suture removal','POD 12',0]],
+  dcChecks:[['Discharge summary',0],['Brace instructions',0]],
+  labs:'Hb 11.6 · TLC 8.8 · Cr 0.8',plan:'',
+  hist:[['1 Aug','Brace on ambulation, neuro chart 4-hourly'],['30 Jul','Drain removed, neurologically intact']]},
+
+ {bed:'18',name:'K. Shah',age:'44/M',sex:'M',uhid:'MH-241095',adm:'31 Jul',surgeon:'Dr Shah',unit:'Unit II',
+  dx:'Colles fracture, right — conservative',proc:'Below-elbow cast · 31 Jul',implant:'—',
+  films:['wrist'],pod:null,status:'conservative',stat:'Conservative',
+  track:[['cast',0,'done'],['day 2',40,'now'],['check XR',70,''],['cast off',100,'']],
+  flags:[['ok','Neurovascular intact']],
+  checks:[['Cast check','day 1',1],['Check X-ray','day 7',0],['Cast removal','week 6',0]],
+  dcChecks:[['Cast care leaflet',0]],labs:'Not indicated',plan:'',
+  hist:[['1 Aug','Limb elevation, finger exercises hourly']]},
+
+ {bed:'21',name:'T. Rao',age:'67/M',sex:'M',uhid:'MH-240855',adm:'26 Jul',surgeon:'Dr Menon',unit:'Unit II',
+  dx:'Osteoarthritis both knees, grade IV',proc:'For TKR · date pending',implant:'Cemented total knee planned',
+  films:['knee'],pod:null,status:'preop',stat:'Pre-op',
+  track:[['admit',0,'done'],['workup',38,'now'],['surgery',72,''],['POD 1',100,'']],
+  flags:[['warn','Cardiac clearance awaited']],
+  checks:[['Pre-op labs','on admission',1],['Physician clearance','pre-op',1],['Cardiac echo','pre-op',0],['Consent','before OT',0]],
+  dcChecks:[],labs:'Hb 13.8 · TLC 7.2 · HbA1c 6.4',plan:'',
+  hist:[['1 Aug','Await echo report, physio pre-hab started'],['29 Jul','Physician review done']]},
+
+ {bed:'23',name:'L. Menon',age:'39/F',sex:'F',uhid:'MH-241110',adm:'1 Aug',surgeon:'Dr Shah',unit:'Unit II',
+  dx:'Ankle fracture-dislocation, right',proc:'ORIF · 1 Aug · OT 16:20',implant:'One-third tubular plate + syndesmotic screw',
+  films:['plate'],pod:1,status:'postop',stat:'Post-op',
+  track:[['op',0,'done'],['POD 1',26,'now'],['suture',66,''],['discharge',100,'']],
+  flags:[['bad','Swelling — elevate and review'],['warn','Pain score 7']],
+  checks:[['Neurovascular check','POD 0',1],['Elevation','POD 0',1],['Suture removal','POD 14',0]],
+  dcChecks:[['Discharge summary',0],['Non weight bearing advice',0]],
+  labs:'Hb 12.4 · TLC 10.1',plan:'',
+  hist:[['1 Aug','Strict elevation, ice, non weight bearing']]}
+];
+const DISCHARGED=[
+ ['02','V. Pillai','58/M','Femur shaft fracture','Nailing','28 Jul','12 days'],
+ ['05','N. Gupta','23/F','Clavicle fracture','Conservative','30 Jul','4 days'],
+ ['11','D. Sharma','66/M','Total hip replacement','THR','29 Jul','9 days'],
+ ['15','J. Thomas','41/M','Calcaneal fracture','ORIF','31 Jul','7 days']
+];
+const OT=[
+ ['1','09','S. Devi','34/F','Distal radius fracture, right','ORIF volar plate','Dr Rao','11:00'],
+ ['2','21','T. Rao','67/M','Osteoarthritis both knees','Total knee replacement','Dr Menon','13:30'],
+ ['3','—','B. Krishnan','52/M','Rotator cuff tear','Arthroscopic repair','Dr Shah','15:45']
+];
+const ACTIONS=[
+ ['Most used','Presentation mode','present','⇧P','present'],
+ ['Most used','Generate handover','handover','⇧H','hand'],
+ ['Most used','Morning brief','brief','','spark'],
+ ['Most used','Check ward for risks','risk','','spark'],
+ ['Documents','OT list','ot','','doc'],
+ ['Documents','Handover sheet','handover','','doc'],
+ ['Documents','Census','census','','doc'],
+ ['Documents','Discharged patients','disch','','out'],
+ ['Documents','Export backup','x','','doc'],
+ ['Documents','Import backup','x','','doc'],
+ ['Ward','Bulk plan select','x','','list'],
+ ['Ward','Organize patients','x','','list'],
+ ['Ward','Unit handover note','x','','hand'],
+ ['Ward','PG roster','x','','user'],
+ ['Ward','Default unit','x','','set'],
+ ['Ward','Default OT doctors','x','','user'],
+ ['Ward','Templates','x','','doc'],
+ ['Settings','Consultant mode','x','','user'],
+ ['Settings','Reading room','dark','⇧D','moon'],
+ ['Settings','Change password','x','','set'],
+ ['Settings','Admin console','admin','','set'],
+ ['Settings','Refresh from server','x','','set']
+];
+
+let idx=0,seen=new Set(),view='round',prIdx=0,workSel=0;
+const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)];
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const ic=n=>`<svg class="ico"><use href="#i-${n}"/></svg>`;
+function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('on');clearTimeout(toast._t);toast._t=setTimeout(()=>t.classList.remove('on'),1900);}
+
+const TITLES={round:['Morning round','Sunday 2 August · Unit II'],ward:['Ward board','24 beds · Unit II · Ward 3'],
+ work:['Work','What needs doing today'],ot:['OT list','Sunday 2 August'],handover:['Handover','Night shift · generated now'],
+ disch:['Discharged','Last 30 days'],admin:['Admin console','Sunrise Ortho Hospital']};
+
+function renderSpine(){
+ $('#spine').innerHTML=P.map((p,i)=>{
+  const c=[i===idx?'now':'',seen.has(i)?'seen':'',p.flags.some(f=>f[0]==='bad')?'flag':''].filter(Boolean).join(' ');
+  return `<button class="sp ${c}" data-jump="${i}" title="${esc(p.name)}">${p.bed}<span class="d"></span></button>`;}).join('');
+ const pct=seen.size/P.length;
+ $('#ringFg').style.strokeDashoffset=97.4*(1-pct);
+ $('#ringNum').textContent=`${seen.size}/${P.length}`;
+}
+function trackHTML(p){
+ return `<div class="trk"><div class="trk-r"><div class="trk-f" style="width:${p.track.find(t=>t[2]==='now')?.[1]||0}%"></div>
+ ${p.track.map(([l,x,s])=>`<div class="st ${s}" style="left:${x}%"><i></i><b>${esc(l)}</b></div>`).join('')}</div><div class="trk-lg"></div></div>`;
+}
+function heroHTML(p){
+ const f=p.films[0]?FILMS[p.films[0]]:null;
+ return `<div class="hero">
+  <div class="hero-lb"><span class="pls"></span>At the bedside</div>
+  <div class="hero-tp">
+   <div class="film">${f?`<div class="fbox" data-film="1">${f}</div>`:`<div class="fnone">${ic('img')}</div>`}
+    <div class="fcap">${p.films.length?p.films.length+' film'+(p.films.length>1?'s':'')+' · tap':'no imaging'}</div></div>
+   <div class="who"><div class="w-bed">BED ${p.bed}</div><div class="w-nm">${esc(p.name)}</div>
+    <div class="w-mt">${esc(p.age)} · ${esc(p.stat)}</div><div class="w-dx">${esc(p.dx)}</div>
+    <div class="w-pr">${esc(p.proc)}</div></div></div>
+  ${trackHTML(p)}
+  <div class="flags">${p.flags.map(([k,t])=>`<span class="fl ${k}">${esc(t)}</span>`).join('')}</div>
+  <div class="plan"><div class="lbl" style="margin-bottom:6px">Today's plan</div>
+   <input class="pin" id="planIn" placeholder="What are we doing today?" value="${esc(p.plan)}">
+   <div class="pyest">Yesterday: ${esc(p.hist[0]?.[1]||'—')} <button data-copy="1">Use this</button></div></div>
+  <div class="bar"><button class="btn pri" data-seen="1">Seen — next patient</button>
+   <button class="btn gh sq" data-skip="1" title="Skip">${ic('skip')}</button></div></div>`;
+}
+function rowHTML(i,sel){
+ const p=P[i],f=p.films[0]?FILMS[p.films[0]]:null,bad=p.flags.find(x=>x[0]==='bad');
+ return `<button class="qr ${sel?'on':''} ${seen.has(i)?'seen':''}" data-jump="${i}">
+  <span class="qb">${p.bed}</span><span class="qm ${f?'':'none'}">${f||''}</span>
+  <span class="qi"><span class="qn">${esc(p.name)}</span><span class="qs">${esc(p.dx)}</span></span>
+  ${bad?`<span class="qt" style="background:var(--bad-bg);color:var(--bad)">review</span>`
+      :`<span class="qt" style="background:var(--paper);color:var(--ink-faint)">${p.pod!=null?'POD '+p.pod:p.stat}</span>`}</button>`;
+}
+function detailHTML(p){
+ return `<div class="dt-hd">
+  <div class="dt-gal">${p.films.length?p.films.map((k,n)=>`<div class="dt-f" data-film="1">${FILMS[k]}<span>${n===0?'pre-op':'post-op'}</span></div>`).join('')
+   :`<div class="fnone" style="width:96px;height:124px">${ic('img')}</div>`}</div>
+  <div><div class="w-bed">BED ${p.bed} · ${esc(p.uhid)}</div><div class="dt-nm">${esc(p.name)}</div>
+   <div class="dt-sub">${esc(p.age)} · ${esc(p.stat)} · admitted ${esc(p.adm)} · ${esc(p.surgeon)}</div>
+   <div class="dt-dx">${esc(p.dx)}</div><div class="w-pr">${esc(p.proc)}</div>
+   <div class="flags" style="padding:0;margin-top:11px">${p.flags.map(([k,t])=>`<span class="fl ${k}">${esc(t)}</span>`).join('')}</div></div></div>
+ <div class="card" style="padding-bottom:8px">${trackHTML(p).replace('class="trk"','class="trk" style="margin:4px 0 0"')}</div>
+ <div class="card"><div class="lbl">Today's plan</div>
+  <input class="pin" data-plan="1" placeholder="What are we doing today?" value="${esc(p.plan)}">
+  <div class="lbl mt">Plan history</div>
+  ${p.hist.map(([d,t])=>`<div class="hist"><b>${esc(d)}</b><span>${esc(t)}</span></div>`).join('')}</div>
+ <div class="grid2">
+  <div class="card"><div class="lbl">Milestones</div>
+   ${p.checks.map(([l,d,done],n)=>`<div class="ck ${done?'done':''} ${!done&&n<2?'due':''}" data-ck="${n}"><span class="ck-b">${ic('tick')}</span><span>${esc(l)}</span><span class="ck-p">${esc(d)}</span></div>`).join('')}</div>
+  <div class="card"><div class="lbl">Discharge checklist</div>
+   ${p.dcChecks.length?p.dcChecks.map(([l,done])=>`<div class="ck ${done?'done':''}"><span class="ck-b">${ic('tick')}</span><span>${esc(l)}</span></div>`).join('')
+    :`<div style="font-size:13px;color:var(--ink-faint);padding:8px 0">Not started — patient is ${esc(p.stat.toLowerCase())}.</div>`}</div></div>
+ <div class="card"><div class="lbl">Record</div><div class="grid2">
+  <div class="fld"><label>UHID</label><div class="mono">${esc(p.uhid)}</div></div>
+  <div class="fld"><label>Admission</label><div>${esc(p.adm)}</div></div>
+  <div class="fld"><label>Surgeon</label><div>${esc(p.surgeon)}</div></div>
+  <div class="fld"><label>Unit</label><div>${esc(p.unit)}</div></div>
+  <div class="fld"><label>Implant</label><div>${esc(p.implant)}</div></div>
+  <div class="fld"><label>Latest labs</label><div class="mono">${esc(p.labs)}</div></div></div></div>`;
+}
+function doneHTML(){
+ return `<div class="done"><svg class="dring" viewBox="0 0 104 104"><circle class="bg" cx="52" cy="52" r="47"/><circle class="fg" cx="52" cy="52" r="47"/></svg>
+ <h2>Round complete</h2><p>All ${P.length} patients seen and planned.<br>Handover is ready to send.</p>
+ <div class="dstats"><div class="dstat"><b>${P.length}</b><span>seen</span></div><div class="dstat"><b>26</b><span>minutes</span></div><div class="dstat"><b>3</b><span>flagged</span></div></div>
+ <div style="display:flex;gap:9px;justify-content:center;margin-top:26px">
+  <button class="btn pri" style="flex:0 0 auto" data-go="handover">Open handover</button>
+  <button class="btn gh" data-reset="1">Start again</button></div></div>`;
+}
+function renderRound(){
+ const wide=window.innerWidth>=1100;
+ if(seen.size===P.length&&!wide){$('#roundList').innerHTML=doneHTML();return;}
+ const order=P.map((_,i)=>i);
+ if(wide){
+  $('#roundList').innerHTML=`<div class="lbl">The round · ${seen.size} of ${P.length} seen</div>`+order.map(i=>rowHTML(i,i===idx)).join('');
+  $('#roundDet').innerHTML=seen.size===P.length?doneHTML():detailHTML(P[idx])+
+   `<div style="display:flex;gap:9px;margin-top:4px"><button class="btn pri" style="flex:0 0 auto" data-seen="1">Seen — next patient</button>
+    <button class="btn gh" data-skip="1">Skip for now</button></div>`;
+ }else{
+  const nxt=[];for(let k=1;k<=3;k++){const i=(idx+k)%P.length;if(!seen.has(i))nxt.push(i);}
+  $('#roundList').innerHTML=heroHTML(P[idx])+(nxt.length?`<div class="lbl mt">Up next</div>`+nxt.map(i=>rowHTML(i)).join(''):'');
+  $('#roundDet').innerHTML='';
+ }
+}
+function renderBoard(){
+ const cols=[['preop','Pre-op','var(--accent)'],['postop','Post-op','var(--ink-soft)'],
+  ['conservative','Conservative','var(--bone-ink)'],['discharge','For discharge','var(--good)']];
+ $('#board').innerHTML=cols.map(([k,l,c])=>{
+  const list=P.map((p,i)=>[p,i]).filter(([p])=>p.status===k);
+  return `<div><div class="ch"><b style="color:${c}">${l}</b><span>${list.length}</span></div>
+  ${list.map(([p,i])=>{const bad=p.flags.find(f=>f[0]==='bad');
+   return `<button class="tile" data-jump="${i}" style="border-left-color:${bad?'var(--bad)':c}">
+    <span class="tile-t"><b>${p.bed}</b><span>${esc(p.name)}</span></span>
+    <span class="tile-s" style="${bad?'color:var(--bad)':''}">${esc(bad?bad[1]:(p.pod!=null?'POD '+p.pod:p.dx))}</span></button>`;}).join('')}</div>`;}).join('');
+}
+function renderWork(){
+ const items=[];P.forEach((p,i)=>p.flags.forEach(([k,t])=>{if(k!=='ok')items.push([i,k,t]);}));
+ items.sort((a,b)=>(a[1]==='bad'?0:1)-(b[1]==='bad'?0:1));
+ if(workSel>=items.length)workSel=0;
+ const grp=(k,l)=>{const g=items.map((x,n)=>[x,n]).filter(([x])=>x[1]===k);
+  return g.length?`<div class="lbl ${k==='warn'?'mt':''}">${l}</div>`+g.map(([[i,kk,t],n])=>{const p=P[i];
+   return `<button class="qr ${n===workSel?'on':''}" data-work="${n}" data-jump="${i}">
+    <span class="qb">${p.bed}</span><span class="qi"><span class="qn">${esc(t)}</span><span class="qs">${esc(p.name)} · ${esc(p.dx)}</span></span>
+    <span class="qt" style="background:var(--${kk}-bg);color:var(--${kk})">${kk==='bad'?'urgent':'today'}</span></button>`;}).join(''):'';};
+ $('#workList').innerHTML=grp('bad','Urgent — do now')+grp('warn','Today');
+ const sel=items[workSel];
+ $('#workDet').innerHTML=sel?detailHTML(P[sel[0]]):'';
+}
+function renderOT(){
+ $('#otPane').innerHTML=`<div class="toolbar">
+  <input class="inp" type="date" value="2026-08-02"><button class="btn gh">Download Word</button>
+  <button class="btn gh">Print / PDF</button><button class="btn gh">Default doctors</button></div>
+ <div class="tbwrap"><table class="tbl"><thead><tr><th>#</th><th>Bed</th><th>Name</th><th>Age/Sex</th><th>Diagnosis</th><th>Procedure</th><th>Surgeon</th><th>Time</th></tr></thead>
+ <tbody>${OT.map(r=>`<tr><td class="mono">${r[0]}</td><td class="mono">${r[1]}</td><td style="font-weight:500">${esc(r[2])}</td><td>${r[3]}</td><td>${esc(r[4])}</td><td>${esc(r[5])}</td><td>${esc(r[6])}</td><td class="mono">${r[7]}</td></tr>`).join('')}</tbody></table></div>
+ <p style="font-size:12.5px;color:var(--ink-faint);margin-top:14px">Formatted to the hospital OT list template. Word export preserves the header block and signature lines.</p>`;
+}
+function renderHandover(){
+ $('#hoPane').innerHTML=`<div class="toolbar"><button class="btn pri" style="flex:0 0 auto">Copy for WhatsApp</button>
+  <button class="btn gh">Download Word</button><button class="btn gh">Print</button></div>
+ <div class="sheet"><h3>Unit II — evening handover</h3>
+  <div class="meta">Sunday 2 August, 18:30 · 8 inpatients · handed to Dr A. Verma</div>
+  ${P.map(p=>{const bad=p.flags.find(f=>f[0]==='bad');
+   return `<div class="ho"><div class="ho-t"><b>${p.bed}</b><strong>${esc(p.name)}</strong><em>${esc(p.age)} · ${p.pod!=null?'POD '+p.pod:esc(p.stat)}</em></div>
+   <div class="ho-p">${esc(p.dx)} — ${esc(p.plan||p.hist[0]?.[1]||'plan not entered')}</div>
+   ${bad?`<span class="ho-f">${esc(bad[1])}</span>`:''}</div>`;}).join('')}
+  <p style="font-size:12px;color:var(--ink-faint);margin:16px 0 0">Generated from today's plans and open flags. Edit before sending.</p></div>`;
+}
+function renderDisch(){
+ $('#dcPane').innerHTML=`<div class="toolbar"><input class="inp" placeholder="Search discharged patients…" style="min-width:260px"></div>
+ <div class="tbwrap"><table class="tbl"><thead><tr><th>Bed</th><th>Name</th><th>Age/Sex</th><th>Diagnosis</th><th>Procedure</th><th>Discharged</th><th>Stay</th></tr></thead>
+ <tbody>${DISCHARGED.map(r=>`<tr><td class="mono">${r[0]}</td><td style="font-weight:500">${esc(r[1])}</td><td>${r[2]}</td><td>${esc(r[3])}</td><td>${esc(r[4])}</td><td>${r[5]}</td><td class="mono">${r[6]}</td></tr>`).join('')}</tbody></table></div>`;
+}
+function renderAdmin(){
+ $('#adPane').innerHTML=`<div class="grid2" style="margin-bottom:16px">
+  ${[['Organisations','1'],['Departments','4'],['Units','9'],['People','37']].map(([l,v])=>
+   `<div class="card" style="margin:0"><div class="lbl">${l}</div><div style="font-family:var(--mono);font-size:26px;font-weight:700">${v}</div></div>`).join('')}</div>
+ <div class="lbl">People</div>
+ <div class="tbwrap"><table class="tbl"><thead><tr><th>Name</th><th>Role</th><th>Scope</th><th>Last active</th><th>Status</th></tr></thead><tbody>
+ ${[['Dr S. Menon','Consultant','Ortho · Unit II','2 min ago','Active'],
+    ['Dr A. Verma','Registrar','Ortho · Unit II','14 min ago','Active'],
+    ['Dr K. Pillai','PG year 2','Ortho · Unit II · Ward 3','1 h ago','Active'],
+    ['Dr N. Das','PG year 1','Ortho · Unit II · Ward 3','3 h ago','Active'],
+    ['Sr. M. Joseph','Nurse','Ward 3','—','Invited']].map(r=>
+  `<tr><td style="font-weight:500">${esc(r[0])}</td><td>${esc(r[1])}</td><td class="mono" style="font-size:11.5px">${esc(r[2])}</td><td>${r[3]}</td>
+   <td><span class="qt" style="background:var(--${r[4]==='Active'?'good':'warn'}-bg);color:var(--${r[4]==='Active'?'good':'warn'})">${r[4]}</span></td></tr>`).join('')}</tbody></table></div>
+ <div class="lbl mt">Structure</div>
+ <div class="card"><div style="font-family:var(--mono);font-size:12.5px;line-height:2;color:var(--ink-soft)">
+  Sunrise Ortho Hospital<br>&nbsp;&nbsp;└ Orthopaedics<br>&nbsp;&nbsp;&nbsp;&nbsp;├ Unit I &nbsp;<span style="color:var(--ink-faint)">— 2 wards</span><br>
+  &nbsp;&nbsp;&nbsp;&nbsp;├ Unit II &nbsp;<span style="color:var(--accent)">— Ward 3 · Ward 5</span><br>
+  &nbsp;&nbsp;&nbsp;&nbsp;└ Unit III <span style="color:var(--ink-faint)">— 1 ward</span></div></div>`;
+}
+function renderPal(q=''){
+ const t=q.trim().toLowerCase();let h='';
+ if(t){
+  const pm=P.map((p,i)=>[p,i]).filter(([p])=>(p.name+p.bed+p.dx).toLowerCase().includes(t));
+  if(pm.length)h+=`<div class="pal-g">Patients</div>`+pm.map(([p,i])=>
+   `<button class="pi" data-jump="${i}" data-close="1"><span class="pi-ic">${ic('user')}</span><span class="pi-t">${esc(p.name)}</span><span class="pi-h">bed ${p.bed}</span></button>`).join('');
+  const am=ACTIONS.filter(a=>a[1].toLowerCase().includes(t));
+  if(am.length)h+=`<div class="pal-g">Actions</div>`+am.map(a=>
+   `<button class="pi" data-act="${a[2]}"><span class="pi-ic">${ic(a[4])}</span><span class="pi-t">${esc(a[1])}</span><span class="pi-h">${a[3]}</span></button>`).join('');
+  if(!h)h=`<div class="pal-g">No match</div>`;
+ }else{
+  ['Most used','Documents','Ward','Settings'].forEach(g=>{
+   h+=`<div class="pal-g">${g}</div>`+ACTIONS.filter(a=>a[0]===g).map(a=>
+    `<button class="pi" data-act="${a[2]}"><span class="pi-ic">${ic(a[4])}</span><span class="pi-t">${esc(a[1])}</span><span class="pi-h">${a[3]}</span></button>`).join('');});
+ }
+ $('#palList').innerHTML=h;
+}
+function renderPresent(){
+ const p=P[prIdx],f=p.films[0]?FILMS[p.films[0]]:'';
+ $('#prCount').textContent=`${prIdx+1} of ${P.length}`;
+ $('#prBody').innerHTML=`<div class="pr-f">${f}</div><div class="pr-i">
+  <div class="pr-bd">BED ${p.bed}</div><div class="pr-n">${esc(p.name)}</div>
+  <div class="pr-d">${esc(p.dx)}</div><div class="pr-p">${esc(p.age)} · ${esc(p.proc)}</div>
+  <div class="pr-pod">${p.pod!=null?'POST-OP DAY '+p.pod:p.stat.toUpperCase()}</div>
+  <div class="pr-pl"><b>Plan</b>${esc(p.plan||p.hist[0]?.[1]||'—')}</div></div>`;
+}
+function go(v){
+ view=v;
+ $$('.view').forEach(e=>e.classList.toggle('on',e.id==='v-'+v));
+ $$('.rl,.nv').forEach(b=>b.classList.toggle('on',b.dataset.go===v));
+ const[t,s]=TITLES[v]||['',''];$('#hTitle').textContent=t;$('#hSub').textContent=s;
+ $('#spine').style.display=v==='round'?'':'none';
+ $('#ringWrap').style.display=v==='round'?'':'none';
+ ({ward:renderBoard,work:renderWork,ot:renderOT,handover:renderHandover,disch:renderDisch,admin:renderAdmin,round:renderRound}[v]||(()=>{}))();
+}
+function openPal(o){$('#pal').classList.toggle('on',o);$('#scrim').classList.toggle('on',o);
+ if(o){$('#palIn').value='';renderPal();setTimeout(()=>$('#palIn').focus(),90);}}
+function openAdd(o){$('#addModal').classList.toggle('on',o);$('#scrim').classList.toggle('on',o);}
+function setTheme(d){document.documentElement.setAttribute('data-theme',d?'dark':'light');toast(d?'Reading room on':'Reading room off');}
+function advance(){seen.add(idx);let n=idx;
+ for(let k=1;k<=P.length;k++){const c=(idx+k)%P.length;if(!seen.has(c)){n=c;break;}}
+ idx=n;renderSpine();renderRound();}
+
+document.addEventListener('click',e=>{
+ const w=e.target.closest('[data-work]');if(w)workSel=+w.dataset.work;
+ const j=e.target.closest('[data-jump]');
+ if(j){idx=+j.dataset.jump;
+  if(view==='work'){renderWork();openPal(false);return;}
+  if(view!=='round')go('round');renderSpine();renderRound();
+  if(j.closest('.pal'))openPal(false);return;}
+ if(e.target.closest('[data-seen]')){advance();toast('Marked seen');return;}
+ if(e.target.closest('[data-skip]')){let n=idx;
+  for(let k=1;k<=P.length;k++){const c=(idx+k)%P.length;if(!seen.has(c)){n=c;break;}}
+  idx=n;renderSpine();renderRound();toast('Skipped — still on the list');return;}
+ if(e.target.closest('[data-copy]')){const i=$('#planIn');i.value=P[idx].hist[0]?.[1]||'';P[idx].plan=i.value;i.focus();toast("Yesterday's plan copied");return;}
+ if(e.target.closest('[data-reset]')){seen.clear();idx=0;renderSpine();renderRound();return;}
+ if(e.target.closest('[data-film]')){toast('Full-screen film viewer · pinch to zoom');return;}
+ const ck=e.target.closest('[data-ck]');
+ if(ck){const p=view==='work'?null:P[idx];if(p){p.checks[+ck.dataset.ck][2]^=1;renderRound();toast('Milestone updated');}return;}
+ if(e.target.closest('[data-close]')){openAdd(false);openPal(false);return;}
+ const g=e.target.closest('[data-go]');if(g){go(g.dataset.go);return;}
+ const a=e.target.closest('[data-act]');
+ if(a){const k=a.dataset.act;
+  if(k==='pal'){openPal(true);}
+  else if(k==='add'){openAdd(true);}
+  else if(k==='present'){openPal(false);prIdx=0;renderPresent();$('#present').classList.add('on');}
+  else if(k==='dark'){openPal(false);setTheme(document.documentElement.getAttribute('data-theme')!=='dark');}
+  else if(TITLES[k]){openPal(false);go(k);}
+  else{openPal(false);toast(a.querySelector('.pi-t')?.textContent||'Done');}
+  return;}
+ if(e.target.id==='scrim'){openPal(false);openAdd(false);}
+ if(e.target.closest('#themeBtn'))setTheme(document.documentElement.getAttribute('data-theme')!=='dark');
+ if(e.target.closest('#prExit'))$('#present').classList.remove('on');
+ if(e.target.closest('#prNext')){prIdx=(prIdx+1)%P.length;renderPresent();}
+ if(e.target.closest('#prPrev')){prIdx=(prIdx-1+P.length)%P.length;renderPresent();}
+});
+document.addEventListener('input',e=>{
+ if(e.target.id==='palIn')renderPal(e.target.value);
+ if(e.target.id==='planIn'||e.target.dataset.plan)P[idx].plan=e.target.value;
+});
+document.addEventListener('keydown',e=>{
+ if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k'){e.preventDefault();openPal(!$('#pal').classList.contains('on'));}
+ if(e.key==='Escape'){openPal(false);openAdd(false);$('#present').classList.remove('on');}
+ if($('#present').classList.contains('on')){
+  if(e.key==='ArrowRight'){prIdx=(prIdx+1)%P.length;renderPresent();}
+  if(e.key==='ArrowLeft'){prIdx=(prIdx-1+P.length)%P.length;renderPresent();}}
+});
+let rt;addEventListener('resize',()=>{clearTimeout(rt);rt=setTimeout(()=>{if(view==='round')renderRound();},160);});
+renderSpine();renderRound();renderPal();
+</script>
+</body>
+</html>

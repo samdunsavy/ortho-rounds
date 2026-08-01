@@ -1,0 +1,756 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Ortho Rounds — Round v2 prototype</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Fraunces:opsz,wght@9..144,500;9..144,600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --font-sans:"DM Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  --font-display:"Fraunces",Georgia,serif;
+  --mono:"JetBrains Mono","SF Mono",Consolas,monospace;
+
+  --ink:#1c2230; --ink-soft:#5a6478; --ink-faint:#8b94a5;
+  --line:#e2e5eb; --line-soft:#eef0f4;
+  --paper:#f4f5f7; --card:#ffffff; --raised:#ffffff;
+  --accent:#2c5f6e; --accent-soft:#e7f0f0; --accent-hover:#244c58;
+  --bone:#f1ece2; --bone-line:#d8cfb8; --bone-ink:#796943;
+  --good:#3d7959; --good-bg:#e8f3ec;
+  --warn:#9f5e28; --warn-bg:#fbf0e2;
+  --bad:#a33d3d;  --bad-bg:#faeaea;
+
+  --film-bg:#12161c; --film-frame:rgba(0,0,0,0.35);
+
+  --radius:14px; --radius-sm:9px; --radius-chip:6px;
+  --shadow-sm:0 1px 2px rgba(28,34,48,.05),0 1px 4px rgba(28,34,48,.04);
+  --shadow-md:0 4px 14px rgba(28,34,48,.09),0 2px 4px rgba(28,34,48,.04);
+  --shadow-lg:0 18px 40px rgba(28,34,48,.16);
+  --ease:cubic-bezier(.32,.72,0,1);
+  --spring:cubic-bezier(.34,1.4,.64,1);
+  --dur:.34s;
+  --spine-w:52px;
+}
+[data-theme="dark"]{
+  --ink:#e8edf4; --ink-soft:#9aa6b8; --ink-faint:#6d798d;
+  --line:#1e2732; --line-soft:#18202a;
+  --paper:#080b0f; --card:#101720; --raised:#141d28;
+  --accent:#6fd3c7; --accent-soft:#122b2e; --accent-hover:#8ce0d5;
+  --bone:#1a1f27; --bone-line:#2a323d; --bone-ink:#b9a97f;
+  --good:#5fc08d; --good-bg:#0f2419;
+  --warn:#e0a35c; --warn-bg:#2a1e0e;
+  --bad:#f0857f;  --bad-bg:#2c1315;
+  --film-bg:#070a0e; --film-frame:rgba(255,255,255,0.06);
+  --shadow-sm:0 1px 2px rgba(0,0,0,.5);
+  --shadow-md:0 6px 18px rgba(0,0,0,.55);
+  --shadow-lg:0 22px 48px rgba(0,0,0,.7);
+}
+
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+html,body{margin:0;padding:0;height:100%;}
+body{
+  font-family:var(--font-sans);color:var(--ink);background:var(--paper);
+  -webkit-font-smoothing:antialiased;
+  transition:background .5s var(--ease),color .5s var(--ease);
+  overflow:hidden;
+}
+button{font-family:inherit;color:inherit;border:0;background:none;cursor:pointer;}
+input{font-family:inherit;}
+
+/* ─── shell ─────────────────────────────────────────────── */
+.app{max-width:520px;margin:0 auto;height:100dvh;display:flex;flex-direction:column;position:relative;
+  background:var(--paper);border-left:1px solid var(--line);border-right:1px solid var(--line);}
+@media(min-width:1100px){ .app{max-width:1160px;} }
+
+.topbar{display:flex;align-items:center;gap:14px;padding:14px 16px 12px;flex-shrink:0;}
+.brand{flex:1;min-width:0;}
+.brand .mark{font-family:var(--font-display);font-size:16px;font-weight:600;letter-spacing:-.01em;display:block;line-height:1.15;}
+.brand .date{font-size:11.5px;color:var(--ink-faint);letter-spacing:.02em;}
+.tb-actions{display:flex;align-items:center;gap:8px;}
+.iconbtn{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;color:var(--ink-soft);
+  transition:background .18s,color .18s,transform .18s var(--spring);}
+.iconbtn:hover{background:var(--line-soft);color:var(--ink);}
+.iconbtn:active{transform:scale(.9);}
+.iconbtn svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;}
+
+/* progress ring */
+.ring-wrap{display:flex;align-items:center;gap:9px;}
+.ring{width:36px;height:36px;transform:rotate(-90deg);}
+.ring circle{fill:none;stroke-width:3.2;stroke-linecap:round;}
+.ring .bg{stroke:var(--line);}
+.ring .fg{stroke:var(--accent);transition:stroke-dashoffset .7s var(--ease);}
+.ring-txt{line-height:1.1;}
+.ring-txt b{font-size:14px;font-weight:600;font-variant-numeric:tabular-nums;}
+.ring-txt span{display:block;font-size:10.5px;color:var(--ink-faint);}
+
+/* ─── ward spine ────────────────────────────────────────── */
+.spine{display:flex;gap:4px;padding:0 16px 12px;overflow-x:auto;scrollbar-width:none;flex-shrink:0;}
+.spine::-webkit-scrollbar{display:none;}
+.sp{flex-shrink:0;min-width:32px;height:38px;border-radius:8px;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:2px;background:var(--card);border:1px solid var(--line);
+  font-family:var(--mono);font-size:11px;color:var(--ink-faint);
+  transition:all .26s var(--spring);position:relative;}
+.sp .dot{width:4px;height:4px;border-radius:50%;background:var(--line);transition:background .26s;}
+.sp.seen{background:var(--accent-soft);border-color:transparent;color:var(--accent);}
+.sp.seen .dot{background:var(--accent);}
+.sp.flag .dot{background:var(--bad);}
+.sp.now{background:var(--accent);border-color:var(--accent);color:#fff;transform:scale(1.14);
+  box-shadow:0 4px 14px rgba(44,95,110,.4);}
+[data-theme="dark"] .sp.now{color:#04211f;box-shadow:0 4px 20px rgba(111,211,199,.3);}
+.sp.now .dot{background:currentColor;}
+
+/* ─── stage ─────────────────────────────────────────────── */
+.stage{flex:1;overflow-y:auto;overflow-x:hidden;padding:4px 16px 96px;scrollbar-width:thin;}
+.view{display:none;}
+.view.on{display:block;animation:viewIn .38s var(--ease);}
+@keyframes viewIn{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:none;}}
+
+/* ─── hero card ─────────────────────────────────────────── */
+.hero{background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow-md);
+  border:1px solid var(--line);overflow:hidden;position:relative;}
+.hero.swap{animation:swapIn .46s var(--ease);}
+@keyframes swapIn{from{opacity:0;transform:translateX(26px) scale(.985);}to{opacity:1;transform:none;}}
+.hero-label{display:flex;align-items:center;gap:7px;padding:11px 15px 0;font-size:10.5px;
+  letter-spacing:.11em;text-transform:uppercase;color:var(--accent);font-weight:600;}
+.hero-label .pulse{width:6px;height:6px;border-radius:50%;background:var(--accent);
+  animation:pulse 2.1s ease-in-out infinite;}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1);}50%{opacity:.35;transform:scale(.72);}}
+
+.hero-top{display:flex;gap:14px;padding:11px 15px 13px;}
+
+/* film */
+.film{width:104px;flex-shrink:0;}
+.film-box{height:132px;background:var(--film-bg);border-radius:10px;position:relative;overflow:hidden;
+  box-shadow:inset 0 0 0 1px var(--film-frame);cursor:pointer;transition:transform .3s var(--spring);}
+.film-box:active{transform:scale(.97);}
+.film-box svg{position:absolute;inset:0;width:100%;height:100%;}
+.film-box::after{content:"";position:absolute;inset:0;
+  background:radial-gradient(ellipse 68% 58% at 50% 42%,rgba(255,255,255,.075),transparent 72%);}
+.film-empty{height:132px;background:var(--bone);border:1px dashed var(--bone-line);border-radius:10px;
+  display:grid;place-items:center;color:var(--bone-ink);}
+.film-empty svg{width:30px;height:30px;fill:none;stroke:currentColor;stroke-width:1.5;opacity:.6;}
+.film-cap{font-size:10.5px;color:var(--ink-faint);text-align:center;margin-top:6px;letter-spacing:.02em;}
+
+/* identity */
+.who{min-width:0;flex:1;display:flex;flex-direction:column;}
+.who-bed{font-family:var(--mono);font-size:11.5px;color:var(--ink-faint);letter-spacing:.04em;}
+.who-name{font-family:var(--font-display);font-size:23px;font-weight:600;letter-spacing:-.02em;
+  line-height:1.14;margin:1px 0 3px;}
+.who-meta{font-size:12.5px;color:var(--ink-soft);margin-bottom:2px;}
+.who-dx{font-size:14px;font-weight:500;margin-top:5px;line-height:1.32;}
+.who-proc{font-size:12px;color:var(--ink-soft);margin-top:2px;}
+
+/* POD track */
+.track{margin:14px 15px 0;padding-bottom:4px;}
+.track-rail{position:relative;height:2px;background:var(--line);border-radius:2px;margin:16px 0 0;}
+.track-fill{position:absolute;left:0;top:0;height:2px;background:var(--accent);border-radius:2px;
+  transition:width .8s var(--ease);}
+.st{position:absolute;top:50%;transform:translate(-50%,-50%);}
+.st i{display:block;width:9px;height:9px;border-radius:50%;background:var(--line);
+  border:2px solid var(--card);box-sizing:content-box;transition:all .4s var(--spring);}
+.st.done i{background:var(--accent);}
+.st.now i{background:var(--accent);width:11px;height:11px;
+  box-shadow:0 0 0 4px var(--accent-soft);}
+.st.due i{background:var(--bad);}
+.st b{position:absolute;top:13px;left:50%;transform:translateX(-50%);white-space:nowrap;
+  font-size:10.5px;font-weight:500;color:var(--ink-faint);letter-spacing:.01em;}
+.st.now b{color:var(--accent);font-weight:600;}
+.st.due b{color:var(--bad);font-weight:600;}
+.track-legend{height:20px;}
+
+/* flags */
+.flags{display:flex;flex-wrap:wrap;gap:6px;padding:0 15px;margin-top:8px;}
+.flag{font-size:11px;font-weight:500;padding:4px 9px;border-radius:var(--radius-chip);
+  letter-spacing:.01em;display:inline-flex;align-items:center;gap:5px;}
+.flag.bad{background:var(--bad-bg);color:var(--bad);}
+.flag.warn{background:var(--warn-bg);color:var(--warn);}
+.flag.ok{background:var(--good-bg);color:var(--good);}
+
+/* plan */
+.plan{margin:13px 15px 0;}
+.plan-lbl{font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint);
+  font-weight:600;margin-bottom:6px;}
+.plan-in{width:100%;border:1px solid var(--line);background:var(--paper);border-radius:var(--radius-sm);
+  padding:11px 12px;font-size:14px;color:var(--ink);outline:none;
+  transition:border-color .2s,box-shadow .2s,background .2s;}
+.plan-in::placeholder{color:var(--ink-faint);}
+.plan-in:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft);background:var(--card);}
+.plan-yest{margin-top:7px;font-size:11.5px;color:var(--ink-faint);display:flex;align-items:center;gap:6px;}
+.plan-yest button{color:var(--accent);font-weight:600;font-size:11.5px;}
+
+/* seen bar */
+.seenbar{display:flex;gap:9px;padding:14px 15px 15px;}
+.btn{flex:1;border-radius:var(--radius-sm);padding:13px;font-size:14px;font-weight:600;
+  letter-spacing:.005em;transition:transform .18s var(--spring),background .2s,box-shadow .2s;}
+.btn:active{transform:scale(.965);}
+.btn.primary{background:var(--accent);color:#fff;box-shadow:0 3px 12px rgba(44,95,110,.28);}
+[data-theme="dark"] .btn.primary{color:#04211f;box-shadow:0 3px 16px rgba(111,211,199,.22);}
+.btn.ghost{background:transparent;border:1px solid var(--line);color:var(--ink-soft);flex:0 0 46px;
+  display:grid;place-items:center;padding:0;}
+.btn.ghost svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;}
+
+/* up next */
+.upnext{margin-top:20px;}
+.sec-lbl{font-size:10.5px;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-faint);
+  font-weight:600;margin-bottom:9px;padding-left:2px;}
+.queue{display:flex;flex-direction:column;gap:8px;}
+.qrow{display:flex;align-items:center;gap:11px;background:var(--card);border:1px solid var(--line);
+  border-radius:var(--radius-sm);padding:10px 12px;text-align:left;width:100%;
+  transition:transform .2s var(--spring),box-shadow .2s,opacity .3s;}
+.qrow:hover{box-shadow:var(--shadow-sm);transform:translateY(-1px);}
+.qrow:nth-child(2){opacity:.72;}
+.qrow:nth-child(3){opacity:.46;}
+.qbed{font-family:var(--mono);font-size:11.5px;color:var(--ink-faint);width:22px;flex-shrink:0;}
+.qmini{width:26px;height:32px;border-radius:5px;background:var(--film-bg);flex-shrink:0;
+  position:relative;overflow:hidden;}
+.qmini.none{background:var(--bone);border:1px dashed var(--bone-line);}
+.qmini svg{position:absolute;inset:0;width:100%;height:100%;}
+.qinfo{min-width:0;flex:1;}
+.qname{font-size:13.5px;font-weight:500;}
+.qsub{font-size:11.5px;color:var(--ink-faint);}
+.qtag{font-size:10.5px;font-weight:600;padding:3px 7px;border-radius:5px;flex-shrink:0;}
+
+/* ─── ward board ────────────────────────────────────────── */
+.board{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:4px;}
+@media(min-width:1100px){ .board{grid-template-columns:repeat(4,1fr);} }
+.col-h{display:flex;align-items:baseline;gap:6px;margin-bottom:8px;}
+.col-h b{font-size:11px;letter-spacing:.09em;text-transform:uppercase;font-weight:600;}
+.col-h span{font-family:var(--mono);font-size:11px;color:var(--ink-faint);}
+.tile{background:var(--card);border:1px solid var(--line);border-left:3px solid var(--accent);
+  border-radius:0 var(--radius-sm) var(--radius-sm) 0;padding:8px 10px;margin-bottom:6px;width:100%;
+  text-align:left;transition:transform .2s var(--spring),box-shadow .2s;}
+.tile:hover{transform:translateX(2px);box-shadow:var(--shadow-sm);}
+.tile-top{display:flex;align-items:baseline;gap:6px;}
+.tile-bed{font-family:var(--mono);font-size:11px;color:var(--ink-faint);}
+.tile-nm{font-size:13px;font-weight:500;}
+.tile-sub{font-size:11px;color:var(--ink-faint);margin-top:1px;}
+
+/* ─── done state ────────────────────────────────────────── */
+.done-wrap{padding:56px 12px;text-align:center;animation:doneIn .7s var(--spring);}
+@keyframes doneIn{from{opacity:0;transform:scale(.9);}to{opacity:1;transform:none;}}
+.done-ring{width:104px;height:104px;margin:0 auto 22px;transform:rotate(-90deg);}
+.done-ring circle{fill:none;stroke-width:4;stroke-linecap:round;}
+.done-ring .bg{stroke:var(--line);}
+.done-ring .fg{stroke:var(--accent);stroke-dasharray:295;stroke-dashoffset:295;
+  animation:draw 1.3s .18s var(--ease) forwards;}
+@keyframes draw{to{stroke-dashoffset:0;}}
+.done-h{font-family:var(--font-display);font-size:27px;font-weight:600;letter-spacing:-.02em;}
+.done-p{font-size:14px;color:var(--ink-soft);margin-top:8px;line-height:1.55;}
+.done-stats{display:flex;justify-content:center;gap:30px;margin-top:26px;}
+.dstat b{display:block;font-family:var(--mono);font-size:21px;font-weight:700;}
+.dstat span{font-size:11px;color:var(--ink-faint);letter-spacing:.05em;text-transform:uppercase;}
+
+/* ─── bottom nav ────────────────────────────────────────── */
+.nav{position:absolute;left:0;right:0;bottom:0;display:grid;grid-template-columns:repeat(5,1fr);
+  background:color-mix(in srgb,var(--card) 92%,transparent);backdrop-filter:blur(18px);
+  -webkit-backdrop-filter:blur(18px);border-top:1px solid var(--line);
+  padding:7px 0 max(7px,env(safe-area-inset-bottom));z-index:20;}
+.nv{display:flex;flex-direction:column;align-items:center;gap:3px;padding:4px 0;color:var(--ink-faint);
+  font-size:10.5px;font-weight:500;transition:color .2s,transform .2s var(--spring);}
+.nv svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round;}
+.nv.on{color:var(--accent);}
+.nv:active{transform:scale(.88);}
+.nv.add{color:var(--accent);}
+
+/* ─── palette ───────────────────────────────────────────── */
+.scrim{position:absolute;inset:0;background:rgba(10,14,20,.5);backdrop-filter:blur(4px);
+  z-index:40;opacity:0;pointer-events:none;transition:opacity .3s;}
+.scrim.on{opacity:1;pointer-events:auto;}
+.pal{position:absolute;left:12px;right:12px;top:64px;background:var(--card);border-radius:var(--radius);
+  box-shadow:var(--shadow-lg);border:1px solid var(--line);overflow:hidden;z-index:41;
+  opacity:0;transform:translateY(-14px) scale(.97);pointer-events:none;
+  transition:opacity .3s var(--ease),transform .34s var(--spring);}
+.pal.on{opacity:1;transform:none;pointer-events:auto;}
+.pal-in{display:flex;align-items:center;gap:10px;padding:14px 15px;border-bottom:1px solid var(--line);}
+.pal-in svg{width:17px;height:17px;fill:none;stroke:var(--ink-faint);stroke-width:1.9;stroke-linecap:round;}
+.pal-in input{flex:1;border:0;outline:none;background:none;font-size:15px;color:var(--ink);}
+.pal-in input::placeholder{color:var(--ink-faint);}
+.pal-kbd{font-family:var(--mono);font-size:10.5px;color:var(--ink-faint);border:1px solid var(--line);
+  border-radius:5px;padding:2px 5px;}
+.pal-list{max-height:326px;overflow-y:auto;padding:6px;}
+.pal-grp{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint);
+  font-weight:600;padding:9px 9px 5px;}
+.pi{display:flex;align-items:center;gap:11px;padding:9px 10px;border-radius:var(--radius-sm);
+  width:100%;text-align:left;transition:background .14s;}
+.pi:hover,.pi.sel{background:var(--accent-soft);}
+.pi-ic{width:26px;height:26px;border-radius:7px;background:var(--paper);display:grid;place-items:center;
+  flex-shrink:0;color:var(--ink-soft);}
+.pi:hover .pi-ic,.pi.sel .pi-ic{color:var(--accent);}
+.pi-ic svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;}
+.pi-t{font-size:13.5px;font-weight:500;flex:1;}
+.pi-h{font-size:10.5px;color:var(--ink-faint);font-family:var(--mono);}
+
+/* ─── present mode ──────────────────────────────────────── */
+.present{position:absolute;inset:0;background:#05080c;z-index:60;display:none;
+  flex-direction:column;padding:34px 30px;}
+.present.on{display:flex;animation:viewIn .5s var(--ease);}
+.pr-top{display:flex;align-items:center;justify-content:space-between;color:#4a5b6e;
+  font-size:11px;letter-spacing:.16em;text-transform:uppercase;font-weight:600;}
+.pr-body{flex:1;display:flex;align-items:center;gap:34px;}
+.pr-film{width:206px;height:262px;background:#0a0e13;border-radius:12px;flex-shrink:0;position:relative;
+  overflow:hidden;box-shadow:0 0 62px rgba(150,200,230,.11),inset 0 0 0 1px rgba(255,255,255,.07);}
+.pr-film svg{position:absolute;inset:0;width:100%;height:100%;}
+.pr-info{min-width:0;}
+.pr-bed{font-family:var(--mono);font-size:13px;color:#5f7286;letter-spacing:.1em;}
+.pr-name{font-family:var(--font-display);font-size:47px;font-weight:600;color:#f0f4f8;
+  letter-spacing:-.03em;line-height:1.03;margin:6px 0 12px;}
+.pr-dx{font-size:21px;color:#b9c6d4;line-height:1.35;}
+.pr-proc{font-size:15px;color:#6d7f92;margin-top:7px;}
+.pr-pod{display:inline-block;margin-top:20px;font-family:var(--mono);font-size:14px;font-weight:700;
+  color:#7fe0d2;border:1px solid rgba(127,224,210,.32);border-radius:7px;padding:6px 13px;letter-spacing:.05em;}
+.pr-plan{border-top:1px solid #16202b;padding-top:18px;color:#8fa0b3;font-size:16px;line-height:1.5;}
+.pr-plan b{display:block;font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:#4a5b6e;margin-bottom:7px;}
+.pr-nav{display:flex;gap:10px;margin-top:20px;}
+.pr-btn{border:1px solid #1c2836;color:#93a4b7;border-radius:9px;padding:11px 20px;font-size:13.5px;font-weight:600;
+  transition:background .2s,color .2s;}
+.pr-btn:hover{background:#111a24;color:#dce6f0;}
+
+.toast{position:absolute;left:50%;bottom:88px;transform:translate(-50%,14px);background:var(--ink);
+  color:var(--paper);font-size:12.5px;font-weight:500;padding:9px 16px;border-radius:22px;z-index:50;
+  opacity:0;pointer-events:none;transition:all .3s var(--spring);white-space:nowrap;}
+.toast.on{opacity:1;transform:translate(-50%,0);}
+</style>
+</head>
+<body>
+
+<div class="app" id="app">
+
+  <div class="topbar">
+    <div class="brand">
+      <span class="mark">Ortho rounds</span>
+      <span class="date" id="dateLbl">Sunday 2 August</span>
+    </div>
+    <div class="ring-wrap">
+      <svg class="ring" viewBox="0 0 36 36">
+        <circle class="bg" cx="18" cy="18" r="15.5"></circle>
+        <circle class="fg" id="ringFg" cx="18" cy="18" r="15.5" stroke-dasharray="97.4" stroke-dashoffset="97.4"></circle>
+      </svg>
+      <div class="ring-txt"><b id="ringNum">0/8</b><span>seen</span></div>
+    </div>
+    <div class="tb-actions">
+      <button class="iconbtn" id="themeBtn" aria-label="Toggle reading room">
+        <svg viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <div class="spine" id="spine"></div>
+
+  <div class="stage" id="stage">
+
+    <div class="view on" id="v-round">
+      <div id="heroSlot"></div>
+      <div class="upnext" id="upnext"></div>
+    </div>
+
+    <div class="view" id="v-ward">
+      <div class="board" id="board"></div>
+    </div>
+
+    <div class="view" id="v-work">
+      <div class="sec-lbl">Needs you now</div>
+      <div class="queue" id="workList"></div>
+    </div>
+  </div>
+
+  <nav class="nav">
+    <button class="nv on" data-go="round"><svg viewBox="0 0 24 24"><path d="M4 19h5a3 3 0 0 0 0-6h-4a3 3 0 0 1 0-6h5"/><circle cx="18.5" cy="17.5" r="2.5"/><circle cx="17" cy="5.5" r="2.5"/></svg>Round</button>
+    <button class="nv" data-go="ward"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="7" height="16" rx="1.5"/><rect x="14" y="4" width="7" height="9" rx="1.5"/></svg>Ward</button>
+    <button class="nv add" data-go="add"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Add</button>
+    <button class="nv" data-go="work"><svg viewBox="0 0 24 24"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h10"/></svg>Work</button>
+    <button class="nv" data-go="pal"><svg viewBox="0 0 24 24"><path d="M6 4h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/><path d="M8.5 9.5l2.5 2.5-2.5 2.5M13 15h3"/></svg>Go</button>
+  </nav>
+
+  <div class="scrim" id="scrim"></div>
+
+  <div class="pal" id="pal">
+    <div class="pal-in">
+      <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+      <input id="palIn" placeholder="Search patients, or type a command…" autocomplete="off">
+      <span class="pal-kbd">esc</span>
+    </div>
+    <div class="pal-list" id="palList"></div>
+  </div>
+
+  <div class="present" id="present">
+    <div class="pr-top"><span>Presentation mode</span><span id="prCount">1 of 8</span></div>
+    <div class="pr-body" id="prBody"></div>
+    <div class="pr-nav">
+      <button class="pr-btn" id="prPrev">← Previous</button>
+      <button class="pr-btn" id="prNext">Next →</button>
+      <button class="pr-btn" id="prExit" style="margin-left:auto;">Exit</button>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+</div>
+
+<script>
+/* ── stylised radiographs (no patient data, drawn shapes only) ── */
+const FILMS = {
+  pfn:`<svg viewBox="0 0 60 76" preserveAspectRatio="xMidYMid slice">
+    <ellipse cx="20" cy="17" rx="13" ry="11" fill="#5e646c"/>
+    <path d="M14 20 L22 68 L34 68 L26 20 Z" fill="#9aa0a7"/>
+    <ellipse cx="21" cy="16" rx="9" ry="8" fill="#c3c8ce"/>
+    <rect x="19" y="12" width="4.6" height="56" rx="2.3" fill="#eef1f4" transform="rotate(-5 21 40)"/>
+    <rect x="12" y="17" width="22" height="3.4" rx="1.7" fill="#eef1f4" transform="rotate(-32 23 19)"/>
+    <circle cx="23" cy="63" r="2.1" fill="#eef1f4"/><circle cx="24" cy="54" r="2.1" fill="#eef1f4"/>
+    <path d="M34 8 L52 8 L52 70 L36 70 Z" fill="#4a5057" opacity=".55"/>
+  </svg>`,
+  plate:`<svg viewBox="0 0 60 76" preserveAspectRatio="xMidYMid slice">
+    <path d="M22 4 L20 70 L32 70 L31 4 Z" fill="#a3a9b0"/>
+    <path d="M33 8 L34 68 L39 68 L38 8 Z" fill="#767d85"/>
+    <ellipse cx="26" cy="7" rx="9" ry="5" fill="#c9ced3"/>
+    <rect x="17" y="22" width="4" height="34" rx="2" fill="#f0f3f6"/>
+    <circle cx="19" cy="27" r="2.4" fill="#fbfcfd"/><circle cx="19" cy="37" r="2.4" fill="#fbfcfd"/>
+    <circle cx="19" cy="47" r="2.4" fill="#fbfcfd"/>
+    <path d="M20 40 L31 42" stroke="#3d434a" stroke-width="1.6"/>
+  </svg>`,
+  wrist:`<svg viewBox="0 0 60 76" preserveAspectRatio="xMidYMid slice">
+    <path d="M20 68 L18 30 L28 28 L30 68 Z" fill="#a0a6ad"/>
+    <path d="M32 68 L33 32 L40 32 L39 68 Z" fill="#868d95"/>
+    <ellipse cx="27" cy="23" rx="13" ry="8" fill="#c6cbd1"/>
+    <rect x="14" y="16" width="26" height="3.2" rx="1.6" fill="#eff2f5"/>
+    <rect x="15" y="18" width="3" height="26" rx="1.5" fill="#eff2f5"/>
+    <circle cx="21" cy="12" r="3.4" fill="#b5bbc2"/><circle cx="29" cy="10" r="3.4" fill="#b5bbc2"/>
+    <circle cx="36" cy="13" r="3.2" fill="#b5bbc2"/>
+  </svg>`,
+  spine:`<svg viewBox="0 0 60 76" preserveAspectRatio="xMidYMid slice">
+    <rect x="22" y="8" width="17" height="9" rx="2" fill="#aeb4bb"/>
+    <rect x="22" y="20" width="17" height="9" rx="2" fill="#aeb4bb"/>
+    <rect x="21" y="32" width="18" height="10" rx="2" fill="#c4c9cf"/>
+    <rect x="21" y="45" width="18" height="10" rx="2" fill="#aeb4bb"/>
+    <rect x="21" y="58" width="18" height="10" rx="2" fill="#aeb4bb"/>
+    <rect x="17" y="30" width="3.4" height="40" rx="1.7" fill="#f0f3f6"/>
+    <rect x="40" y="30" width="3.4" height="40" rx="1.7" fill="#f0f3f6"/>
+    <circle cx="19" cy="35" r="2.6" fill="#fafbfc"/><circle cx="42" cy="35" r="2.6" fill="#fafbfc"/>
+    <circle cx="19" cy="61" r="2.6" fill="#fafbfc"/><circle cx="42" cy="61" r="2.6" fill="#fafbfc"/>
+  </svg>`
+};
+
+/* ── demo ward (fictional) ── */
+const P = [
+  {bed:'07',name:'A. Iyer',age:'71/F',dx:'Neck of femur fracture, left',proc:'Hemiarthroplasty · 30 Jul',
+   film:'pfn',pod:3,track:[['op',0,'done'],['POD 3',34,'now'],['suture',60,'due'],['discharge',100,'']],
+   flags:[['bad','Ceftriaxone day 5 — stop today'],['warn','Hb 8.4, recheck']],
+   plan:'',yest:'Mobilise with walker, chest physio, review Hb',
+   status:'postop',stat:'Post-op'},
+
+  {bed:'09',name:'S. Devi',age:'34/F',dx:'Distal radius fracture, right',proc:'For ORIF · OT today 11:00',
+   film:null,pod:null,track:[['admit',0,'done'],['consent',30,'now'],['surgery',62,'due'],['POD 1',100,'']],
+   flags:[['warn','Consent not signed'],['bad','Anaesthesia fitness pending']],
+   plan:'',yest:'NBM from midnight, pre-op labs sent',
+   status:'preop',stat:'Pre-op'},
+
+  {bed:'12',name:'R. Kumar',age:'62/M',dx:'Intertrochanteric femur fracture, right',proc:'PFN · 29 Jul · OT 09:30',
+   film:'pfn',pod:4,track:[['op',0,'done'],['POD 4',42,'now'],['suture',68,''],['discharge',100,'']],
+   flags:[['ok','Wound healthy'],['warn','Not yet mobilised']],
+   plan:'',yest:'Sit-out of bed, physio review, continue analgesia',
+   status:'postop',stat:'Post-op'},
+
+  {bed:'14',name:'M. Bose',age:'28/M',dx:'Tibial shaft fracture, left',proc:'Plating · 27 Jul',
+   film:'plate',pod:6,track:[['op',0,'done'],['suture',48,'done'],['POD 6',66,'now'],['discharge',100,'due']],
+   flags:[['ok','Sutures removed'],['ok','Full weight bearing']],
+   plan:'',yest:'Discharge planning, wound check, physio handout',
+   status:'discharge',stat:'For discharge'},
+
+  {bed:'17',name:'P. Nair',age:'55/F',dx:'Lumbar canal stenosis L4-L5',proc:'Decompression · 28 Jul',
+   film:'spine',pod:5,track:[['op',0,'done'],['drain out',36,'done'],['POD 5',58,'now'],['discharge',100,'']],
+   flags:[['warn','Backache on mobilising']],
+   plan:'',yest:'Brace on ambulation, neuro chart 4-hourly',
+   status:'postop',stat:'Post-op'},
+
+  {bed:'18',name:'K. Shah',age:'44/M',dx:'Colles fracture, conservative',proc:'Below-elbow cast · 31 Jul',
+   film:'wrist',pod:null,track:[['cast',0,'done'],['day 2',40,'now'],['check XR',70,''],['cast off',100,'']],
+   flags:[['ok','Neurovascular intact']],
+   plan:'',yest:'Limb elevation, finger exercises hourly',
+   status:'conservative',stat:'Conservative'},
+
+  {bed:'21',name:'T. Rao',age:'67/M',dx:'Osteoarthritis both knees',proc:'For TKR · date pending',
+   film:null,pod:null,track:[['admit',0,'done'],['workup',38,'now'],['surgery',72,''],['POD 1',100,'']],
+   flags:[['warn','Cardiac clearance awaited']],
+   plan:'',yest:'Await echo report, physio pre-hab started',
+   status:'preop',stat:'Pre-op'},
+
+  {bed:'23',name:'L. Menon',age:'39/F',dx:'Ankle fracture-dislocation, right',proc:'ORIF · 1 Aug',
+   film:'plate',pod:1,track:[['op',0,'done'],['POD 1',26,'now'],['suture',66,''],['discharge',100,'']],
+   flags:[['bad','Swelling — elevate and review'],['warn','Pain score 7']],
+   plan:'',yest:'Strict elevation, ice, non weight bearing',
+   status:'postop',stat:'Post-op'}
+];
+
+const ACTIONS = [
+  ['pinned','Presentation mode','present','⇧P'],
+  ['pinned','Generate handover','handover','⇧H'],
+  ['pinned','Morning brief','brief',''],
+  ['pinned','Check ward for risks','risk',''],
+  ['documents','OT list','otlist',''],
+  ['documents','Handover sheet','sheet',''],
+  ['documents','Census','census',''],
+  ['documents','Discharged patients','discharged',''],
+  ['documents','Export backup','export',''],
+  ['ward','Bulk plan select','bulk',''],
+  ['ward','Organize patients','organize',''],
+  ['ward','Unit handover note','note',''],
+  ['ward','PG roster','roster',''],
+  ['ward','Default unit','unit',''],
+  ['ward','Default OT doctors','doctors',''],
+  ['ward','Templates','templates',''],
+  ['settings','Consultant mode','consultant',''],
+  ['settings','Reading room (dark)','dark','⇧D'],
+  ['settings','Change password','pw',''],
+  ['settings','Admin console','admin',''],
+  ['settings','Refresh from server','refresh','']
+];
+
+const ICONS={
+  present:'<path d="M5 3l14 9-14 9V3z"/>',handover:'<path d="M14 5l7 7-7 7"/><path d="M21 12H3"/>',
+  brief:'<circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1L7 17M17 7l2.1-2.1"/>',
+  risk:'<path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/>',
+  doc:'<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>',
+  ward:'<path d="M3 6h18M3 12h18M3 18h18"/>',set:'<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 7 19.4a1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0-1.2-2.9H1a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 2.6 7"/>',
+  user:'<circle cx="12" cy="8" r="4"/><path d="M4 21v-2a5 5 0 0 1 5-5h6a5 5 0 0 1 5 5v2"/>'
+};
+const GRPICON={pinned:'present',documents:'doc',ward:'ward',settings:'set'};
+
+let idx=0, seen=new Set(), view='round', prIdx=0;
+const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+
+function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('on');clearTimeout(toast._t);
+  toast._t=setTimeout(()=>t.classList.remove('on'),1900);}
+
+function filmSvg(k){return k?FILMS[k]:null;}
+
+function renderSpine(){
+  $('#spine').innerHTML=P.map((p,i)=>{
+    const cls=[i===idx?'now':'',seen.has(i)?'seen':'',p.flags.some(f=>f[0]==='bad')?'flag':''].filter(Boolean).join(' ');
+    return `<button class="sp ${cls}" data-jump="${i}" title="${esc(p.name)}">${p.bed}<span class="dot"></span></button>`;
+  }).join('');
+  const pct=seen.size/P.length;
+  $('#ringFg').style.strokeDashoffset=97.4*(1-pct);
+  $('#ringNum').textContent=`${seen.size}/${P.length}`;
+}
+
+function renderHero(){
+  if(seen.size===P.length){ renderDone(); return; }
+  const p=P[idx];
+  const film=filmSvg(p.film);
+  $('#heroSlot').innerHTML=`
+  <div class="hero swap">
+    <div class="hero-label"><span class="pulse"></span>At the bedside</div>
+    <div class="hero-top">
+      <div class="film">
+        ${film?`<div class="film-box" data-film="1">${film}</div>`
+              :`<div class="film-empty"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 15l5-5 4 4 3-3 6 6"/></svg></div>`}
+        <div class="film-cap">${film?'2 films · tap':'no imaging'}</div>
+      </div>
+      <div class="who">
+        <div class="who-bed">BED ${p.bed}</div>
+        <div class="who-name">${esc(p.name)}</div>
+        <div class="who-meta">${esc(p.age)} · ${esc(p.stat)}</div>
+        <div class="who-dx">${esc(p.dx)}</div>
+        <div class="who-proc">${esc(p.proc)}</div>
+      </div>
+    </div>
+    <div class="track">
+      <div class="track-rail">
+        <div class="track-fill" style="width:${p.track.find(t=>t[2]==='now')?.[1]||0}%"></div>
+        ${p.track.map(([lbl,pos,st])=>`<div class="st ${st}" style="left:${pos}%"><i></i><b>${esc(lbl)}</b></div>`).join('')}
+      </div>
+      <div class="track-legend"></div>
+    </div>
+    <div class="flags">
+      ${p.flags.map(([k,t])=>`<span class="flag ${k}">${esc(t)}</span>`).join('')}
+    </div>
+    <div class="plan">
+      <div class="plan-lbl">Today's plan</div>
+      <input class="plan-in" id="planIn" placeholder="What are we doing today?" value="${esc(p.plan)}">
+      <div class="plan-yest">Yesterday: ${esc(p.yest)} <button data-copy="1">Use this</button></div>
+    </div>
+    <div class="seenbar">
+      <button class="btn primary" data-seen="1">Seen — next patient</button>
+      <button class="btn ghost" data-skip="1" title="Skip for now">
+        <svg viewBox="0 0 24 24"><path d="M5 4l10 8-10 8V4zM19 5v14"/></svg>
+      </button>
+    </div>
+  </div>`;
+  renderQueue();
+}
+
+function renderQueue(){
+  const nxt=[];
+  for(let k=1;k<=3;k++){const i=(idx+k)%P.length; if(!seen.has(i)) nxt.push(i);}
+  $('#upnext').innerHTML=nxt.length?`<div class="sec-lbl">Up next</div><div class="queue">${
+    nxt.map(i=>{const p=P[i];const f=filmSvg(p.film);
+      const bad=p.flags.find(x=>x[0]==='bad');
+      return `<button class="qrow" data-jump="${i}">
+        <span class="qbed">${p.bed}</span>
+        <span class="qmini ${f?'':'none'}">${f||''}</span>
+        <span class="qinfo"><span class="qname">${esc(p.name)}</span><span class="qsub">${esc(p.dx)}</span></span>
+        ${bad?`<span class="qtag" style="background:var(--bad-bg);color:var(--bad)">needs review</span>`
+             :`<span class="qtag" style="background:var(--paper);color:var(--ink-faint)">${p.pod!=null?'POD '+p.pod:p.stat}</span>`}
+      </button>`;}).join('')}</div>`:'';
+}
+
+function renderDone(){
+  $('#heroSlot').innerHTML=`
+  <div class="done-wrap">
+    <svg class="done-ring" viewBox="0 0 104 104">
+      <circle class="bg" cx="52" cy="52" r="47"></circle>
+      <circle class="fg" cx="52" cy="52" r="47"></circle>
+    </svg>
+    <div class="done-h">Round complete</div>
+    <div class="done-p">All ${P.length} patients seen and planned.<br>Handover is ready to send.</div>
+    <div class="done-stats">
+      <div class="dstat"><b>${P.length}</b><span>seen</span></div>
+      <div class="dstat"><b>26</b><span>minutes</span></div>
+      <div class="dstat"><b>3</b><span>flagged</span></div>
+    </div>
+    <div class="seenbar" style="max-width:330px;margin:26px auto 0;padding:0;">
+      <button class="btn primary" data-reset="1">Start again</button>
+    </div>
+  </div>`;
+  $('#upnext').innerHTML='';
+}
+
+function renderBoard(){
+  const cols=[['preop','Pre-op'],['postop','Post-op'],['conservative','Conservative'],['discharge','For discharge']];
+  $('#board').innerHTML=cols.map(([k,lbl])=>{
+    const list=P.map((p,i)=>[p,i]).filter(([p])=>p.status===k);
+    const col=k==='discharge'?'var(--good)':k==='preop'?'var(--accent)':k==='conservative'?'var(--bone-ink)':'var(--ink-soft)';
+    return `<div>
+      <div class="col-h"><b style="color:${col}">${lbl}</b><span>${list.length}</span></div>
+      ${list.map(([p,i])=>{const bad=p.flags.find(f=>f[0]==='bad');
+        return `<button class="tile" data-jump="${i}" style="border-left-color:${bad?'var(--bad)':col}">
+          <span class="tile-top"><span class="tile-bed">${p.bed}</span><span class="tile-nm">${esc(p.name)}</span></span>
+          <span class="tile-sub" style="${bad?'color:var(--bad)':''}">${esc(bad?bad[1]:(p.pod!=null?'POD '+p.pod:p.proc.split('·')[0].trim()))}</span>
+        </button>`;}).join('')}
+    </div>`;
+  }).join('');
+}
+
+function renderWork(){
+  const items=[];
+  P.forEach((p,i)=>p.flags.forEach(([k,t])=>{ if(k!=='ok') items.push([i,k,t]); }));
+  items.sort((a,b)=>(a[1]==='bad'?0:1)-(b[1]==='bad'?0:1));
+  $('#workList').innerHTML=items.map(([i,k,t])=>{const p=P[i];
+    return `<button class="qrow" data-jump="${i}" style="opacity:1">
+      <span class="qbed">${p.bed}</span>
+      <span class="qinfo"><span class="qname">${esc(t)}</span><span class="qsub">${esc(p.name)} · ${esc(p.dx)}</span></span>
+      <span class="qtag" style="background:var(--${k}-bg);color:var(--${k})">${k==='bad'?'urgent':'today'}</span>
+    </button>`;}).join('');
+}
+
+function renderPal(q=''){
+  const t=q.trim().toLowerCase();
+  let html='';
+  if(t){
+    const pm=P.map((p,i)=>[p,i]).filter(([p])=>(p.name+p.bed+p.dx).toLowerCase().includes(t));
+    if(pm.length) html+=`<div class="pal-grp">Patients</div>`+pm.map(([p,i])=>
+      `<button class="pi" data-jump="${i}" data-close="1"><span class="pi-ic"><svg viewBox="0 0 24 24">${ICONS.user}</svg></span>
+       <span class="pi-t">${esc(p.name)}</span><span class="pi-h">bed ${p.bed}</span></button>`).join('');
+    const am=ACTIONS.filter(a=>a[1].toLowerCase().includes(t));
+    if(am.length) html+=`<div class="pal-grp">Actions</div>`+am.map(a=>
+      `<button class="pi" data-act="${a[2]}"><span class="pi-ic"><svg viewBox="0 0 24 24">${ICONS[GRPICON[a[0]]]}</svg></span>
+       <span class="pi-t">${esc(a[1])}</span><span class="pi-h">${a[3]}</span></button>`).join('');
+    if(!html) html=`<div class="pal-grp">No match</div>`;
+  }else{
+    ['pinned','documents','ward','settings'].forEach(g=>{
+      html+=`<div class="pal-grp">${g==='pinned'?'Most used':g}</div>`;
+      html+=ACTIONS.filter(a=>a[0]===g).map(a=>
+        `<button class="pi" data-act="${a[2]}"><span class="pi-ic"><svg viewBox="0 0 24 24">${ICONS[GRPICON[g]]}</svg></span>
+         <span class="pi-t">${esc(a[1])}</span><span class="pi-h">${a[3]}</span></button>`).join('');
+    });
+  }
+  $('#palList').innerHTML=html;
+}
+
+function renderPresent(){
+  const p=P[prIdx],f=filmSvg(p.film);
+  $('#prCount').textContent=`${prIdx+1} of ${P.length}`;
+  $('#prBody').innerHTML=`
+    <div class="pr-film">${f||''}</div>
+    <div class="pr-info">
+      <div class="pr-bed">BED ${p.bed}</div>
+      <div class="pr-name">${esc(p.name)}</div>
+      <div class="pr-dx">${esc(p.dx)}</div>
+      <div class="pr-proc">${esc(p.age)} · ${esc(p.proc)}</div>
+      <div class="pr-pod">${p.pod!=null?'POST-OP DAY '+p.pod:p.stat.toUpperCase()}</div>
+      <div class="pr-plan" style="margin-top:26px;"><b>Plan</b>${esc(p.plan||p.yest)}</div>
+    </div>`;
+}
+
+function go(v){
+  view=v;
+  $$('.view').forEach(e=>e.classList.toggle('on',e.id==='v-'+v));
+  $$('.nv').forEach(b=>b.classList.toggle('on',b.dataset.go===v));
+  if(v==='ward')renderBoard(); if(v==='work')renderWork();
+}
+function openPal(o){
+  $('#pal').classList.toggle('on',o);$('#scrim').classList.toggle('on',o);
+  if(o){$('#palIn').value='';renderPal();setTimeout(()=>$('#palIn').focus(),90);}
+}
+function setTheme(d){
+  document.documentElement.setAttribute('data-theme',d?'dark':'light');
+  toast(d?'Reading room on':'Reading room off');
+}
+function advance(){
+  seen.add(idx);
+  let n=idx;
+  for(let k=1;k<=P.length;k++){const c=(idx+k)%P.length; if(!seen.has(c)){n=c;break;}}
+  idx=n; renderSpine(); renderHero();
+}
+
+document.addEventListener('click',e=>{
+  const j=e.target.closest('[data-jump]');
+  if(j){ idx=+j.dataset.jump; if(view!=='round')go('round'); renderSpine(); renderHero();
+         if(j.dataset.close||j.closest('.pal'))openPal(false); return; }
+  if(e.target.closest('[data-seen]')){ advance(); toast('Marked seen'); return; }
+  if(e.target.closest('[data-skip]')){
+    let n=idx; for(let k=1;k<=P.length;k++){const c=(idx+k)%P.length; if(!seen.has(c)){n=c;break;}}
+    idx=n; renderSpine(); renderHero(); toast('Skipped — still on the list'); return; }
+  if(e.target.closest('[data-copy]')){ const i=$('#planIn'); i.value=P[idx].yest; P[idx].plan=i.value;
+    i.focus(); toast("Yesterday's plan copied"); return; }
+  if(e.target.closest('[data-reset]')){ seen.clear(); idx=0; renderSpine(); renderHero(); return; }
+  if(e.target.closest('[data-film]')){ toast('Full-screen film viewer'); return; }
+
+  const nv=e.target.closest('.nv');
+  if(nv){ const g=nv.dataset.go;
+    if(g==='pal'){openPal(true);} else if(g==='add'){toast('New admission — smart fill');}
+    else go(g); return; }
+
+  const a=e.target.closest('[data-act]');
+  if(a){ const k=a.dataset.act;
+    if(k==='present'){openPal(false);prIdx=0;renderPresent();$('#present').classList.add('on');}
+    else if(k==='dark'){openPal(false);setTheme(document.documentElement.getAttribute('data-theme')!=='dark');}
+    else {openPal(false);toast(a.querySelector('.pi-t').textContent);}
+    return; }
+
+  if(e.target.id==='scrim')openPal(false);
+  if(e.target.id==='themeBtn')setTheme(document.documentElement.getAttribute('data-theme')!=='dark');
+  if(e.target.closest('#prExit'))$('#present').classList.remove('on');
+  if(e.target.closest('#prNext')){prIdx=(prIdx+1)%P.length;renderPresent();}
+  if(e.target.closest('#prPrev')){prIdx=(prIdx-1+P.length)%P.length;renderPresent();}
+});
+
+document.addEventListener('input',e=>{
+  if(e.target.id==='palIn')renderPal(e.target.value);
+  if(e.target.id==='planIn')P[idx].plan=e.target.value;
+});
+document.addEventListener('keydown',e=>{
+  if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k'){e.preventDefault();openPal(!$('#pal').classList.contains('on'));}
+  if(e.key==='Escape'){openPal(false);$('#present').classList.remove('on');}
+  if($('#present').classList.contains('on')){
+    if(e.key==='ArrowRight'){prIdx=(prIdx+1)%P.length;renderPresent();}
+    if(e.key==='ArrowLeft'){prIdx=(prIdx-1+P.length)%P.length;renderPresent();}
+  }
+});
+
+$('#dateLbl').textContent=new Date().toLocaleDateString('en-GB',{weekday:'long',day:'numeric',month:'long'});
+renderSpine(); renderHero(); renderPal();
+</script>
+</body>
+</html>
