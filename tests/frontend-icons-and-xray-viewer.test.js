@@ -91,6 +91,29 @@ describe('X-ray viewer — zoom/pan state machine', () => {
     assert.match(imgEl.style.transform, /scale\(2\.5\)/);
   });
 
+  test('the whole viewer surface hands native pinch-zoom off, not just the image', () => {
+    // The pinch/pan gesture handlers are bound to the #imgViewer overlay
+    // container, but the image only fills 92vw x 76vh — there is a
+    // letterboxed backdrop around it. touch-action is resolved per touch
+    // point, so if a pinch has a finger on that backdrop while touch-action
+    // is only set on the <img>, the browser runs its native page-zoom at the
+    // same time as our JS zoom — zooming the whole site AND the X-ray, which
+    // is exactly the "zoom breaks the zoom" bug. Both the overlay and the
+    // image must declare touch-action:none.
+    const { document } = loadFrontendEnv();
+    const rules = {};
+    for(const sheet of document.styleSheets){
+      let cssRules;
+      try{ cssRules = sheet.cssRules; }catch{ continue; }
+      for(const rule of cssRules){
+        if(rule.selectorText === '.img-viewer-overlay') rules.overlay = rule.style.touchAction;
+        if(rule.selectorText === '.img-viewer-overlay img') rules.image = rule.style.touchAction;
+      }
+    }
+    assert.equal(rules.overlay, 'none', 'the overlay container must set touch-action:none so the backdrop hands off native page-zoom');
+    assert.equal(rules.image, 'none', 'the image must set touch-action:none so it hands off native page-zoom');
+  });
+
   test('this test suite intentionally does not simulate raw touchstart/touchmove/touchend', () => {
     // Synthetic multi-touch events in jsdom are unreliable enough (no real
     // Touch/TouchEvent geometry, no real gesture timing) that testing the
