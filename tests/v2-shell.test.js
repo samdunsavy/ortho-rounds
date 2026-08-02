@@ -27,9 +27,18 @@ test('shell reuses the shared milestones module', () => {
   assert.ok(html.includes('src="../milestones.js"'));
 });
 
-test('shell registers no service worker and unregisters inherited ones', () => {
+test('shell registers no service worker', () => {
   assert.ok(!/serviceWorker\s*\.\s*register/.test(html), 'v2 must not register a SW');
-  assert.ok(html.includes('getRegistrations'), 'v2 must unregister inherited SWs');
+});
+
+test('the root service worker ignores /v2 entirely', () => {
+  const sw = readFileSync(new URL('../public/sw.js', import.meta.url), 'utf8');
+  const fetchHandler = sw.slice(sw.indexOf("addEventListener('fetch'"));
+  assert.ok(/pathname\.startsWith\(['"]\/v2/.test(fetchHandler),
+    'sw.js fetch handler must return early for /v2 paths');
+  const guardIdx = fetchHandler.search(/pathname\.startsWith\(['"]\/v2/);
+  const respondIdx = fetchHandler.indexOf('respondWith');
+  assert.ok(guardIdx < respondIdx, 'the /v2 guard must precede respondWith');
 });
 
 test('preview banner is present and not dismissible', () => {

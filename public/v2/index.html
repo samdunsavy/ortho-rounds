@@ -17,7 +17,7 @@
 <link rel="stylesheet" href="css/overlay.css">
 </head>
 <body>
-<div class="preview-banner" id="previewBanner" role="status">
+<div class="preview-banner" id="previewBanner" role="alert">
   Preview build — you are editing real patient records.
 </div>
 
@@ -145,13 +145,6 @@
 <symbol id="i-right" viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></symbol>
 </svg>
 
-<script>
-if('serviceWorker' in navigator){
-  navigator.serviceWorker.getRegistrations().then(rs => {
-    rs.forEach(r => { if(new URL(r.scope).pathname.startsWith('/v2')) r.unregister(); });
-  }).catch(()=>{});
-}
-</script>
 <script src="../milestones.js"></script>
 <script type="module" src="app.js"></script>
 </body>
