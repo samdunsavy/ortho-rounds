@@ -64,7 +64,7 @@ for(const [k, v] of Object.entries(byStatus)){
 }
 console.log('');
 if(live.length === 0){
-  console.log('NO GO — 0 live patients in this environment; measurement must be re-run against production before Task 5.');
+  console.log('0 live patients in this environment; measurement must be re-run against production before Task 5.');
 } else {
   console.log(pct(withFilm.length, live.length) >= 40
     ? 'GO — film-as-hero is viable.'
