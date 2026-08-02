@@ -148,3 +148,84 @@ test('at most ten interactive targets render before the first patient row', asyn
   const chrome = [...document.querySelectorAll('.hd button, .nav button, .preview-banner button')];
   assert.ok(chrome.length <= 10, `${chrome.length} chrome targets, spec caps this at 10`);
 });
+
+/* ── Fix round 2: silent data loss on real patient records ── */
+
+const rawWithCheck = (n, checks) => Object.assign(raw(n), { postOpChecks: checks });
+
+test('a push that throws a network error never shows a success toast and reverts the optimistic state', async () => {
+  const p1 = rawWithCheck(1, [{ id:'c1', label:'Drain out', duePod:1, status:'pending' }]);
+  let call = 0;
+  const { document, api } = await bootV2({
+    // Each response is an independent clone, exactly as a real server
+    // response would be — a client-side optimistic mutation must never
+    // leak into what a later fetch "returns", or this test would pass
+    // for the wrong reason.
+    fetchImpl: async () => {
+      call++;
+      if(call <= 2) return { ok:true, json: async () => ({ serverTime:1, patients:[JSON.parse(JSON.stringify(p1))] }) };
+      throw new Error('network down');
+    }
+  });
+  const btn = document.querySelector('[data-ck="0:0"]');
+  assert.ok(btn, 'expected a milestone checkbox to render');
+  btn.click();
+  await api.state.pending;
+  const toastText = document.querySelector('#toast').textContent;
+  assert.ok(!/updated/i.test(toastText), `toast must not claim success, got "${toastText}"`);
+  assert.ok(/connection/i.test(toastText), `toast must surface the network failure, got "${toastText}"`);
+  assert.equal(api.state.patients[0].checks[0][2], 0,
+    'the optimistic done-state must be reverted, not left claiming an unsaved success');
+});
+
+test('toggling a milestone stamps updatedAt on the toggled item', async () => {
+  const p1 = rawWithCheck(1, [{ id:'c1', label:'Drain out', duePod:1, status:'pending' }]);
+  let call = 0, pushedBody = null;
+  const { document, api } = await bootV2({
+    // Independent clones per response, as a real server would return.
+    fetchImpl: async (url, opts) => {
+      call++;
+      if(call <= 2) return { ok:true, json: async () => ({ serverTime:1, patients:[JSON.parse(JSON.stringify(p1))] }) };
+      pushedBody = JSON.parse(opts.body);
+      return { ok:true, json: async () => ({ serverTime:2 }) };
+    }
+  });
+  const before = Date.now();
+  document.querySelector('[data-ck="0:0"]').click();
+  await api.state.pending;
+  assert.ok(pushedBody, 'expected a push to have been sent');
+  const pushedItem = pushedBody.changes[0].postOpChecks.find(c => c.id === 'c1');
+  assert.ok(pushedItem, 'expected the toggled item in the pushed record');
+  assert.ok(Number(pushedItem.updatedAt) >= before,
+    `expected a fresh updatedAt on the toggled item, got ${pushedItem.updatedAt}`);
+});
+
+test('a toggle push reflects a server-side change made after the initial fetch, not the stale snapshot', async () => {
+  const p1v0 = rawWithCheck(1, [
+    { id:'c1', label:'Drain out', duePod:1, status:'pending' },
+    { id:'c2', label:'Mobilise', duePod:2, status:'pending' }
+  ]);
+  // Simulates another clinician (main app, at /) marking c2 done between
+  // this tab's boot fetch and this write.
+  const p1v1 = JSON.parse(JSON.stringify(p1v0));
+  p1v1.postOpChecks[1].status = 'done';
+  p1v1.postOpChecks[1].updatedAt = Date.now();
+
+  let call = 0, pushedBody = null;
+  const { document, api } = await bootV2({
+    fetchImpl: async (url, opts) => {
+      call++;
+      if(call === 1) return { ok:true, json: async () => ({ serverTime:1, patients:[p1v0] }) };
+      if(call === 2) return { ok:true, json: async () => ({ serverTime:2, patients:[p1v1] }) };
+      pushedBody = JSON.parse(opts.body);
+      return { ok:true, json: async () => ({ serverTime:3 }) };
+    }
+  });
+  document.querySelector('[data-ck="0:0"]').click(); // toggles c1, must not touch c2
+  await api.state.pending;
+  assert.ok(pushedBody, 'expected a push to have been sent');
+  const sentC2 = pushedBody.changes[0].postOpChecks.find(c => c.id === 'c2');
+  assert.ok(sentC2, 'expected c2 in the pushed record');
+  assert.equal(sentC2.status, 'done',
+    "clinician B's completed milestone must not be silently reverted by a stale push");
+});

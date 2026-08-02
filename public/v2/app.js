@@ -54,7 +54,11 @@ const S = {
   view: 'round', idx: 0, seen: new Set(), work: 0,
   patients: [],      // view models, from fetchWard() — never demo data
   raw: new Map(),    // id -> raw patient record, for safe pushPatient() writes
-  serverTime: 0
+  serverTime: 0,
+  pending: null      // promise from the most recent in-flight write (plan or
+                      // checklist push) — test-introspection only, so a test
+                      // can `await api.state.pending` for the write to settle
+                      // before asserting; app.js itself never awaits it.
 };
 
 /* ── toast ── */
@@ -129,7 +133,6 @@ async function render(){
   S.patients = data.patients;
   S.serverTime = data.serverTime;
   if(S.idx >= S.patients.length) S.idx = 0;
-  if(S.work >= S.patients.length) S.work = 0;
   go(S.view);
 }
 
@@ -251,13 +254,44 @@ function skip(){
 
 /* ── writes back to the server ──
    Plan edits are debounced 600ms; milestone/discharge toggles push
-   immediately. Both mutate the RAW record kept in S.raw (see loadWard's
-   comment for why fetchWard's view models alone aren't enough), then
-   call pushPatient() with that full raw record so the server's
-   last-write-wins merge never sees a hole where a checklist used to be.
+   immediately. Both re-fetch the ward via loadWard() right before
+   building the payload, then apply the single edit on top of that
+   FRESH raw record and push it — never the snapshot captured at boot
+   or at the last render(). This matters because merge.js's
+   mergePatientRecords takes its full-replace branch for
+   postOpChecks/dischargeChecks whenever the pushed record's
+   updatedAt is >= the server's — true for essentially every v2 write,
+   since pushPatient() always stamps Date.now(). Sending a stale
+   postOpChecks/dischargeChecks array in that push would silently wipe
+   out any edit another clinician made against the SAME record after
+   this tab's last fetch (e.g. via the main app at `/`), with no error
+   and no toast to either clinician. The extra round trip (one
+   /api/sync call to refresh, before the one that actually writes) is
+   the deliberate cost of never resending a stale array; see
+   task-6-report.md, "Fix round 2", for why a refresh-after-write-only
+   strategy doesn't close this hole.
+
+   Every checklist item that's toggled is also stamped with its own
+   `updatedAt`, exactly as `touchChecklistItem` in public/app.js does
+   (`c.updatedAt = Date.now()`) — this is what lets merge.js's
+   mergeChecklistById resolve item-by-item on the rare occasions the
+   full-replace branch doesn't fire, instead of v2's edits always
+   losing because their item updatedAt was 0/absent.
+
    A `{rejected:true}` response means the write was refused (out of the
-   caller's scope) — surface it and re-fetch so the UI reflects the
-   server's actual state rather than the rejected local edit. */
+   caller's scope) — surface it and re-fetch via render() so the UI
+   reflects the server's actual state rather than the rejected local
+   edit. A THROWN error (network failure, as opposed to a defined
+   rejection) must never look like success: no success toast fires in
+   that case, and the specific optimistic edit is reverted in place —
+   on the fresh record if the write itself failed, or on the original
+   pre-refresh record if even the refresh couldn't reach the server —
+   so the UI stops claiming a state the server does not have. */
+function touchChecklistItem(c){
+  c.updatedAt = Date.now();
+  return c;
+}
+
 const planTimers = new Map();
 function schedulePlanPush(i){
   const p = S.patients[i];
@@ -265,19 +299,33 @@ function schedulePlanPush(i){
   clearTimeout(planTimers.get(p.id));
   planTimers.set(p.id, setTimeout(() => {
     planTimers.delete(p.id);
-    pushPlanNow(p.id);
+    S.pending = pushPlanNow(p.id);
   }, 600));
 }
 async function pushPlanNow(id){
-  const rec = S.raw.get(id);
+  const staleRec = S.raw.get(id);
   const p = S.patients.find(x => x.id === id);
-  if(!rec || !p) return;
-  rec.dailyPlan = p.plan;
-  rec.planUpdatedAt = Date.now();
+  if(!staleRec || !p) return;
+  const pendingPlan = p.plan;
+  let freshRec, prevPlan = staleRec.dailyPlan;
   try{
-    const out = await pushPatient(rec, FETCH);
-    if(out?.rejected){ toast('Not saved — outside your scope'); render(); }
-  }catch{ /* offline — local optimistic state stands until the next successful render() */ }
+    await loadWard();
+    freshRec = S.raw.get(id);
+    if(!freshRec){ toast('Not saved — patient no longer on this ward'); await render(); return; }
+    prevPlan = freshRec.dailyPlan;
+    freshRec.dailyPlan = pendingPlan;
+    freshRec.planUpdatedAt = Date.now();
+    const out = await pushPatient(freshRec, FETCH);
+    if(out?.rejected){ toast('Not saved — outside your scope'); await render(); return; }
+  }catch{
+    if(freshRec) freshRec.dailyPlan = prevPlan;
+    const idx = S.patients.findIndex(x => x.id === id);
+    if(idx > -1){
+      S.patients[idx].plan = prevPlan;
+      (S.view === 'work' ? rWork : rRound)();
+    }
+    toast('Not saved — check your connection');
+  }
 }
 function copyYesterday(i){
   const p = S.patients[i];
@@ -296,17 +344,64 @@ function toggleCheck(kind, i, n){
   const list = kind === 'ck' ? (rec.postOpChecks || []) : (rec.dischargeChecks || []);
   const item = list[n];
   if(!item) return;
+  const itemId = item.id;
+  const optimisticPrevStatus = item.status;
+  const optimisticPrevUpdatedAt = item.updatedAt;
+  /* Immediate optimistic flip for a responsive checkbox — provisional
+     only. pushCheckNow() re-fetches, re-applies this same toggle onto
+     the FRESH server record, and either confirms it with a success
+     toast or reverts it. This local flip alone never earns a toast. */
   item.status = item.status === 'done' ? 'pending' : 'done';
   S.patients[i] = toViewModel(rec, WIN);
   (S.view === 'work' ? rWork : rRound)();
-  toast(kind === 'ck' ? 'Milestone updated' : 'Checklist updated');
-  pushCheckNow(rec);
+  S.pending = pushCheckNow(kind, p.id, itemId, {
+    rec, prevStatus: optimisticPrevStatus, prevUpdatedAt: optimisticPrevUpdatedAt
+  });
 }
-async function pushCheckNow(rec){
+async function pushCheckNow(kind, patientId, itemId, optimistic){
+  let flipped = null, prevStatus, prevUpdatedAt, freshRec;
   try{
-    const out = await pushPatient(rec, FETCH);
-    if(out?.rejected){ toast('Not saved — outside your scope'); render(); }
-  }catch{ /* offline — local optimistic state stands until the next successful render() */ }
+    await loadWard();
+    freshRec = S.raw.get(patientId);
+    if(!freshRec){ toast('Not saved — patient no longer on this ward'); await render(); return; }
+    const list = kind === 'ck' ? (freshRec.postOpChecks || []) : (freshRec.dischargeChecks || []);
+    const item = list.find(c => c && c.id === itemId);
+    if(!item){ toast('Not saved — item no longer exists'); await render(); return; }
+    prevStatus = item.status;
+    prevUpdatedAt = item.updatedAt;
+    item.status = item.status === 'done' ? 'pending' : 'done';
+    touchChecklistItem(item);
+    flipped = item;
+    const pi = S.patients.findIndex(x => x.id === patientId);
+    if(pi > -1) S.patients[pi] = toViewModel(freshRec, WIN);
+    (S.view === 'work' ? rWork : rRound)();
+
+    const out = await pushPatient(freshRec, FETCH);
+    if(out?.rejected){ toast('Not saved — outside your scope'); await render(); return; }
+    toast(kind === 'ck' ? 'Milestone updated' : 'Checklist updated');
+  }catch{
+    /* The write (or the refresh that precedes it) failed. Revert whichever
+       record actually got mutated: the FRESH one if we got far enough to
+       refresh and flip it, otherwise the original pre-refresh record from
+       toggleCheck's optimistic edit — either way, the UI must stop
+       claiming a state the server does not have. */
+    const recForView = flipped ? freshRec : optimistic.rec;
+    if(flipped){
+      flipped.status = prevStatus;
+      flipped.updatedAt = prevUpdatedAt;
+    }else{
+      const list = kind === 'ck' ? (recForView.postOpChecks || []) : (recForView.dischargeChecks || []);
+      const original = list.find(c => c && c.id === itemId);
+      if(original){
+        original.status = optimistic.prevStatus;
+        original.updatedAt = optimistic.prevUpdatedAt;
+      }
+    }
+    const pi = S.patients.findIndex(x => x.id === patientId);
+    if(pi > -1) S.patients[pi] = toViewModel(recForView, WIN);
+    (S.view === 'work' ? rWork : rRound)();
+    toast('Not saved — check your connection');
+  }
 }
 
 /* ── events ── */
@@ -338,6 +433,12 @@ DOC.addEventListener('input', e => {
   const i = +p;
   if(S.patients[i]){ S.patients[i].plan = e.target.value; schedulePlanPush(i); }
 });
+/* Task 8 must introduce S.vwP (film-viewer state) together with its
+   `?.length` guard everywhere the viewer is driven from here — [data-vnav]
+   clicks and the viewer's arrow-key navigation both need
+   `S.vwP?.length` checks before indexing into it, same as every other
+   guard already in this handler. The viewer is genuinely out of scope
+   until then; there is no dead `vwP` stub here on purpose. */
 DOC.addEventListener('keydown', e => {
   if(e.key === 'Escape'){ closeAll(); return; }
   if(e.target?.matches?.('input,select,textarea')) return;
