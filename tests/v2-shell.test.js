@@ -370,3 +370,70 @@ test('typing in the discharged search filters by name and diagnosis, case-insens
 
   assert.equal(fetchCalls, callsBeforeTyping, 'typing in the discharged search must not trigger a new fetch');
 });
+
+/* ── Task 8: command palette, film viewer, presentation mode, keyboard ── */
+
+import { press } from './helpers/v2-env.js';
+
+const typeInPalette = (window, value) => {
+  const input = window.document.querySelector('#palIn');
+  input.value = value;
+  input.dispatchEvent(new window.Event('input', { bubbles:true }));
+};
+
+test('palette opens on meta+k and closes on escape', async () => {
+  const { window, document } = await bootV2({ patients:[raw(1)] });
+  press(window, 'k', { metaKey:true });
+  assert.ok(document.querySelector('#pal').classList.contains('on'));
+  press(window, 'Escape');
+  assert.ok(!document.querySelector('#pal').classList.contains('on'));
+});
+
+test('palette lists grouped actions before any typing', async () => {
+  const { window, document } = await bootV2({ patients:[raw(1)] });
+  press(window, 'k', { metaKey:true });
+  assert.ok(document.querySelectorAll('#palL .pi').length >= 20);
+  assert.ok(document.querySelector('#palL .pal-g').textContent.includes('Most used'));
+});
+
+test('palette matches patients and actions in one field', async () => {
+  const { window, document } = await bootV2({ patients:[raw(1)] });
+  press(window, 'k', { metaKey:true });
+  typeInPalette(window, 'P1');
+  assert.ok(document.querySelector('#palL').textContent.includes('P1'));
+});
+
+test('palette reports no match rather than rendering empty', async () => {
+  const { window, document } = await bootV2({ patients:[raw(1)] });
+  press(window, 'k', { metaKey:true });
+  typeInPalette(window, 'zzzzzz');
+  assert.ok(/no match/i.test(document.querySelector('#palL').textContent));
+});
+
+test('arrow keys move the palette selection and enter runs it', async () => {
+  const { window, document } = await bootV2({ patients:[raw(1)] });
+  press(window, 'k', { metaKey:true });
+  press(window, 'ArrowDown');
+  assert.equal(document.querySelectorAll('#palL .pi.sel').length, 1);
+  assert.notEqual(document.querySelectorAll('#palL .pi')[0].className.includes('sel'), true);
+  press(window, 'Enter');
+  assert.ok(!document.querySelector('#pal').classList.contains('on'), 'enter must close the palette');
+});
+
+test('all 23 actions are reachable from the palette', async () => {
+  const { window, document } = await bootV2({ patients:[raw(1)] });
+  press(window, 'k', { metaKey:true });
+  assert.equal(document.querySelectorAll('#palL .pi').length, 23);
+});
+
+test('film viewer arrows are inert before a film is opened', async () => {
+  const { document } = await bootV2({ patients:[raw(1)] });
+  assert.doesNotThrow(() => document.querySelector('[data-vnav]').click());
+});
+
+test('every icon-only button carries an accessible label', async () => {
+  const { document } = await bootV2({ patients:[raw(1)] });
+  const bad = [...document.querySelectorAll('button')]
+    .filter(b => !b.textContent.trim() && !b.getAttribute('aria-label'));
+  assert.deepEqual(bad.map(b => b.outerHTML.slice(0, 60)), []);
+});

@@ -305,3 +305,66 @@ export function discharged(rows, search = ''){
  <tbody>${body}</tbody></table></div>`
  : `<p class="empty">${rows.length ? 'No discharges match your search.' : 'No discharges in this period.'}</p>`}`;
 }
+
+/* ── overlays: command palette, film viewer, presentation mode (Task 8) ──
+   Pure fragment builders only. app.js owns all overlay STATE (the
+   executable S.palRows array the palette renders and the keyboard
+   drives, S.vwP/S.vwI for the film viewer, S.pr for presentation mode,
+   which overlay is `.on`) and all DOM wiring; these functions only turn
+   already-decided inputs into markup, exactly like every other builder
+   in this module. Markup/classes are lifted verbatim from
+   docs/prototypes/ortho-v3.html's rPal/rViewer/rPresent. */
+
+/** Raw film artwork (no surrounding <button>) for the film viewer and
+ *  presentation mode — reuses the same three drawn placeholders as
+ *  filmBox(), with the same 'preop' fallback for an unknown/future kind.
+ *  Returns null for a falsy `kind`; the caller renders its own "no film"
+ *  placeholder in that case (see presentSlide() below). */
+export function filmArt(kind){
+  if(!kind) return null;
+  return FILMS[kind in FILMS ? kind : 'preop'];
+}
+
+/** Human label for a film kind, e.g. for the viewer's title bar. */
+export function filmLabelOf(kind){
+  return FILM_LABELS[kind] || 'Film';
+}
+
+/** Film viewer title bar: "<b>Pre-op film</b>2 of 3". */
+export function viewerTitle(kind, index, total){
+  return `<b>${esc(filmLabelOf(kind))}</b>${index + 1} of ${total}`;
+}
+
+/** Command palette group heading, e.g. "Most used". */
+export function paletteGroup(title){
+  return `<p class="pal-g">${esc(title)}</p>`;
+}
+
+/** Command palette "nothing matched" state — rendered instead of an
+ *  empty list so a search with no hits still reads as a deliberate
+ *  answer, never a blank box. */
+export function paletteNoMatch(query){
+  return `<p class="pal-g">No match for "${esc(query)}"</p>`;
+}
+
+/** One selectable command-palette row (a patient match or an action).
+ *  `index` is this row's position in the caller's flat, executable
+ *  S.palRows array — app.js wires click/keyboard selection to that
+ *  array by this same index via the `data-prow` attribute. */
+export function paletteRow(icon, label, hint, index){
+  return `<button class="pi" data-prow="${index}"><span class="pi-ic">${ic(icon)}</span>
+ <span class="pi-t">${esc(label)}</span><span class="pi-h">${esc(hint)}</span></button>`;
+}
+
+/** Presentation-mode slide for one patient. Handles the no-film case
+ *  explicitly (design spec §5): a `.pr-f.none` placeholder with the
+ *  generic image icon, never an empty black box with no indication. */
+export function presentSlide(p){
+  const art = filmArt(p.films[0]);
+  const podLabel = p.pod != null ? `POST-OP DAY ${p.pod}` : esc(String(p.stat || '').toUpperCase());
+  return `<div class="pr-f ${art ? '' : 'none'}">${art || ic('img')}</div>
+ <div class="pr-i"><div class="pr-bd">BED ${esc(p.bed)}</div><h2 class="pr-n">${esc(p.name)}</h2>
+ <p class="pr-d">${esc(p.dx)}</p><p class="pr-p">${esc(p.age)} · ${esc(p.proc)}</p>
+ <div class="pr-pod">${podLabel}</div>
+ <div class="pr-pl"><b>Plan</b>${esc(p.plan || p.hist[0]?.[1] || '—')}</div></div>`;
+}

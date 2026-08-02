@@ -1,9 +1,10 @@
 /* v2 preview app — state, event delegation, view switching for
-   Round, Ward, Work, and the three read-only documents (OT list,
-   handover, discharged archive). Admin, the palette, the film viewer,
-   presentation mode and the add modal are out of scope for this file
-   (later tasks); go() accepts their view names without throwing but
-   renders nothing for them — a seam, not a stub.
+   Round, Ward, Work, the three read-only documents (OT list, handover,
+   discharged archive), the command palette, the film viewer, and
+   presentation mode. Admin is out of scope for this file (Task 9); go()
+   accepts its view name without throwing but renders nothing for it — a
+   seam, not a stub — and it stays reachable from the rail and the
+   palette per the design spec.
 
    The three documents are read-only: no write paths, no real
    export/Word generation. Their data-toast/data-print buttons are
@@ -46,7 +47,8 @@
    window/document/fetch never change during a page's lifetime. fetch is
    additionally bound to its receiver because real browsers throw
    "Illegal invocation" if fetch is called detached from `window`. */
-import { esc, hero, row, detail, board, workList, complete, otList, handover, discharged } from './render.js';
+import { esc, hero, row, detail, board, workList, complete, otList, handover, discharged,
+  paletteGroup, paletteNoMatch, paletteRow, viewerTitle, filmArt, presentSlide } from './render.js';
 import { fetchWard, fetchDischarged, pushPatient, toViewModel, extractDefaultUnit } from './data.js';
 
 const DOC = document;
@@ -65,6 +67,18 @@ function todayISO(){
 
 const S = {
   view: 'round', idx: 0, seen: new Set(), work: 0,
+  pr: 0,             // presentation-mode slide index, into S.patients
+  vwP: null,         // film viewer: the current patient's film-kind list
+                      // (or a single-item fallback) — null until a film
+                      // is first opened; every reader guards with
+                      // `S.vwP?.length` (the [data-vnav] click handler
+                      // and the viewer's arrow-key handling in the
+                      // keydown handler) before indexing into it
+  vwI: 0,             // film viewer: index into S.vwP
+  palSel: 0,          // command palette: selected row index
+  palRows: [],        // command palette: the executable action list the
+                      // palette renders and the keyboard drives — the
+                      // Task 8 interface contract (state.palRows)
   patients: [],      // view models, from fetchWard() — never demo data
   raw: new Map(),    // id -> raw patient record, for safe pushPatient() writes
   serverTime: 0,
@@ -108,12 +122,153 @@ function setTheme(dark){
   toast(dark ? 'Reading room on' : 'Reading room off');
 }
 
-/* ── overlays (not implemented this task; closeAll is a harmless seam
-   so Escape doesn't need special-casing once tasks 7-9 add them) ── */
+/* ── overlays: scrim/close-all seam ──
+   closeAll() is the single Escape-key/backdrop-click destination for
+   every overlay (palette, add modal, presentation mode, film viewer) —
+   defined once here so each overlay's open path doesn't need its own
+   Escape handling. */
 function closeAll(){
   for(const sel of ['#scrim', '#pal', '#addM', '#present', '#viewer']){
     $(sel)?.classList.remove('on');
   }
+}
+
+/* ── command palette (Task 8) ──
+   Ported from docs/prototypes/ortho-v3.html's rPal/markPal/runAct. The
+   23-row ACT table is that prototype's ACT table verbatim — the design
+   spec's §7 feature-to-surface map names the same 23 actions grouped
+   the same way; the prototype is the literal, already-reviewed encoding
+   of that map (group, label, view-key or 'toast'/'present'/'dark',
+   shortcut hint, icon name). Actions with no v2 implementation carry the
+   sentinel key 'toast' and always toast(label + ' — not in the preview
+   build') from runAct() below, rather than failing silently or doing
+   nothing. */
+const ACT = [
+  ['Most used','Presentation mode','present','⇧P','spark'],
+  ['Most used','Generate handover','handover','⇧H','hand'],
+  ['Most used','Morning brief','toast','','spark'],
+  ['Most used','Check ward for risks','work','','check'],
+  ['Documents','OT list','ot','','doc'],
+  ['Documents','Handover sheet','handover','','doc'],
+  ['Documents','Census','toast','','doc'],
+  ['Documents','Discharged patients','disch','','out'],
+  ['Documents','Export backup','toast','','doc'],
+  ['Documents','Import backup','toast','','doc'],
+  ['Ward','Ward board','ward','','board'],
+  ['Ward','Bulk plan select','toast','','list'],
+  ['Ward','Organize patients','toast','','list'],
+  ['Ward','Unit handover note','toast','','hand'],
+  ['Ward','PG roster','toast','','user'],
+  ['Ward','Default unit','toast','','set'],
+  ['Ward','Default OT doctors','toast','','user'],
+  ['Ward','Templates','toast','','doc'],
+  ['Settings','Consultant mode','toast','','user'],
+  ['Settings','Reading room','dark','⇧D','moon'],
+  ['Settings','Change password','toast','','set'],
+  ['Settings','Admin console','admin','','set'],
+  ['Settings','Refresh from server','toast','','set']
+];
+
+/* Views runAct() can go() straight to. Deliberately NOT the same object
+   as TITLES below: TITLES only carries a header title/subtitle for
+   views this task renders content for; 'admin' has no TITLES entry yet
+   (Task 9 owns its header text and its rendered content) but must still
+   be reachable as a destination from the palette per the design spec
+   ("Admin console — Palette · rail"), so it is listed here regardless. */
+const VIEW_KEYS = new Set(['round','ward','work','ot','handover','disch','admin']);
+
+function rPal(q = ''){
+  const t = q.trim().toLowerCase();
+  let h = '';
+  S.palRows = [];
+  const add = (html, fn) => { S.palRows.push(fn); return html; };
+  if(t){
+    const pm = S.patients.map((p, i) => [p, i])
+      .filter(([p]) => (p.name + ' ' + p.bed + ' ' + p.dx).toLowerCase().includes(t));
+    if(pm.length){
+      h += paletteGroup('Patients') + pm.map(([p, i]) => add(
+        paletteRow('user', p.name, 'bed ' + p.bed, S.palRows.length),
+        () => { openPatient(i); closePal(); }
+      )).join('');
+    }
+    const am = ACT.filter(a => a[1].toLowerCase().includes(t));
+    if(am.length){
+      h += paletteGroup('Actions') + am.map(a => add(
+        paletteRow(a[4], a[1], a[3], S.palRows.length),
+        () => runAct(a)
+      )).join('');
+    }
+    if(!S.palRows.length) h = paletteNoMatch(q.trim());
+  }else{
+    for(const g of ['Most used', 'Documents', 'Ward', 'Settings']){
+      h += paletteGroup(g) + ACT.filter(a => a[0] === g).map(a => add(
+        paletteRow(a[4], a[1], a[3], S.palRows.length),
+        () => runAct(a)
+      )).join('');
+    }
+  }
+  $('#palL').innerHTML = h;
+  S.palSel = 0;
+  markPal();
+}
+function markPal(){
+  const rows = $$('#palL .pi');
+  rows.forEach((e, n) => e.classList.toggle('sel', n === S.palSel));
+  rows[S.palSel]?.scrollIntoView?.({ block: 'nearest' });
+}
+function runAct(a){
+  const k = a[2];
+  closePal();
+  if(k === 'present'){ S.pr = 0; rPresent(); $('#present').classList.add('on'); }
+  else if(k === 'dark') setTheme(DOC.documentElement.dataset.theme !== 'dark');
+  else if(VIEW_KEYS.has(k)) go(k);
+  else toast(a[1] + ' — not in the preview build');
+}
+function openPal(){
+  $('#pal').classList.add('on');
+  $('#scrim').classList.add('on');
+  $('#palIn').value = '';
+  rPal();
+  setTimeout(() => $('#palIn')?.focus(), 80);
+}
+function closePal(){
+  $('#pal').classList.remove('on');
+  $('#scrim').classList.remove('on');
+}
+
+/* ── film viewer (Task 8) ──
+   Ported from the prototype's openViewer/rViewer. S.vwP/S.vwI are the
+   MUST FIX carried forward from Task 6 (a controller-flagged
+   requirement): every reader of S.vwP — the [data-vnav] click handler
+   below and the viewer's arrow-key handling in the keydown handler —
+   guards with `S.vwP?.length` before indexing into it, since S.vwP is
+   null until a film is first opened (clicking a viewer arrow, or
+   pressing an arrow key, before that must be inert, not a crash). */
+function openViewer(pi, k){
+  const p = S.patients[pi];
+  const list = (p && p.films.length) ? p.films : [k];
+  S.vwP = list;
+  S.vwI = Math.max(0, list.indexOf(k));
+  rViewer();
+  $('#viewer').classList.add('on');
+}
+function rViewer(){
+  const k = S.vwP[S.vwI];
+  $('#vwF').innerHTML = filmArt(k) || '';
+  $('#vwT').innerHTML = viewerTitle(k, S.vwI, S.vwP.length);
+}
+
+/* ── presentation mode (Task 8) ──
+   Ported from the prototype's rPresent. Handles a patient with no film
+   via render.js's presentSlide(), which renders a `.pr-f.none`
+   placeholder — never an empty black box with no indication (design
+   spec §5). Also guards against an empty ward (S.patients.length === 0),
+   which the prototype does not need to since it always has demo data. */
+function rPresent(){
+  const p = S.patients[S.pr];
+  if(!p) return;
+  $('#prC').textContent = `${S.pr + 1} of ${S.patients.length}`;
+  $('#prB').innerHTML = presentSlide(p);
 }
 
 /* ── data load ──
@@ -574,6 +729,24 @@ async function pushCheckNow(kind, patientId, itemId, optimistic){
 DOC.addEventListener('click', e => {
   const t = e.target;
   if(t.closest('[data-retry]')){ render(); return; }
+  const f = t.closest('[data-film]'); if(f){
+    const [pi, k] = f.dataset.film.split(':'); openViewer(+pi, k); return;
+  }
+  if(t.closest('[data-vclose]')){ $('#viewer').classList.remove('on'); return; }
+  const vn = t.closest('[data-vnav]'); if(vn){
+    if(!S.vwP?.length) return; // MUST FIX (Task 6 carry-forward): guard before indexing
+    S.vwI = (S.vwI + +vn.dataset.vnav + S.vwP.length) % S.vwP.length;
+    rViewer();
+    return;
+  }
+  const pn = t.closest('[data-pnav]'); if(pn){
+    if(!S.patients.length) return;
+    S.pr = (S.pr + +pn.dataset.pnav + S.patients.length) % S.patients.length;
+    rPresent();
+    return;
+  }
+  if(t.closest('[data-pclose]')){ $('#present').classList.remove('on'); return; }
+  const pr = t.closest('[data-prow]'); if(pr){ S.palRows[+pr.dataset.prow]?.(); return; }
   const o = t.closest('[data-open]'); if(o){ openPatient(+o.dataset.open); return; }
   const w = t.closest('[data-work]'); if(w){ S.work = +w.dataset.work; rWork(); return; }
   const ck = t.closest('[data-ck]'); if(ck){
@@ -590,12 +763,24 @@ DOC.addEventListener('click', e => {
   if(t.closest('#themeBtn')){ setTheme(DOC.documentElement.dataset.theme !== 'dark'); return; }
   if(t.closest('[data-print]')){ WIN.print?.(); return; }
   const ts = t.closest('[data-toast]'); if(ts){ toast(ts.dataset.toast); return; }
-  /* data-act, data-film, data-vnav, data-pnav, data-pclose, data-prow,
-     data-add, data-close are palette/viewer/present/add-modal concerns
-     — tasks 8-9. Intentionally unhandled here: clicking them is a no-op,
-     not a crash. */
+  /* data-add: the "Add patient" button inside the new-admission modal.
+     This preview has no real admission write path (design spec's "Out
+     of scope" list — image upload/AI extraction is explicitly deferred),
+     so it closes the modal and toasts, exactly as the prototype does. */
+  if(t.closest('[data-add]')){ closeAll(); toast('Patient added to the ward'); return; }
+  if(t.closest('[data-close]') || t.id === 'scrim'){ closeAll(); return; }
+  const a = t.closest('[data-act]'); if(a){
+    const k = a.dataset.act;
+    if(k === 'pal'){ $('#pal').classList.contains('on') ? closePal() : openPal(); }
+    else if(k === 'add'){ $('#addM').classList.add('on'); $('#scrim').classList.add('on'); }
+    return;
+  }
 });
 DOC.addEventListener('input', e => {
+  /* Command palette: filter as the clinician types (Task 8). Checked
+     first/returned early, same pattern as the discharged-search branch
+     below, so it can't be shadowed by the dataset.plan branch. */
+  if(e.target.id === 'palIn'){ rPal(e.target.value); return; }
   /* Fix round 1, Finding 3: the discharged search box filters
      S.dischargedPatients client-side, live as the clinician types — no
      fetch. Checked first/returned early so it can't be shadowed by the
@@ -624,16 +809,47 @@ DOC.addEventListener('change', e => {
     rOT();
   }
 });
-/* Task 8 must introduce S.vwP (film-viewer state) together with its
-   `?.length` guard everywhere the viewer is driven from here — [data-vnav]
-   clicks and the viewer's arrow-key navigation both need
-   `S.vwP?.length` checks before indexing into it, same as every other
-   guard already in this handler. The viewer is genuinely out of scope
-   until then; there is no dead `vwP` stub here on purpose. */
+/* Full keydown handler, ported from the prototype (Task 8). Order matters:
+   ⌘K/Ctrl+K and Escape are checked first, unconditionally, so they work
+   regardless of focus (including while typing in the palette's own
+   search input). Palette navigation is checked next (only while the
+   palette is open), then the film viewer's arrow-key navigation (MUST
+   FIX, Task 6 carry-forward: guarded with `S.vwP?.length` before
+   indexing into it — the viewer is null until a film is first opened,
+   and an arrow key before that must be inert, not a crash), then
+   presentation mode's arrow-key navigation. Only after all of those is
+   focus-in-a-form-field checked, so the single-letter shortcuts below
+   (⇧P/⇧D/⇧H) never fire while a clinician is typing a plan or a search
+   term. */
 DOC.addEventListener('keydown', e => {
+  const palOn = $('#pal').classList.contains('on');
+  if((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k'){
+    e.preventDefault();
+    palOn ? closePal() : openPal();
+    return;
+  }
   if(e.key === 'Escape'){ closeAll(); return; }
+  if(palOn){
+    if(e.key === 'ArrowDown'){ e.preventDefault(); S.palSel = Math.min(S.palSel + 1, S.palRows.length - 1); markPal(); }
+    if(e.key === 'ArrowUp'){ e.preventDefault(); S.palSel = Math.max(S.palSel - 1, 0); markPal(); }
+    if(e.key === 'Enter'){ e.preventDefault(); S.palRows[S.palSel]?.(); }
+    return;
+  }
+  if($('#viewer').classList.contains('on') && S.vwP?.length){
+    if(e.key === 'ArrowRight'){ S.vwI = (S.vwI + 1) % S.vwP.length; rViewer(); }
+    if(e.key === 'ArrowLeft'){ S.vwI = (S.vwI - 1 + S.vwP.length) % S.vwP.length; rViewer(); }
+    return;
+  }
+  if($('#present').classList.contains('on')){
+    if(!S.patients.length) return;
+    if(e.key === 'ArrowRight'){ S.pr = (S.pr + 1) % S.patients.length; rPresent(); }
+    if(e.key === 'ArrowLeft'){ S.pr = (S.pr - 1 + S.patients.length) % S.patients.length; rPresent(); }
+    return;
+  }
   if(e.target?.matches?.('input,select,textarea')) return;
+  if(e.shiftKey && e.key === 'P'){ S.pr = 0; rPresent(); $('#present').classList.add('on'); }
   if(e.shiftKey && e.key === 'D') setTheme(DOC.documentElement.dataset.theme !== 'dark');
+  if(e.shiftKey && e.key === 'H') go('handover');
 });
 
 let resizeTimer, lastWide = wide();

@@ -155,6 +155,13 @@ export async function fetchWard(fetchImpl = fetch, deps = globalThis){
   return {
     serverTime: out.serverTime,
     patients: list
+      /* Exclude the ward-meta record (id "__ward_meta__", read by
+         extractDefaultUnit below). It has no `status` field, so
+         `p.status !== 'discharged'` is trivially true for it and it
+         would otherwise pass through as a phantom "Unnamed" patient at
+         bed "—". public/app.js:1824-1830 special-cases this same id;
+         mirrored here. */
+      .filter(p => p.id !== '__ward_meta__')
       .filter(p => p.status !== 'discharged')
       .map(p => toViewModel(p, deps))
       .sort((a, b) => (parseInt(a.bed, 10) || 1e9) - (parseInt(b.bed, 10) || 1e9))
@@ -180,6 +187,8 @@ export async function fetchDischarged(fetchImpl = fetch, deps = globalThis){
   return {
     serverTime: out.serverTime,
     patients: list
+      // Exclude the ward-meta record — see fetchWard's identical filter above.
+      .filter(p => p.id !== '__ward_meta__')
       .filter(p => p.status === 'discharged')
       .sort((a, b) => String(b.dischargeDate || '').localeCompare(String(a.dischargeDate || '')))
       .map(p => toViewModel(p, deps))
@@ -202,13 +211,14 @@ export async function fetchDischarged(fetchImpl = fetch, deps = globalThis){
    new fetch, no localStorage, no IndexedDB (v2 has neither) — just a
    second look at data v2 already has.
 
-   Deliberately NOT filtered out of fetchWard's/fetchDischarged's own
-   `patients` output here: doing so would touch the ward-list filtering
-   this task was told not to disturb. Whether that record can leak into
-   the rendered ward/OT list as a phantom "patient" (it has no `status`,
-   so `p.status !== 'discharged'` in fetchWard is trivially true for it)
-   is a separate, pre-existing question the app.js caller must reason
-   about — see task-7-report.md, "Fix round 1", for the write-up. */
+   This record has no `status` field, so `p.status !== 'discharged'` in
+   fetchWard is trivially true for it and `p.status === 'discharged'` in
+   fetchDischarged is trivially false — without an explicit id check it
+   leaks through as a phantom "Unnamed" patient at bed "—" in the ward
+   list, the spine and the round. fetchWard/fetchDischarged above both
+   filter it out by id (Task 8 MUST FIX), so this function's own read of
+   the raw array here is unaffected by that filtering — it reads
+   `rawList` before either function's `.filter()` runs. */
 export function extractDefaultUnit(rawList){
   const meta = Array.isArray(rawList) ? rawList.find(p => p && p.id === '__ward_meta__') : null;
   return String((meta && meta.defaultUnit) || '').trim();

@@ -189,6 +189,31 @@ test('extractDefaultUnit trims whitespace and returns empty string for a blank d
   assert.equal(extractDefaultUnit([{ id:'__ward_meta__', defaultUnit:'' }]), '');
 });
 
+/* ── Task 8 MUST FIX: the ward-meta record has no `status` field, so
+   `p.status !== 'discharged'` in fetchWard is trivially true for it and
+   it would otherwise pass through as a phantom "Unnamed" patient at bed
+   "—" — visible in the ward list, the spine and the round. Mirrors how
+   public/app.js:1824-1830 special-cases this same id. */
+test('fetchWard excludes the ward-meta record from its patients list', async () => {
+  const raw = [
+    { ...base, id:'a' },
+    { id:'__ward_meta__', defaultUnit:'Unit II' }
+  ];
+  const fake = async () => ({ ok:true, json: async () => ({ serverTime: 1, patients: raw }) });
+  const out = await fetchWard(fake);
+  assert.deepEqual(out.patients.map(p => p.id), ['a']);
+});
+
+test('fetchDischarged excludes the ward-meta record from its patients list', async () => {
+  const raw = [
+    { ...base, id:'a', status:'discharged', dischargeDate:'2026-07-20' },
+    { id:'__ward_meta__', defaultUnit:'Unit II' }
+  ];
+  const fake = async () => ({ ok:true, json: async () => ({ serverTime: 1, patients: raw }) });
+  const out = await fetchDischarged(fake);
+  assert.deepEqual(out.patients.map(p => p.id), ['a']);
+});
+
 test('loadV2Module can be called twice in the same process without crashing', async () => {
   const first = await loadV2Module('data.js');
   const second = await loadV2Module('data.js');
