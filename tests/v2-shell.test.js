@@ -437,3 +437,11 @@ test('every icon-only button carries an accessible label', async () => {
     .filter(b => !b.textContent.trim() && !b.getAttribute('aria-label'));
   assert.deepEqual(bad.map(b => b.outerHTML.slice(0, 60)), []);
 });
+
+test('admin view links out to the existing console rather than reimplementing it', async () => {
+  const { document, api } = await bootV2({ patients:[raw(1)] });
+  api.go('admin');
+  const a = document.querySelector('#adP a[href="/"]');
+  assert.ok(a, 'admin pane must link back to the main app');
+  assert.ok(/admin console/i.test(a.textContent));
+});

@@ -435,6 +435,17 @@ function rHandover(){
   if(el) el.innerHTML = handover(S.patients, { when: handoverWhen(), to: 'the on-call team' });
 }
 
+function rAdmin(){
+  $('#adP').innerHTML = `
+  <div class="card" style="max-width:520px">
+    <p class="lbl">Admin console</p>
+    <p class="empty">The admin console is not part of this preview.
+      It opens in the current app, using the same login.</p>
+    <a class="btn gh" href="/" style="display:inline-flex;margin-top:var(--s-3)">
+      Open admin console</a>
+  </div>`;
+}
+
 /* Re-rendering #dcP on every keystroke (Fix round 1, Finding 3) replaces
    the search input's own DOM node — which would otherwise drop focus and
    cursor position after each character, making the box effectively
@@ -510,6 +521,7 @@ function go(v){
   else if(v === 'ot') rOT();
   else if(v === 'handover') rHandover();
   else if(v === 'disch'){ rDisch(); loadDischarged(); }
+  else if(v === 'admin') rAdmin();
 }
 
 /* ── round actions ── */
