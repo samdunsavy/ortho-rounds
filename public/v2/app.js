@@ -13,25 +13,32 @@
 
    ── Why document/window/fetch are captured once, at module top level ──
    tests/helpers/v2-env.js's bootV2 swaps `document`/`window`/`fetch`
-   (and friends) onto globalThis, dynamically imports this module, and
-   then — BEFORE calling render() or dispatching any click — restores
-   globalThis to whatever it was before the swap. That was verified
-   empirically while building this file: a bare, undeferred `document`
-   reference read from inside a function that only runs *after* import
-   (e.g. render(), or a click handler invoked by a later `.click()` in
-   a test) resolves to `undefined`, not the booted jsdom. Only code that
-   runs synchronously during the import itself sees the correct globals.
-   So the swap window is captured here, once, at the top of the module,
-   into DOC/WIN/FETCH — module-scope bindings, not module-scope *element*
-   lookups (`document.getElementById(...)` at top level is still avoided
-   everywhere below; every element is queried inside a function, every
-   time, via $()/$$()). Because bootV2 cache-busts this module's import
-   URL on every call, each test gets a fresh module instance and thus a
-   fresh, correct capture — there is no cross-test staleness. In a real
-   browser this capture is a no-op simplification: window/document/fetch
-   never change during a page's lifetime. fetch is additionally bound to
-   its receiver because real browsers throw "Illegal invocation" if
-   fetch is called detached from `window`. */
+   (and friends) onto globalThis only for the duration of the import and
+   the first render() — it restores the real Node globals in its
+   `finally` right after render() resolves, and returns the booted
+   `document`/`window` as plain object references. Test files then keep
+   interacting with those returned references directly, e.g.
+   `document.querySelector('[data-seen]').click()`, which happens well
+   after bootV2 has returned and the global swap is long gone. A click
+   dispatched that way still runs this module's `click` listener (it was
+   attached to that exact jsdom document during import, so the DOM finds
+   it regardless of globals), but if that listener's body resolved a
+   bare `document`/`window`/`fetch` identifier at call time, it would
+   hit whatever globalThis holds *then* — the restored, non-jsdom value
+   — not the jsdom the test is holding a reference to. Capturing
+   DOC/WIN/FETCH once, at the top of this module, during the narrow
+   window while the swap is active, sidesteps that: every later call
+   reads the closed-over jsdom reference instead of re-resolving a
+   global. This is module-scope *object* capture, not module-scope
+   *element* capture — `document.getElementById(...)` at top level is
+   still avoided everywhere below; every element is queried inside a
+   function, every time, via $()/$$(). Because bootV2 cache-busts this
+   module's import URL on every call, each test gets a fresh module
+   instance and thus a fresh, correct capture — there is no cross-test
+   staleness. In a real browser this capture is a no-op simplification:
+   window/document/fetch never change during a page's lifetime. fetch is
+   additionally bound to its receiver because real browsers throw
+   "Illegal invocation" if fetch is called detached from `window`. */
 import { esc, hero, row, detail, board, workList, complete } from './render.js';
 import { fetchWard, pushPatient, toViewModel } from './data.js';
 

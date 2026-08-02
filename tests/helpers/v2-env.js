@@ -78,22 +78,63 @@ export async function bootV2({ patients = [], width = 1440, fetchImpl } = {}){
   const milestones = readFileSync(new URL('../../public/milestones.js', import.meta.url), 'utf8');
   window.eval(milestones);
 
-  const prev = {};
-  for(const k of ['window','document','navigator','fetch','KeyboardEvent','MouseEvent','Event','requestAnimationFrame']){
-    prev[k] = globalThis[k];
-    globalThis[k] = k === 'requestAnimationFrame'
+  /* Swap globals via property descriptors, not plain assignment. In
+     Node 22, globalThis.navigator is a getter-only accessor
+     ({get, set: undefined, configurable: true}); this module runs in
+     strict mode (ES modules always do), and a strict-mode plain
+     assignment to a getter-only property throws TypeError. Reading the
+     original descriptor and writing it back with defineProperty in the
+     `finally` preserves whatever shape (accessor or data property) the
+     key had before the swap — a property that was an accessor before
+     bootV2 ran is an accessor again afterwards, not silently turned into
+     a data property. Keys with no prior descriptor (most of this list —
+     window/document/KeyboardEvent/etc. don't exist on a plain Node
+     globalThis) are deleted on restore instead. If a key's descriptor
+     genuinely can't be redefined (non-configurable), the swap for that
+     one key is skipped and reported via console.warn rather than
+     throwing and aborting the whole boot. */
+  const keys = ['window','document','navigator','fetch','KeyboardEvent','MouseEvent','Event','requestAnimationFrame'];
+  const prevDescs = {};
+  const swapped = [];
+  for(const k of keys){
+    prevDescs[k] = Object.getOwnPropertyDescriptor(globalThis, k);
+    const value = k === 'requestAnimationFrame'
       ? (cb => setTimeout(cb, 0))
       : window[k];
-  }
-  try {
-    await import(new URL('app.js', V2) + `?n=${++seq}`);
-  } finally {
-    for(const k of Object.keys(prev)) globalThis[k] = prev[k];
+    try {
+      Object.defineProperty(globalThis, k, { value, writable: true, enumerable: true, configurable: true });
+      swapped.push(k);
+    } catch (err) {
+      console.warn(`bootV2: could not redefine global "${k}" (${err.message}); leaving it as-is`);
+    }
   }
 
-  const api = window.__V2__;
-  if(!api) throw new Error('app.js did not expose window.__V2__');
-  await api.render();
+  let api, errCaught;
+  try {
+    /* The restore must happen AFTER render(), not just after the import.
+       app.js resolves document/window/fetch lazily inside its functions
+       (not just at module-eval time), so if globals were restored right
+       after import — before render() and any subsequent click/keydown
+       dispatch — those lookups would hit the real Node globals instead
+       of the booted jsdom. Keeping the swap alive across both the import
+       AND the render() call, with a single `finally` spanning both, is
+       what makes app.js safe to write with bare document/window/fetch
+       references inside its functions. */
+    await import(new URL('app.js', V2) + `?n=${++seq}`);
+    api = window.__V2__;
+    if(!api) throw new Error('app.js did not expose window.__V2__');
+    await api.render();
+  } catch (err) {
+    errCaught = err;
+  } finally {
+    for(const k of swapped){
+      const desc = prevDescs[k];
+      if(desc === undefined) delete globalThis[k];
+      else Object.defineProperty(globalThis, k, desc);
+    }
+  }
+  if(errCaught) throw errCaught;
+
   return { dom, window, document: window.document, api, errors };
 }
 
