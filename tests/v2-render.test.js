@@ -88,3 +88,17 @@ test('complete renders the round summary with the patient count', () => {
   assert.ok(html.includes('Round complete'));
   assert.ok(html.includes('8'));
 });
+
+test('filmBox with hostile kind containing quotes and event handlers is escaped', () => {
+  const hostile = 'preop" onmouseover="alert(1)';
+  const html = R.filmBox(0, hostile, '');
+  assert.ok(!html.includes('onmouseover='), 'hostile event handler must not appear unescaped');
+  assert.ok(!html.includes(hostile), 'hostile string must not appear unescaped in output');
+});
+
+test('filmBox with unknown-but-harmless kind still renders artwork fallback', () => {
+  const html = R.filmBox(0, 'lateral', '');
+  assert.ok(html.includes('<button'), 'unknown kind should render as button, not placeholder');
+  assert.ok(html.includes('data-film="0:preop"'), 'unknown kind should resolve to preop via whitelist');
+  assert.ok(html.includes('<svg'), 'should render artwork SVG for fallback preop');
+});

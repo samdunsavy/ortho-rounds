@@ -48,9 +48,11 @@ const icS = n => `<svg class="ico-s" aria-hidden="true"><use href="#i-${n}"/></s
 
 /* ── fragments ── */
 export function filmBox(pi, kind, cap, cls=''){
-  return kind
-    ? `<button class="fbox ${cls}" data-film="${pi}:${kind}" aria-label="View ${esc(FILM_LABELS[kind] || 'film')}">${FILMS[kind] || FILMS.preop}${cap ? `<em>${esc(cap)}</em>` : ''}</button>`
-    : `<div class="fnone ${cls}" role="img" aria-label="No imaging on file">${ic('img')}</div>`;
+  if (!kind) {
+    return `<div class="fnone ${esc(cls)}" role="img" aria-label="No imaging on file">${ic('img')}</div>`;
+  }
+  const resolvedKind = kind in FILMS ? kind : 'preop';
+  return `<button class="fbox ${esc(cls)}" data-film="${esc(String(pi))}:${esc(resolvedKind)}" aria-label="View ${esc(FILM_LABELS[resolvedKind] || 'film')}">${FILMS[resolvedKind]}${cap ? `<em>${esc(cap)}</em>` : ''}</button>`;
 }
 
 export function track(p){
