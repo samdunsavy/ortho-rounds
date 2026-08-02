@@ -312,3 +312,102 @@ test('discharged with no search term renders every row', () => {
   assert.ok(html.includes('Alice Sharma'));
   assert.ok(html.includes('Bob Verma'));
 });
+
+/* ══════════════════════════════════════════════════════════════════
+   Final whole-branch review — B4 and the render-side should-fix items.
+   ══════════════════════════════════════════════════════════════════ */
+
+/* ── B4: 'discharge' vs 'fordischarge' ──
+   tests/v2-render.test.js's original board test asserts on column
+   HEADINGS only, which is exactly why this survived: the column renders
+   with the right title and a count of 0 while the patient lands in no
+   column at all. These assert MEMBERSHIP. */
+function boardColumn(html, heading){
+  return html.split('<div class="ch">').slice(1)
+    .find(seg => seg.includes(`>${heading}</b>`));
+}
+
+test('a for-discharge patient is listed in the For discharge column, not dropped', () => {
+  const html = R.board([{ ...p, id:'d1', name:'Ready Patel', status:'fordischarge', stat:'For discharge' }]);
+  const col = boardColumn(html, 'For discharge');
+  assert.ok(col, 'expected a For discharge column');
+  assert.ok(col.includes('Ready Patel'),
+    'the for-discharge patient must appear in the For discharge column');
+  assert.match(col, /<span>1<\/span>/, 'the column count must be 1, not 0');
+});
+
+test('every status in the codebase vocabulary lands in some board column', () => {
+  // public/app.js:13-14 — STATUS_LABELS / STATUS_CYCLE.
+  const statuses = ['preop', 'conservative', 'postop', 'fordischarge'];
+  const html = R.board(statuses.map((s, i) => ({ ...p, id:'s'+i, name:'Patient'+i, status:s })));
+  for(let i = 0; i < statuses.length; i++){
+    assert.ok(html.includes('Patient'+i), `a "${statuses[i]}" patient is in no column at all`);
+  }
+});
+
+/* ── should-fix: conservative patients are not post-operative ──
+   getPatientPod returns days-since-ADMISSION for conservative patients;
+   the main app renders those with milestoneDayPrefix ("Day"), never
+   "POD". data.js supplies the prefix on the view model; render.js only
+   reads it. */
+const conservative = { ...p, id:'c1', name:'S. Rao', status:'conservative', stat:'Conservative',
+  pod:4, dayPrefix:'Day', podLabel:'Day 4',
+  track:[['admit',0,'done'],['Day 4',40,'now']] };
+
+test('a conservative patient is labelled Day n in the row, board, handover and presentation', () => {
+  const rowHtml = R.row(conservative, 0, false, false);
+  assert.ok(rowHtml.includes('Day 4'), 'row must use the patient\'s own day prefix');
+  assert.ok(!rowHtml.includes('POD'), 'a never-operated patient must not be labelled POD');
+
+  const boardHtml = R.board([conservative]);
+  assert.ok(boardHtml.includes('Day 4'));
+  assert.ok(!boardHtml.includes('POD'));
+
+  const hoHtml = R.handover([conservative], { when:'today', to:'on-call' });
+  assert.ok(hoHtml.includes('Day 4'));
+  assert.ok(!hoHtml.includes('POD'));
+
+  const slide = R.presentSlide(conservative);
+  assert.ok(/DAY 4/.test(slide));
+  assert.ok(!/POST-OP/.test(slide), 'a conservative patient is not post-operative');
+});
+
+test('a post-op patient still reads POD n everywhere', () => {
+  assert.ok(R.row(p, 0, false, false).includes('POD 4'));
+  assert.ok(R.board([p]).includes('POD 4'));
+  assert.ok(R.handover([p], { when:'today', to:'on-call' }).includes('POD 4'));
+  assert.ok(/POD 4/.test(R.presentSlide(p)));
+});
+
+/* ── should-fix: `kind in FILMS` walks Object.prototype ── */
+test('a prototype-borrowed image type never leaks function source into the markup', () => {
+  for(const kind of ['constructor', 'toString', 'hasOwnProperty', 'valueOf']){
+    const box = R.filmBox(0, kind, '');
+    assert.ok(!/native code|function \w*\(/.test(box), `filmBox leaked for "${kind}": ${box.slice(0, 120)}`);
+    assert.ok(box.includes('data-film="0:preop"'), `filmBox must fall back to preop for "${kind}"`);
+
+    const art = R.filmArt(kind);
+    assert.ok(typeof art === 'string' && art.startsWith('<svg'),
+      `filmArt must return whitelisted artwork for "${kind}"`);
+
+    const title = R.viewerTitle(kind, 0, 1);
+    assert.ok(!/native code|function \w*\(/.test(title), `viewerTitle leaked for "${kind}"`);
+
+    const rowHtml = R.row({ ...p, films:[kind] }, 0, false, false);
+    assert.ok(!/native code|function \w*\(/.test(rowHtml), `row leaked for "${kind}"`);
+    assert.ok(rowHtml.includes('<svg'), `row must render whitelisted artwork for "${kind}"`);
+
+    const slide = R.presentSlide({ ...p, films:[kind] });
+    assert.ok(!/native code|function \w*\(/.test(slide), `presentSlide leaked for "${kind}"`);
+  }
+});
+
+test('checklist toggles carry the item\'s stable id, not its list position', () => {
+  const withIds = { ...p,
+    checks:[['Suture removal','POD 12',0,'chk_a'], ['Weight bearing','POD 2',0,'chk_b']],
+    dc:[['Summary',0,'dc_a']] };
+  const html = R.detail(withIds, 5);
+  assert.ok(html.includes('data-ck="5:chk_a"'), 'the first milestone must be addressed by id');
+  assert.ok(html.includes('data-ck="5:chk_b"'), 'the second milestone must be addressed by id');
+  assert.ok(html.includes('data-dc="5:dc_a"'), 'discharge items must be addressed by id too');
+});

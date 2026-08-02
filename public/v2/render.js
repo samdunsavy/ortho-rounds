@@ -43,6 +43,27 @@ export function esc(s){
   }[c]));
 }
 
+/* Resolves an image type to a whitelisted FILMS key.
+   `hasOwnProperty.call` rather than `kind in FILMS`: `in` walks
+   Object.prototype, so an image type of `constructor`/`toString`/
+   `valueOf` passed the old guard and rendered Function.prototype.
+   toString's output — literal JS source — into the button's markup and
+   aria-label. Every film lookup in this module (filmBox, filmArt,
+   row's inline thumbnail) goes through here, so none of them can be
+   handed a non-whitelisted key. */
+const resolveFilmKind = kind =>
+  (kind && Object.prototype.hasOwnProperty.call(FILMS, kind)) ? kind : 'preop';
+
+/* "POD 4" / "Day 4" for a patient with a clinical day, '' otherwise.
+   The POD-vs-Day decision is made by public/milestones.js's
+   milestoneDayPrefix() and carried onto the view model by data.js — this
+   module (which must stay pure) only reads it. The literal fallback
+   covers a view model built before that field existed. */
+function dayLabel(p){
+  if(p.pod == null) return '';
+  return p.podLabel || `POD ${p.pod}`;
+}
+
 const ic = n => `<svg class="ico" aria-hidden="true"><use href="#i-${n}"/></svg>`;
 const icS = n => `<svg class="ico-s" aria-hidden="true"><use href="#i-${n}"/></svg>`;
 
@@ -51,7 +72,7 @@ export function filmBox(pi, kind, cap, cls=''){
   if (!kind) {
     return `<div class="fnone ${esc(cls)}" role="img" aria-label="No imaging on file">${ic('img')}</div>`;
   }
-  const resolvedKind = kind in FILMS ? kind : 'preop';
+  const resolvedKind = resolveFilmKind(kind);
   return `<button class="fbox ${esc(cls)}" data-film="${esc(String(pi))}:${esc(resolvedKind)}" aria-label="View ${esc(FILM_LABELS[resolvedKind] || 'film')}">${FILMS[resolvedKind]}${cap ? `<em>${esc(cap)}</em>` : ''}</button>`;
 }
 
@@ -87,12 +108,21 @@ export function hero(p, i){
 export function row(p, i, cur, seen){
   const bad = badOf(p);
   return `<button class="qr ${seen ? 'seen' : ''}" data-open="${i}" ${cur ? 'aria-current="true"' : ''}>
- <span class="qb">${esc(p.bed)}</span><span class="qm ${p.films[0] ? '' : 'none'}">${p.films[0] ? (FILMS[p.films[0]] || FILMS.preop) : ''}</span>
+ <span class="qb">${esc(p.bed)}</span><span class="qm ${p.films[0] ? '' : 'none'}">${p.films[0] ? FILMS[resolveFilmKind(p.films[0])] : ''}</span>
  <span class="qi"><span class="qn">${esc(p.name)}</span><span class="qs">${esc(p.dx)}</span></span>
  ${bad ? `<span class="qt" style="background:var(--bad-bg);color:var(--bad)">review</span>`
-    : `<span class="qt" style="background:var(--paper);color:var(--ink-3)">${p.pod != null ? 'POD ' + p.pod : esc(p.stat)}</span>`}</button>`;
+    : `<span class="qt" style="background:var(--paper);color:var(--ink-3)">${p.pod != null ? esc(dayLabel(p)) : esc(p.stat)}</span>`}</button>`;
 }
 
+/* `data-ck`/`data-dc` are "<patient index>:<checklist item id>". The id
+   (not the item's list position) is what app.js resolves the write
+   against: S.raw is replaced by every write's loadWard() without the
+   patient being re-rendered, so a rendered position can drift onto a
+   different item in the newer record — a click on the row labelled
+   "Weight bearing" pushed "Suture removal → done", with a success toast.
+   An id is stable regardless of refresh timing. data.js supplies the id
+   as the last element of each checks/dc tuple, falling back to the
+   position for records whose items carry no id. */
 export function detail(p, i){
   const firstOpen = p.checks.findIndex(c => !c[2]);
   return `<div class="dt-hd">
@@ -112,10 +142,10 @@ export function detail(p, i){
   ${p.hist.map(([d,t]) => `<div class="hist"><b>${esc(d)}</b><span>${esc(t)}</span></div>`).join('')}</div>
  <div class="g2">
   <div class="card"><div class="lbl">Milestones</div>
-   ${p.checks.map(([l,d,done],n) => `<button class="ck ${done ? 'done' : ''} ${n === firstOpen ? 'due' : ''}" data-ck="${i}:${n}" aria-pressed="${!!done}">
+   ${p.checks.map(([l,d,done,key],n) => `<button class="ck ${done ? 'done' : ''} ${n === firstOpen ? 'due' : ''}" data-ck="${i}:${esc(key ?? n)}" aria-pressed="${!!done}">
     <span class="ck-b">${icS('tick')}</span><span>${esc(l)}</span><em>${esc(d)}</em></button>`).join('')}</div>
   <div class="card"><div class="lbl">Discharge checklist</div>
-   ${p.dc.length ? p.dc.map(([l,done],n) => `<button class="ck ${done ? 'done' : ''}" data-dc="${i}:${n}" aria-pressed="${!!done}">
+   ${p.dc.length ? p.dc.map(([l,done,key],n) => `<button class="ck ${done ? 'done' : ''}" data-dc="${i}:${esc(key ?? n)}" aria-pressed="${!!done}">
     <span class="ck-b">${icS('tick')}</span><span>${esc(l)}</span></button>`).join('')
     : `<p class="empty">Not started — patient is ${esc(String(p.stat || '').toLowerCase())}.</p>`}</div></div>
  <div class="card"><div class="lbl">Record</div><div class="g4">
@@ -127,12 +157,18 @@ export function detail(p, i){
   <div class="fld" style="grid-column:span 2"><label>Latest labs</label><div class="mono">${esc(p.labs)}</div></div></div></div>`;
 }
 
+/* Column keys are this codebase's REAL status values — the four in
+   public/app.js:13-14's STATUS_LABELS/STATUS_CYCLE (`preop`,
+   `conservative`, `postop`, `fordischarge`) — not the prototype's demo
+   vocabulary. The last column was keyed `discharge`, which matches no
+   patient: the column rendered with the right heading and a count of 0
+   while every for-discharge patient appeared in no column at all. */
 export function board(patients){
   const cols = [
     ['preop','Pre-op','var(--accent)'],
     ['postop','Post-op','var(--ink-2)'],
     ['conservative','Conservative','var(--bone-ink)'],
-    ['discharge','For discharge','var(--good)']
+    ['fordischarge','For discharge','var(--good)']
   ];
   return cols.map(([k,l,c]) => {
     const list = patients.map((p,i) => [p,i]).filter(([p]) => p.status === k);
@@ -141,7 +177,7 @@ export function board(patients){
       const bad = badOf(p);
       return `<button class="tile" data-open="${i}" style="border-left-color:${bad ? 'var(--bad)' : c}">
     <span class="tile-t"><b>${esc(p.bed)}</b><span>${esc(p.name)}</span></span>
-    <span class="tile-s" style="${bad ? 'color:var(--bad)' : ''}">${esc(bad ? bad[1] : (p.pod != null ? 'POD ' + p.pod : p.dx))}</span></button>`;
+    <span class="tile-s" style="${bad ? 'color:var(--bad)' : ''}">${esc(bad ? bad[1] : (p.pod != null ? dayLabel(p) : p.dx))}</span></button>`;
     }).join('') : `<p class="empty">None</p>`}</div>`;
   }).join('');
 }
@@ -241,7 +277,7 @@ export function handover(patients, meta){
     const bad = badOf(p);
     const planText = p.plan || p.hist[0]?.[1] || 'plan not entered';
     return `<div class="ho"><div class="ho-t"><b>${esc(p.bed)}</b>
- <strong>${esc(p.name)}</strong><em>${esc(p.age)} · ${p.pod != null ? 'POD ' + p.pod : esc(p.stat)}</em></div>
+ <strong>${esc(p.name)}</strong><em>${esc(p.age)} · ${p.pod != null ? esc(dayLabel(p)) : esc(p.stat)}</em></div>
  <p class="ho-p">${esc(p.dx)} — ${esc(planText)}</p>
  ${bad ? `<span class="ho-f">${esc(bad[1])}</span>` : ''}</div>`;
   }).join('');
@@ -322,12 +358,16 @@ export function discharged(rows, search = ''){
  *  placeholder in that case (see presentSlide() below). */
 export function filmArt(kind){
   if(!kind) return null;
-  return FILMS[kind in FILMS ? kind : 'preop'];
+  return FILMS[resolveFilmKind(kind)];
 }
 
-/** Human label for a film kind, e.g. for the viewer's title bar. */
+/** Human label for a film kind, e.g. for the viewer's title bar.
+ *  hasOwnProperty rather than a plain lookup: `FILM_LABELS['constructor']`
+ *  is inherited from Object.prototype and would otherwise be stringified
+ *  into the viewer's title bar as literal JS source. */
 export function filmLabelOf(kind){
-  return FILM_LABELS[kind] || 'Film';
+  return Object.prototype.hasOwnProperty.call(FILM_LABELS, kind)
+    ? FILM_LABELS[kind] : 'Film';
 }
 
 /** Film viewer title bar: "<b>Pre-op film</b>2 of 3". */
@@ -361,7 +401,12 @@ export function paletteRow(icon, label, hint, index){
  *  generic image icon, never an empty black box with no indication. */
 export function presentSlide(p){
   const art = filmArt(p.films[0]);
-  const podLabel = p.pod != null ? `POST-OP DAY ${p.pod}` : esc(String(p.stat || '').toUpperCase());
+  /* "POD 4" / "DAY 4" — the prefix comes from the view model (see
+     dayLabel above), so a conservative patient is never announced to a
+     projected room as post-operative. */
+  const podLabel = p.pod != null
+    ? esc(dayLabel(p)).toUpperCase()
+    : esc(String(p.stat || '').toUpperCase());
   return `<div class="pr-f ${art ? '' : 'none'}">${art || ic('img')}</div>
  <div class="pr-i"><div class="pr-bd">BED ${esc(p.bed)}</div><h2 class="pr-n">${esc(p.name)}</h2>
  <p class="pr-d">${esc(p.dx)}</p><p class="pr-p">${esc(p.age)} · ${esc(p.proc)}</p>

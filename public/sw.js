@@ -47,7 +47,11 @@ self.addEventListener('fetch', (event)=>{
   // The /v2 preview client is online-only and must never be served from
   // this worker's cache — a cached root-shell fallback would silently show
   // testers the old UI at the new URL.
-  if(url.pathname.startsWith('/v2')) return;
+  // Prefix-precise: testing for the bare three-character prefix would
+  // also swallow /v2x.js, /v2-old.css and anything else that merely
+  // begins with those characters, quietly excluding future root-app
+  // assets from the cache. Match the exact path or a real descendant.
+  if(url.pathname === '/v2' || url.pathname.startsWith('/v2/')) return;
 
   event.respondWith(
     fetch(req)

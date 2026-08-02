@@ -24,7 +24,7 @@ function fmtDate(iso){
 /** Post-op / care track. Stations are laid out proportionally between the
  *  operation (0%) and either the expected discharge date or the latest
  *  milestone due-day (100%). Exactly one station carries state 'now'. */
-function buildTrack(raw, pod, deps){
+function buildTrack(raw, pod, deps, dayPrefix){
   const preOp = pod == null;
   if(preOp){
     return [
@@ -45,10 +45,23 @@ function buildTrack(raw, pod, deps){
   // section. Adding a real discharge-anchor field is a listed outstanding
   // build prerequisite in the design spec.
   const hasDischarge = !!raw.expectedDischargeDate;
-  const span = Math.max(pod + 1, ...dueDays, hasDischarge ? pod + 3 : 0);
+  /* Math.max(1, ...) guards the divide-by-zero: a mistyped FUTURE surgery
+     date yields a negative pod, which collapsed `span` to 0 and produced
+     width:NaN% on every station derived from it. A span of at least one
+     day keeps every pct() finite; the clamp below then pins a negative
+     day to 0%. */
+  const span = Math.max(1, pod + 1, ...dueDays, hasDischarge ? pod + 3 : 0);
   const pct = day => Math.max(0, Math.min(100, Math.round((day / span) * 100)));
 
-  const stations = [['op', 0, 'done'], [`POD ${pod}`, pct(pod), 'now']];
+  /* A conservative patient has never been operated on — getPatientPod
+     counts their day from ADMISSION (public/milestones.js:274-280), so
+     station zero is the admission, not an operation, and the day station
+     carries milestoneDayPrefix's "Day", not "POD". */
+  const conservative = deps.isConservativePatient
+    ? deps.isConservativePatient(raw)
+    : raw.status === 'conservative';
+  const stations = [[conservative ? 'admit' : 'op', 0, 'done'],
+    [`${dayPrefix} ${pod}`, pct(pod), 'now']];
   for(const c of checks){
     const day = Number(c.duePod);
     if(!Number.isFinite(day) || day <= pod) continue;
@@ -67,15 +80,30 @@ function buildFlags(raw, pod, deps){
     if(deps.isItemOverdue && deps.isItemOverdue(c, pod))
       flags.push(['bad', `${c.label || 'Milestone'} overdue`]);
   }
-  const planToday = raw.planUpdatedAt
-    && String(raw.planUpdatedAt).slice(0, 10) === todayISO();
-  if(!raw.dailyPlan || !planToday) flags.push(['warn', 'No plan entered today']);
+  /* Mirrors public/app.js:4398's hasPlanToday() exactly:
+     `!!(p.dailyPlan && p.dailyPlanDate === todayISO())`. The previous
+     version compared `String(planUpdatedAt).slice(0,10)` — an epoch
+     NUMBER — against an ISO date, which can never match, so every
+     patient carried this warning permanently and the Work view listed
+     the whole ward forever. dailyPlanDate is the field the main app
+     stamps (public/app.js:1205) and reads; planUpdatedAt is a
+     millisecond timestamp, never a date. */
+  const planToday = !!(raw.dailyPlan && raw.dailyPlanDate === todayISO());
+  if(!planToday) flags.push(['warn', 'No plan entered today']);
   if(!flags.length) flags.push(['ok', 'Nothing outstanding']);
   return flags;
 }
 
 export function toViewModel(raw, deps = globalThis){
   const pod = deps.getPatientPod ? deps.getPatientPod(raw) : null;
+  /* "POD" for an operated patient, "Day" for a conservative one — the
+     decision belongs to public/milestones.js:287's milestoneDayPrefix()
+     and is NOT reimplemented here; v2 only carries its answer onto the
+     view model so render.js (which must stay pure) can read it instead
+     of hardcoding "POD". Falls back to 'POD' only when deps has no
+     milestones module at all, which is the pre-existing convention for
+     every other deps.* call in this file. */
+  const dayPrefix = deps.milestoneDayPrefix ? deps.milestoneDayPrefix(raw) : 'POD';
   const sex = (raw.sex || '').trim();
   const labs = raw.labs && typeof raw.labs === 'object'
     ? Object.entries(raw.labs).map(([k, v]) => `${k} ${v}`).join(' · ')
@@ -122,17 +150,33 @@ export function toViewModel(raw, deps = globalThis){
     labs: labs || 'None recorded',
     films: (Array.isArray(raw.images) ? raw.images : []).map(i => i.type || 'preop'),
     pod,
+    dayPrefix,
+    /* Pre-composed "POD 4" / "Day 4" for every surface that shows the
+       clinical day (row, board tile, handover, presentation). null when
+       there is no day to show. */
+    podLabel: pod == null ? null : `${dayPrefix} ${pod}`,
     status: raw.status || 'preop',
     stat: STATUS_LABELS[raw.status] || 'Pre-op',
     plan: raw.dailyPlan || '',
-    track: buildTrack(raw, pod, deps),
+    track: buildTrack(raw, pod, deps, dayPrefix),
     flags: buildFlags(raw, pod, deps),
+    /* Fourth/third element is the item's STABLE id. render.js addresses
+       checklist toggles by this id, never by list position: S.raw is
+       replaced by every write's loadWard() without the patient being
+       re-rendered, so a positional index silently drifts onto whatever
+       item happens to occupy that slot in the newer record — which is
+       how a click on "Weight bearing" pushed "Suture removal → done".
+       Falls back to the position for a record whose items carry no id
+       (older data predating public/milestones.js's normalizePostOpItem,
+       which always assigns one); app.js resolves that fallback back to
+       an index rather than failing the write. */
     checks: (Array.isArray(raw.postOpChecks) ? raw.postOpChecks : [])
-      .map(c => [c.label || 'Milestone',
-        Number.isFinite(Number(c.duePod)) ? `POD ${c.duePod}` : '—',
-        c.status === 'done' ? 1 : 0]),
+      .map((c, n) => [c.label || 'Milestone',
+        Number.isFinite(Number(c.duePod)) ? `${dayPrefix} ${c.duePod}` : '—',
+        c.status === 'done' ? 1 : 0,
+        c.id || String(n)]),
     dc: (Array.isArray(raw.dischargeChecks) ? raw.dischargeChecks : [])
-      .map(c => [c.label || 'Item', c.status === 'done' ? 1 : 0]),
+      .map((c, n) => [c.label || 'Item', c.status === 'done' ? 1 : 0, c.id || String(n)]),
     hist: (Array.isArray(raw.planHistory) ? raw.planHistory : [])
       .slice().reverse().map(h => [fmtDate(h.date) || h.date || '', h.text || ''])
   };

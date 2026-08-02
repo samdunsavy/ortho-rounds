@@ -167,7 +167,7 @@ test('a push that throws a network error never shows a success toast and reverts
       throw new Error('network down');
     }
   });
-  const btn = document.querySelector('[data-ck="0:0"]');
+  const btn = document.querySelector('[data-ck="0:c1"]');
   assert.ok(btn, 'expected a milestone checkbox to render');
   btn.click();
   await api.state.pending;
@@ -191,7 +191,7 @@ test('toggling a milestone stamps updatedAt on the toggled item', async () => {
     }
   });
   const before = Date.now();
-  document.querySelector('[data-ck="0:0"]').click();
+  document.querySelector('[data-ck="0:c1"]').click();
   await api.state.pending;
   assert.ok(pushedBody, 'expected a push to have been sent');
   const pushedItem = pushedBody.changes[0].postOpChecks.find(c => c.id === 'c1');
@@ -221,7 +221,7 @@ test('a toggle push reflects a server-side change made after the initial fetch, 
       return { ok:true, json: async () => ({ serverTime:3 }) };
     }
   });
-  document.querySelector('[data-ck="0:0"]').click(); // toggles c1, must not touch c2
+  document.querySelector('[data-ck="0:c1"]').click(); // toggles c1, must not touch c2
   await api.state.pending;
   assert.ok(pushedBody, 'expected a push to have been sent');
   const sentC2 = pushedBody.changes[0].postOpChecks.find(c => c.id === 'c2');
@@ -273,7 +273,7 @@ test('two rapid checklist toggles on the same patient are serialised — neither
   };
 
   const { document } = await bootV2({ fetchImpl });
-  const btnC1 = document.querySelector('[data-ck="0:0"]');
+  const btnC1 = document.querySelector('[data-ck="0:c1"]');
   assert.ok(btnC1, 'expected the first milestone checkbox to render');
 
   btnC1.click(); // starts write cycle A (toggles c1) — its refresh is the slow one
@@ -282,7 +282,7 @@ test('two rapid checklist toggles on the same patient are serialised — neither
   // network), replacing the DOM — a reference queried before this click
   // would now be detached and its .click() would never bubble to the
   // document-level listener. Re-query after A's click, not before.
-  const btnC2 = document.querySelector('[data-ck="0:1"]');
+  const btnC2 = document.querySelector('[data-ck="0:c2"]');
   assert.ok(btnC2, 'expected the second milestone checkbox to render');
   btnC2.click(); // starts write cycle B (toggles c2) before A has settled
 
@@ -444,4 +444,279 @@ test('admin view links out to the existing console rather than reimplementing it
   const a = document.querySelector('#adP a[href="/"]');
   assert.ok(a, 'admin pane must link back to the main app');
   assert.ok(/admin console/i.test(a.textContent));
+});
+
+/* ══════════════════════════════════════════════════════════════════
+   Final whole-branch review — blocking findings B1, B2, B3, B5 and
+   the should-fix items that live in app.js. Every test below failed
+   against the pre-fix code; see the fix-wave report for the recorded
+   failure output.
+
+   Checklist controls are located by their LABEL, never by their
+   data-ck/data-dc attribute value, so these tests assert on clinical
+   behaviour ("the clinician clicked the row that says X") rather than
+   on the addressing scheme they are here to change.
+   ══════════════════════════════════════════════════════════════════ */
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const ckByLabel = (document, label) =>
+  [...document.querySelectorAll('[data-ck]')].find(b => b.textContent.includes(label));
+const todayISOForTest = () => {
+  const d = new Date();
+  const q = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${q(d.getMonth()+1)}-${q(d.getDate())}`;
+};
+/* Splits a fetchImpl's traffic into reads (fetchWard: empty `changes`)
+   and writes (pushPatient: one entry in `changes`), recording every
+   pushed record. `reads` returns the snapshot to answer the Nth read
+   with; a real server answers with the state as of REQUEST time, so
+   the snapshot is cloned at request time, not at resolve time. */
+function scriptedServer({ snapshotFor, delayFor = () => 0 }){
+  const pushes = [];
+  let readCount = 0;
+  const fetchImpl = async (url, opts) => {
+    const body = JSON.parse(opts.body);
+    if(body.changes && body.changes.length){
+      pushes.push(JSON.parse(JSON.stringify(body.changes[0])));
+      return { ok:true, json: async () => ({ serverTime: 100 + pushes.length }) };
+    }
+    readCount++;
+    const n = readCount;
+    const snapshot = JSON.parse(JSON.stringify(snapshotFor(n)));
+    const wait = delayFor(n);
+    if(wait) await sleep(wait);
+    return { ok:true, json: async () => ({ serverTime: n, patients:[snapshot] }) };
+  };
+  return { fetchImpl, pushes, reads: () => readCount };
+}
+
+/* ── B1: the wrong milestone gets marked done ──
+   S.raw is silently replaced by any write's loadWard() without the
+   patient being re-rendered, so positional data-ck indices drift out of
+   sync with the record they index into. */
+test('a milestone toggle addresses the item the clinician clicked, even after S.raw was refreshed under it', async () => {
+  const before = { ...raw(1), dailyPlan:'', postOpChecks:[
+    { id:'a1', label:'Weight bearing', duePod:2, status:'pending' }
+  ]};
+  // Another clinician inserts a milestone AHEAD of the rendered one.
+  const after = { ...raw(1), dailyPlan:'', postOpChecks:[
+    { id:'b1', label:'Suture removal', duePod:12, status:'pending' },
+    { id:'a1', label:'Weight bearing', duePod:2, status:'pending' }
+  ]};
+  const { fetchImpl, pushes } = scriptedServer({ snapshotFor: n => n === 1 ? before : after });
+  const { document, window, api } = await bootV2({ fetchImpl });
+
+  const weightBearing = ckByLabel(document, 'Weight bearing');
+  assert.ok(weightBearing, 'expected the Weight bearing milestone to render');
+
+  // A plan write refreshes S.raw (picking up the inserted milestone) and
+  // deliberately does NOT re-render the patient.
+  const plan = document.querySelector('#roundDet .pin');
+  plan.value = 'NPO from midnight';
+  plan.dispatchEvent(new window.Event('input', { bubbles:true }));
+  await sleep(800);
+  await api.state.pending;
+
+  // The clinician now clicks the row they can actually see.
+  weightBearing.click();
+  await api.state.pending;
+
+  const pushed = pushes.at(-1);
+  assert.ok(pushed, 'expected a checklist push');
+  const a1 = pushed.postOpChecks.find(c => c.id === 'a1');
+  const b1 = pushed.postOpChecks.find(c => c.id === 'b1');
+  assert.equal(a1.status, 'done', 'the clicked milestone (Weight bearing) must be the one marked done');
+  assert.equal(b1.status, 'pending', 'a milestone the clinician never clicked must not be marked done');
+});
+
+test('a discharge-checklist toggle addresses the item the clinician clicked, even after S.raw was refreshed under it', async () => {
+  const before = { ...raw(1), dailyPlan:'', dischargeChecks:[
+    { id:'x1', label:'Physio review', status:'pending' }
+  ]};
+  const after = { ...raw(1), dailyPlan:'', dischargeChecks:[
+    { id:'y1', label:'Discharge summary', status:'pending' },
+    { id:'x1', label:'Physio review', status:'pending' }
+  ]};
+  const { fetchImpl, pushes } = scriptedServer({ snapshotFor: n => n === 1 ? before : after });
+  const { document, window, api } = await bootV2({ fetchImpl });
+
+  const physio = [...document.querySelectorAll('[data-dc]')].find(b => b.textContent.includes('Physio review'));
+  assert.ok(physio, 'expected the Physio review item to render');
+
+  const plan = document.querySelector('#roundDet .pin');
+  plan.value = 'For discharge tomorrow';
+  plan.dispatchEvent(new window.Event('input', { bubbles:true }));
+  await sleep(800);
+  await api.state.pending;
+
+  physio.click();
+  await api.state.pending;
+
+  const pushed = pushes.at(-1);
+  assert.ok(pushed, 'expected a discharge-checklist push');
+  assert.equal(pushed.dischargeChecks.find(c => c.id === 'x1').status, 'done');
+  assert.equal(pushed.dischargeChecks.find(c => c.id === 'y1').status, 'pending');
+});
+
+/* ── B2: a typed plan is destroyed by ticking a checkbox ── */
+test('ticking a milestone inside the plan debounce keeps the typed plan and writes it', async () => {
+  const rec = { ...raw(1), dailyPlan:'', postOpChecks:[
+    { id:'c1', label:'Drain out', duePod:1, status:'pending' }
+  ]};
+  const { fetchImpl, pushes } = scriptedServer({ snapshotFor: () => rec });
+  const { document, window, api } = await bootV2({ fetchImpl });
+
+  const typed = 'NPO from midnight, plan ORIF tomorrow';
+  const plan = document.querySelector('#roundDet .pin');
+  plan.value = typed;
+  plan.dispatchEvent(new window.Event('input', { bubbles:true }));
+
+  ckByLabel(document, 'Drain out').click();   // inside the 600ms debounce
+  await api.state.pending;
+
+  assert.equal(api.state.patients[0].plan, typed,
+    'the un-pushed plan must survive the checklist re-render');
+  assert.equal(document.querySelector('#roundDet .pin').value, typed,
+    'the plan input must not blank itself under the clinician');
+
+  await sleep(800);
+  await api.state.pending;
+  const planPush = pushes.find(b => b.dailyPlan);
+  assert.ok(planPush, 'the debounced plan write must still carry the typed text, not an empty string');
+  assert.equal(planPush.dailyPlan, typed);
+});
+
+/* ── B3(a): v2 plan writes must stamp dailyPlanDate, mirroring
+   public/app.js:1205 — otherwise merge.js clears it and the main app
+   reports the patient as "No plan entered for today". ── */
+test('a plan write stamps dailyPlanDate for today, not just planUpdatedAt', async () => {
+  const rec = { ...raw(1), dailyPlan:'', dailyPlanDate:'2026-01-01' };
+  const { fetchImpl, pushes } = scriptedServer({ snapshotFor: () => rec });
+  const { document, window, api } = await bootV2({ fetchImpl });
+
+  const plan = document.querySelector('#roundDet .pin');
+  plan.value = 'Mobilise full weight bearing';
+  plan.dispatchEvent(new window.Event('input', { bubbles:true }));
+  await sleep(800);
+  await api.state.pending;
+
+  const pushed = pushes.at(-1);
+  assert.ok(pushed, 'expected a plan push');
+  assert.equal(pushed.dailyPlan, 'Mobilise full weight bearing');
+  assert.equal(pushed.dailyPlanDate, todayISOForTest(),
+    'dailyPlanDate must be stamped, or merge.js drops it and / reports "no plan today"');
+  assert.ok(Number(pushed.planUpdatedAt) > 0, 'planUpdatedAt must still be stamped');
+});
+
+/* ── B5: a refresh starting mid-write must not make the write push a
+   boot-era snapshot. ── */
+test('a refresh that starts mid-write never makes the write push a stale snapshot', async () => {
+  const v0 = { ...raw(1), postOpChecks:[
+    { id:'c1', label:'Drain out', duePod:1, status:'pending' }
+  ]};
+  // Between boot and this write, another clinician marked c1 done and
+  // added c2. The write must toggle c1 OFF (done -> pending) and must
+  // not drop c2.
+  const v1 = { ...raw(1), postOpChecks:[
+    { id:'c1', label:'Drain out', duePod:1, status:'done', updatedAt: Date.now() },
+    { id:'c2', label:'Mobilise', duePod:2, status:'done', updatedAt: Date.now() }
+  ]};
+  const { fetchImpl, pushes } = scriptedServer({
+    snapshotFor: n => n === 1 ? v0 : v1,
+    // read 2 is the write's own refresh (slow); read 3 is the superseding
+    // load started 5ms later, which resolves later still.
+    delayFor: n => n === 2 ? 60 : n === 3 ? 300 : 0
+  });
+  const { document, api } = await bootV2({ fetchImpl });
+
+  ckByLabel(document, 'Drain out').click();     // starts the write cycle
+  await sleep(5);
+  const superseding = api.render();             // bumps loadSeq mid-write
+  await api.state.pending;
+
+  const pushed = pushes.at(-1);
+  assert.ok(pushed, 'expected a checklist push');
+  assert.ok(pushed.postOpChecks.find(c => c.id === 'c2'),
+    "another clinician's milestone must not be dropped by a stale full-replace push");
+  assert.equal(pushed.postOpChecks.find(c => c.id === 'c1').status, 'pending',
+    "the clinician's own toggle must be applied to the fresh record, not inverted by a stale one");
+  await superseding;
+});
+
+/* ── should-fix: unsaved work on tab close ── */
+test('closing the tab with an undebounced plan edit warns rather than losing it silently', async () => {
+  const { document, window } = await bootV2({ patients:[raw(1)] });
+  const clean = new window.Event('beforeunload', { cancelable:true });
+  window.dispatchEvent(clean);
+  assert.equal(clean.defaultPrevented, false, 'a tab with nothing pending must not warn');
+
+  const plan = document.querySelector('#roundDet .pin');
+  plan.value = 'Not yet pushed';
+  plan.dispatchEvent(new window.Event('input', { bubbles:true }));
+
+  const dirty = new window.Event('beforeunload', { cancelable:true });
+  window.dispatchEvent(dirty);
+  assert.ok(dirty.defaultPrevented, 'an un-pushed plan edit must warn before the tab closes');
+});
+
+/* ── should-fix: a failed refresh must not leave a live editable pane ── */
+test('a failed refresh clears the detail pane instead of leaving stale live controls', async () => {
+  const rec = { ...raw(1), postOpChecks:[{ id:'c1', label:'Drain out', duePod:1, status:'pending' }] };
+  let calls = 0;
+  const { document, api } = await bootV2({
+    fetchImpl: async () => {
+      calls++;
+      if(calls === 1) return { ok:true, json: async () => ({ serverTime:1, patients:[rec] }) };
+      return { ok:false, status:503, json: async () => ({}) };
+    }
+  });
+  assert.ok(document.querySelector('#roundDet .pin'), 'the detail pane starts live');
+  await api.render();
+  assert.ok(/couldn.t reach|retry/i.test(document.querySelector('#roundList').textContent));
+  assert.equal(document.querySelectorAll('#roundDet .pin').length, 0,
+    'a stale plan input must not survive a failed refresh');
+  assert.equal(document.querySelectorAll('#roundDet [data-ck]').length, 0,
+    'stale checkboxes must not survive a failed refresh');
+});
+
+/* ── should-fix: presentation mode on an empty ward ── */
+test('presentation mode on an empty ward shows an explicit empty slide, not the shell placeholder', async () => {
+  const { document, window } = await bootV2({ patients: [] });
+  press(window, 'P', { shiftKey:true });
+  assert.ok(document.querySelector('#present').classList.contains('on'), 'presentation mode must open');
+  assert.notEqual(document.querySelector('#prC').textContent.trim(), '1 of 8',
+    "the shell's literal placeholder must never be left on screen");
+  assert.ok(document.querySelector('#prB').textContent.trim().length > 0,
+    'an empty ward must still say something, never a blank slide');
+});
+
+/* ── should-fix: the service worker's /v2 bypass must be prefix-precise ── */
+test('the service worker bypass matches /v2 and /v2/... but not /v2x.js', () => {
+  const sw = readFileSync(new URL('../public/sw.js', import.meta.url), 'utf8');
+  const fetchHandler = sw.slice(sw.indexOf("addEventListener('fetch'"));
+  assert.ok(/pathname\s*===\s*['"]\/v2['"]/.test(fetchHandler),
+    'the bypass must match the bare /v2 path exactly');
+  assert.ok(/pathname\.startsWith\(['"]\/v2\/['"]\)/.test(fetchHandler),
+    'the bypass must match /v2/ descendants');
+  assert.ok(!/startsWith\(\s*['"]\/v2['"]\s*\)/.test(fetchHandler),
+    "a bare '/v2' prefix test also swallows /v2x.js and /v2-anything");
+});
+
+test('a full re-render mid-edit carries the un-pushed plan across, rather than blanking it', async () => {
+  const rec = { ...raw(1), dailyPlan:'' };
+  const { fetchImpl, pushes } = scriptedServer({ snapshotFor: () => rec });
+  const { document, window, api } = await bootV2({ fetchImpl });
+
+  const typed = 'Await ortho review';
+  const plan = document.querySelector('#roundDet .pin');
+  plan.value = typed;
+  plan.dispatchEvent(new window.Event('input', { bubbles:true }));
+
+  await api.render();   // e.g. the retry button, or a rejected write's re-fetch
+  assert.equal(api.state.patients[0].plan, typed);
+  assert.equal(document.querySelector('#roundDet .pin').value, typed);
+
+  await sleep(800);
+  await api.state.pending;
+  assert.equal(pushes.at(-1).dailyPlan, typed);
 });

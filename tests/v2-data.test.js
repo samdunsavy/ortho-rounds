@@ -224,3 +224,78 @@ test('loadV2Module can be called twice in the same process without crashing', as
   assert.equal(v1.bed, '12');
   assert.equal(v2.bed, '12');
 });
+
+/* ══════════════════════════════════════════════════════════════════
+   Final whole-branch review — B3(b) and the data-side should-fix items.
+   ══════════════════════════════════════════════════════════════════ */
+
+const todayISOForTest = () => {
+  const d = new Date();
+  const q = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${q(d.getMonth()+1)}-${q(d.getDate())}`;
+};
+const hasNoPlanFlag = v => v.flags.some(f => /no plan/i.test(f[1]));
+
+/* ── B3(b): the "plan today" flag can never clear ──
+   data.js compared String(planUpdatedAt).slice(0,10) — an epoch NUMBER —
+   against todayISO(), which can never match, so every patient carried
+   the warning forever and the Work view listed the whole ward. The main
+   app's rule is hasPlanToday() at public/app.js:4398:
+   `!!(p.dailyPlan && p.dailyPlanDate === todayISO())`. */
+test('a plan entered today clears the no-plan warning', () => {
+  const v = toViewModel({ ...base, dailyPlan:'Mobilise', dailyPlanDate: todayISOForTest() }, deps);
+  assert.ok(!hasNoPlanFlag(v), 'a patient planned today must not be flagged as unplanned');
+  assert.ok(v.flags.some(f => f[0] === 'ok'), 'with nothing else outstanding the patient reads as ok');
+});
+
+test('a plan from an earlier day still warns', () => {
+  const v = toViewModel({ ...base, dailyPlan:'Mobilise', dailyPlanDate:'2026-01-01' }, deps);
+  assert.ok(hasNoPlanFlag(v));
+});
+
+test('an epoch planUpdatedAt is never mistaken for a date', () => {
+  const v = toViewModel({ ...base, dailyPlan:'Mobilise', planUpdatedAt: Date.now() }, deps);
+  assert.ok(hasNoPlanFlag(v), 'planUpdatedAt is a timestamp, not the dailyPlanDate the main app reads');
+});
+
+/* ── should-fix: conservative patients are not post-operative ──
+   deps is omitted deliberately so the REAL public/milestones.js
+   functions (loaded onto globalThis by loadV2Module) decide, rather
+   than a stub that could encode the wrong rule. */
+test('a conservative patient carries a Day prefix and an admission-anchored track', () => {
+  const v = toViewModel({ ...base, status:'conservative', surgeryDate:'', admissionDate:'2026-07-30' });
+  assert.equal(v.dayPrefix, 'Day', 'milestoneDayPrefix decides this, not v2');
+  assert.ok(/^Day \d+$/.test(v.podLabel), `expected a Day label, got ${v.podLabel}`);
+  assert.notEqual(v.track[0][0], 'op', 'a never-operated patient has no operation station');
+  assert.ok(!v.track.some(t => /^POD /.test(t[0])), 'no track station may say POD');
+});
+
+test('a post-op patient keeps the POD prefix', () => {
+  const v = toViewModel({ ...base, status:'postop', surgeryDate:'2026-07-30' });
+  assert.equal(v.dayPrefix, 'POD');
+  assert.ok(/^POD \d+$/.test(v.podLabel));
+  assert.equal(v.track[0][0], 'op');
+});
+
+/* ── should-fix: buildTrack divide-by-zero ──
+   A mistyped future surgery date yields a negative POD; span collapsed
+   to 0 and produced width:NaN%. */
+test('a negative POD from a mistyped future surgery date never yields a NaN track position', () => {
+  const v = toViewModel({ ...base,
+    postOpChecks:[{ id:'m1', label:'Drain out', duePod:0, status:'pending' }] },
+    { ...deps, getPatientPod: () => -3 });
+  for(const [label, pct] of v.track){
+    assert.ok(Number.isFinite(pct), `station "${label}" has a non-finite position: ${pct}`);
+    assert.ok(pct >= 0 && pct <= 100, `station "${label}" is out of bounds: ${pct}`);
+  }
+});
+
+/* ── B1 support: the view model must expose each checklist item's stable
+   id so render.js can address it by id rather than by list position. ── */
+test('checklist view models carry the raw item id', () => {
+  const v = toViewModel({ ...base,
+    postOpChecks:[{ id:'chk_a', label:'Suture removal', duePod:12, status:'pending' }],
+    dischargeChecks:[{ id:'dc_a', label:'Summary', status:'done' }] }, deps);
+  assert.equal(v.checks[0][3], 'chk_a');
+  assert.equal(v.dc[0][2], 'dc_a');
+});

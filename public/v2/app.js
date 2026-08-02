@@ -266,7 +266,16 @@ function rViewer(){
    which the prototype does not need to since it always has demo data. */
 function rPresent(){
   const p = S.patients[S.pr];
-  if(!p) return;
+  if(!p){
+    /* An empty ward previously returned here untouched, leaving the
+       shell's literal placeholder counter ("1 of 8", public/v2/
+       index.html — off limits, so it is overwritten from here) sitting
+       over a blank black slide. Say so instead. */
+    const c = $('#prC'), b = $('#prB');
+    if(c) c.textContent = `0 of ${S.patients.length}`;
+    if(b) b.innerHTML = `<p class="empty">No patients on this ward yet.</p>`;
+    return;
+  }
   $('#prC').textContent = `${S.pr + 1} of ${S.patients.length}`;
   $('#prB').innerHTML = presentSlide(p);
 }
@@ -298,7 +307,22 @@ function rPresent(){
    both write cycles restart their OWN loadWard() after the fact, each
    correctly becoming "the newest call" by the time it fires — the queue
    is what stops a second write cycle from starting at all while the
-   first is still in flight. */
+   first is still in flight.
+
+   ── Why this returns its own snapshot (final review, B5) ──
+   The seq guard deliberately declines to publish a superseded snapshot
+   into the SHARED S.raw. A write that then read S.raw to build its
+   payload could therefore pick up a boot-era map — the superseding load
+   need not have resolved yet — and push it, inverting the clinician's
+   own toggle AND dropping another clinician's milestone via merge.js's
+   full replace, while still toasting success. So loadWard returns
+   `{ data, raw }`: `raw` is the map built from THIS call's own response,
+   always, whether or not it was current enough to publish. Writes build
+   their payload from that returned map and never re-read shared state;
+   only the publishing of S.raw/S.defaultUnit stays gated by the guard,
+   which is what the guard was for. Removing the guard instead would
+   re-open the hole it was added to close (an older response clobbering a
+   newer one), so it stays. */
 let loadSeq = 0;
 async function loadWard(){
   const mySeq = ++loadSeq;
@@ -315,28 +339,48 @@ async function loadWard(){
     };
   };
   const data = await fetchWard(capturingFetch, WIN);
-  if(mySeq === loadSeq && rawSnapshot && Array.isArray(rawSnapshot.patients)){
-    S.raw = new Map(rawSnapshot.patients.map(p => [p.id, p]));
+  const hasRaw = !!(rawSnapshot && Array.isArray(rawSnapshot.patients));
+  const raw = hasRaw ? new Map(rawSnapshot.patients.map(p => [p.id, p])) : new Map();
+  if(mySeq === loadSeq && hasRaw){
+    S.raw = raw;
     // Task 7 Fix round 1, Finding 1: the default-unit record rides along
     // in this same raw response (see extractDefaultUnit()'s doc comment
     // in data.js for exactly where it comes from) — no extra fetch.
     S.defaultUnit = extractDefaultUnit(rawSnapshot.patients);
   }
-  return data;
+  return { data, raw, current: mySeq === loadSeq };
 }
 
 async function render(){
   let data;
   try{
-    data = await loadWard();
+    ({ data } = await loadWard());
   }catch(err){
     $('#roundList').innerHTML =
       `<div class="empty" style="text-align:center;padding:var(--s-7) var(--s-4)">
    <p>Couldn't reach the server.</p>
    <button class="btn gh" data-retry="1">Retry</button></div>`;
+    /* Clear the detail pane too. Leaving it up left a plan input and a
+       row of checkboxes wired to state that just failed to refresh —
+       live-looking controls whose next click would write against a
+       stale record (and whose click was itself B5's trigger). The retry
+       button in #roundList is the only thing left to press. */
+    const det = $('#roundDet');
+    if(det) det.innerHTML = '';
     return;
   }
   S.patients = data.patients;
+  /* Carry un-pushed plan text across a full refresh too (B2). These view
+     models come straight from fetchWard(), not from vmFor(), so without
+     this a render() triggered mid-edit — by a rejected write, or by the
+     retry button — would blank the clinician's input under them. The
+     text is still owed to the server either way; pendingPlans is what
+     the debounced write reads. */
+  if(pendingPlans.size){
+    for(const v of S.patients){
+      if(pendingPlans.has(v.id)) v.plan = pendingPlans.get(v.id);
+    }
+  }
   S.serverTime = data.serverTime;
   if(S.idx >= S.patients.length) S.idx = 0;
   go(S.view);
@@ -619,10 +663,46 @@ function touchChecklistItem(c){
 }
 
 let writeChain = Promise.resolve();
+let writesInFlight = 0;
 function enqueueWrite(fn){
+  writesInFlight++;
   const run = writeChain.then(fn, fn);
+  /* The chain continuation must still be the poison-proof
+     `.then(noop, noop)` — the counter is decremented on a SEPARATE
+     branch so it can never change how a rejection propagates to the
+     write's own try/catch. */
   writeChain = run.then(() => {}, () => {});
+  const settled = () => { writesInFlight--; markSync(); };
+  run.then(settled, settled);
+  markSync();
   return run;
+}
+
+/* ── un-pushed local edits (final review, B2) ──
+   A plan edit lives only on the view model until its 600ms debounce
+   fires. Every checklist write rebuilds that view model from the raw
+   record and re-renders — which discarded the typed text, blanked the
+   input under the clinician, and then let the debounced write push the
+   empty string over their plan.
+
+   pendingPlans is the authoritative store for text a clinician has typed
+   but v2 has not yet written. vmFor() re-applies it on top of every
+   rebuilt view model, so no re-render — from a checklist toggle, a
+   failed write's revert, or anything else — can drop it. An entry is
+   cleared only once the server has accepted exactly that text (or the
+   edit has been explicitly reverted).
+
+   Deliberately NOT solved by flushing the pending plan write ahead of a
+   checklist write: that would start a second write cycle from inside the
+   first, which is exactly the interleaving the Fix-round-3 write queue
+   exists to prevent. Ordering is unchanged — the checklist write goes
+   first, the debounced plan write follows through the same queue, and
+   each refreshes before it builds its payload. */
+const pendingPlans = new Map();
+function vmFor(rec){
+  const vm = toViewModel(rec, WIN);
+  if(pendingPlans.has(vm.id)) vm.plan = pendingPlans.get(vm.id);
+  return vm;
 }
 
 const planTimers = new Map();
@@ -634,24 +714,45 @@ function schedulePlanPush(i){
     planTimers.delete(p.id);
     S.pending = enqueueWrite(() => pushPlanNow(p.id));
   }, 600));
+  markSync();
 }
 async function pushPlanNow(id){
   const staleRec = S.raw.get(id);
   const p = S.patients.find(x => x.id === id);
   if(!staleRec || !p) return;
-  const pendingPlan = p.plan;
-  let freshRec, prevPlan = staleRec.dailyPlan;
+  /* The pending store, not the view model, is the source of truth for
+     un-pushed text — the view model may have been rebuilt since. */
+  const pendingPlan = pendingPlans.has(id) ? pendingPlans.get(id) : p.plan;
+  let freshRec, prevPlan = staleRec.dailyPlan, prevPlanDate = staleRec.dailyPlanDate;
   try{
-    await loadWard();
-    freshRec = S.raw.get(id);
+    const { raw } = await loadWard();
+    freshRec = raw.get(id);
     if(!freshRec){ toast('Not saved — patient no longer on this ward'); await render(); return; }
     prevPlan = freshRec.dailyPlan;
+    prevPlanDate = freshRec.dailyPlanDate;
     freshRec.dailyPlan = pendingPlan;
+    /* dailyPlanDate is what the main app at `/` stamps
+       (public/app.js:1205) and reads (public/app.js:4398's
+       hasPlanToday). v2 stamped only planUpdatedAt, which public/app.js
+       never sets — so v2's stamp always won merge.js:68-77's comparison
+       and merge.js then assigned `merged.dailyPlanDate = undefined`,
+       after which the main app reported the patient as "No plan entered
+       for today" even though the plan text had just been updated. Both
+       fields are stamped together, exactly as public/app.js does. */
+    freshRec.dailyPlanDate = todayISO();
     freshRec.planUpdatedAt = Date.now();
     const out = await pushPatient(freshRec, FETCH);
     if(out?.rejected){ toast('Not saved — outside your scope'); await render(); return; }
+    /* Accepted. Stop treating this text as un-pushed — unless the
+       clinician has typed further since this write was built, in which
+       case a later write still owes the server that newer text. */
+    if(pendingPlans.get(id) === pendingPlan) pendingPlans.delete(id);
   }catch{
-    if(freshRec) freshRec.dailyPlan = prevPlan;
+    if(freshRec){
+      freshRec.dailyPlan = prevPlan;
+      freshRec.dailyPlanDate = prevPlanDate;
+    }
+    pendingPlans.delete(id);
     const idx = S.patients.findIndex(x => x.id === id);
     if(idx > -1){
       S.patients[idx].plan = prevPlan;
@@ -664,20 +765,39 @@ function copyYesterday(i){
   const p = S.patients[i];
   if(!p) return;
   p.plan = p.hist[0]?.[1] || '';
+  pendingPlans.set(p.id, p.plan);
   (S.view === 'work' ? rWork : rRound)();
   toast("Yesterday's plan copied");
   schedulePlanPush(i);
 }
 
-function toggleCheck(kind, i, n){
+/* Resolves a checklist item by the STABLE key render.js put in the
+   data-ck/data-dc attribute — the item's own id. Positional addressing
+   was B1: S.raw is replaced by every write's loadWard() without the
+   patient being re-rendered, so `list[n]` drifted onto whatever item
+   occupied slot n in the NEWER record, and a click on the row labelled
+   "Weight bearing" pushed "Suture removal → done" with a success toast.
+
+   The numeric fallback exists only for records whose items carry no id
+   at all (data.js emits the position as the key for those). Real records
+   always have one — public/milestones.js's normalizePostOpItem assigns
+   `chk_<ts>_<rand>` — and an id match is always tried first, so an id
+   that happens to look numeric still resolves as an id. */
+function findChecklistItem(list, key){
+  const byId = list.find(c => c && c.id != null && String(c.id) === key);
+  if(byId) return byId;
+  return /^\d+$/.test(key) ? list[Number(key)] : undefined;
+}
+
+function toggleCheck(kind, i, key){
   const p = S.patients[i];
   if(!p) return;
   const rec = S.raw.get(p.id);
   if(!rec) return;
   const list = kind === 'ck' ? (rec.postOpChecks || []) : (rec.dischargeChecks || []);
-  const item = list[n];
+  const item = findChecklistItem(list, key);
   if(!item) return;
-  const itemId = item.id;
+  const itemId = item.id != null ? String(item.id) : key;
   const optimisticPrevStatus = item.status;
   const optimisticPrevUpdatedAt = item.updatedAt;
   /* Immediate optimistic flip for a responsive checkbox — provisional
@@ -685,7 +805,7 @@ function toggleCheck(kind, i, n){
      the FRESH server record, and either confirms it with a success
      toast or reverts it. This local flip alone never earns a toast. */
   item.status = item.status === 'done' ? 'pending' : 'done';
-  S.patients[i] = toViewModel(rec, WIN);
+  S.patients[i] = vmFor(rec);
   (S.view === 'work' ? rWork : rRound)();
   S.pending = enqueueWrite(() => pushCheckNow(kind, p.id, itemId, {
     rec, prevStatus: optimisticPrevStatus, prevUpdatedAt: optimisticPrevUpdatedAt
@@ -694,11 +814,14 @@ function toggleCheck(kind, i, n){
 async function pushCheckNow(kind, patientId, itemId, optimistic){
   let flipped = null, prevStatus, prevUpdatedAt, freshRec;
   try{
-    await loadWard();
-    freshRec = S.raw.get(patientId);
+    /* B5: build the payload from THIS refresh's own snapshot, never from
+       the shared S.raw, which a concurrent load may have left holding an
+       older map. */
+    const { raw } = await loadWard();
+    freshRec = raw.get(patientId);
     if(!freshRec){ toast('Not saved — patient no longer on this ward'); await render(); return; }
     const list = kind === 'ck' ? (freshRec.postOpChecks || []) : (freshRec.dischargeChecks || []);
-    const item = list.find(c => c && c.id === itemId);
+    const item = findChecklistItem(list, itemId);
     if(!item){ toast('Not saved — item no longer exists'); await render(); return; }
     prevStatus = item.status;
     prevUpdatedAt = item.updatedAt;
@@ -706,7 +829,7 @@ async function pushCheckNow(kind, patientId, itemId, optimistic){
     touchChecklistItem(item);
     flipped = item;
     const pi = S.patients.findIndex(x => x.id === patientId);
-    if(pi > -1) S.patients[pi] = toViewModel(freshRec, WIN);
+    if(pi > -1) S.patients[pi] = vmFor(freshRec);
     (S.view === 'work' ? rWork : rRound)();
 
     const out = await pushPatient(freshRec, FETCH);
@@ -724,20 +847,27 @@ async function pushCheckNow(kind, patientId, itemId, optimistic){
       flipped.updatedAt = prevUpdatedAt;
     }else{
       const list = kind === 'ck' ? (recForView.postOpChecks || []) : (recForView.dischargeChecks || []);
-      const original = list.find(c => c && c.id === itemId);
+      const original = findChecklistItem(list, itemId);
       if(original){
         original.status = optimistic.prevStatus;
         original.updatedAt = optimistic.prevUpdatedAt;
       }
     }
     const pi = S.patients.findIndex(x => x.id === patientId);
-    if(pi > -1) S.patients[pi] = toViewModel(recForView, WIN);
+    if(pi > -1) S.patients[pi] = vmFor(recForView);
     (S.view === 'work' ? rWork : rRound)();
     toast('Not saved — check your connection');
   }
 }
 
 /* ── events ── */
+/* "<patient index>:<checklist item id>" -> [index, id]. */
+function splitControl(value){
+  const s = String(value ?? '');
+  const j = s.indexOf(':');
+  return j < 0 ? [Number(s), ''] : [Number(s.slice(0, j)), s.slice(j + 1)];
+}
+
 DOC.addEventListener('click', e => {
   const t = e.target;
   if(t.closest('[data-retry]')){ render(); return; }
@@ -761,12 +891,10 @@ DOC.addEventListener('click', e => {
   const pr = t.closest('[data-prow]'); if(pr){ S.palRows[+pr.dataset.prow]?.(); return; }
   const o = t.closest('[data-open]'); if(o){ openPatient(+o.dataset.open); return; }
   const w = t.closest('[data-work]'); if(w){ S.work = +w.dataset.work; rWork(); return; }
-  const ck = t.closest('[data-ck]'); if(ck){
-    const [i, n] = ck.dataset.ck.split(':').map(Number); toggleCheck('ck', i, n); return;
-  }
-  const dc = t.closest('[data-dc]'); if(dc){
-    const [i, n] = dc.dataset.dc.split(':').map(Number); toggleCheck('dc', i, n); return;
-  }
+  /* "<patient index>:<item id>". Split on the FIRST colon only — the
+     patient index can never contain one, but an item id might. */
+  const ck = t.closest('[data-ck]'); if(ck){ toggleCheck('ck', ...splitControl(ck.dataset.ck)); return; }
+  const dc = t.closest('[data-dc]'); if(dc){ toggleCheck('dc', ...splitControl(dc.dataset.dc)); return; }
   if(t.closest('[data-seen]')){ advance(); toast('Marked seen'); return; }
   if(t.closest('[data-skip]')){ skip(); return; }
   const cp = t.closest('[data-copy]'); if(cp){ copyYesterday(+cp.dataset.copy); return; }
@@ -807,7 +935,14 @@ DOC.addEventListener('input', e => {
   const p = e.target.dataset.plan;
   if(p === undefined) return;
   const i = +p;
-  if(S.patients[i]){ S.patients[i].plan = e.target.value; schedulePlanPush(i); }
+  if(S.patients[i]){
+    S.patients[i].plan = e.target.value;
+    /* Record it as un-pushed (B2) so any re-render before the debounce
+       fires — a checklist toggle's, most commonly — carries it forward
+       instead of blanking the input and then writing an empty string. */
+    pendingPlans.set(S.patients[i].id, e.target.value);
+    schedulePlanPush(i);
+  }
 });
 /* Fix round 1, Finding 3: the OT date input re-renders the OT list for
    the newly-picked date from already-loaded S.patients — no fetch.
@@ -862,6 +997,31 @@ DOC.addEventListener('keydown', e => {
   if(e.shiftKey && e.key === 'P'){ S.pr = 0; rPresent(); $('#present').classList.add('on'); }
   if(e.shiftKey && e.key === 'D') setTheme(DOC.documentElement.dataset.theme !== 'dark');
   if(e.shiftKey && e.key === 'H') go('handover');
+});
+
+/* ── unsaved work on tab close ──
+   A plan edit is only written 600ms after the last keystroke, and a
+   write can still be in flight after that. Closing the tab in either
+   window silently discarded the edit with nothing on screen to suggest
+   anything was outstanding. Three things count as unsaved: text typed
+   but not yet debounced (a live planTimers entry), text debounced but
+   not yet accepted by the server (a pendingPlans entry), and any write
+   still queued or in flight. `dirty()` is also what drives the header's
+   sync indicator, so the state is visible before the tab is closed, not
+   only in the browser's confirm dialog. */
+function dirty(){
+  return planTimers.size > 0 || pendingPlans.size > 0 || writesInFlight > 0;
+}
+function markSync(){
+  const el = $('#sync');
+  if(el) el.innerHTML = dirty() ? '<i></i>Saving…' : '<i></i>Synced';
+}
+WIN.addEventListener('beforeunload', e => {
+  if(!dirty()) return;
+  e.preventDefault();
+  /* Legacy form still required by some browsers to raise the dialog. */
+  e.returnValue = '';
+  return '';
 });
 
 let resizeTimer, lastWide = wide();
