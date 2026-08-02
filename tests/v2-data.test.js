@@ -97,3 +97,14 @@ test('fetchWard rejects with a readable message on a failed response', async () 
   const fake = async () => ({ ok:false, status:401, json: async () => ({}) });
   await assert.rejects(() => fetchWard(fake), /401/);
 });
+
+test('loadV2Module can be called twice in the same process without crashing', async () => {
+  const first = await loadV2Module('data.js');
+  const second = await loadV2Module('data.js');
+  assert.equal(typeof first.toViewModel, 'function');
+  assert.equal(typeof second.toViewModel, 'function');
+  const v1 = first.toViewModel(base, deps);
+  const v2 = second.toViewModel(base, deps);
+  assert.equal(v1.bed, '12');
+  assert.equal(v2.bed, '12');
+});
