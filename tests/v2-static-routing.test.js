@@ -32,5 +32,5 @@ test('a path with an extension is never treated as a directory', () => {
 });
 
 test('a bare name that looks like a directory but does not exist is returned unchanged', () => {
-  assert.equal(resolveStaticPath('/v2', PUBLIC_DIR), '/v2');
+  assert.equal(resolveStaticPath('/nonexistent-dir', PUBLIC_DIR), '/nonexistent-dir');
 });
