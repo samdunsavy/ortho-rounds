@@ -99,6 +99,25 @@ export function toViewModel(raw, deps = globalThis){
        above. Empty string, never undefined, when absent. */
     surgeryDate: raw.surgeryDate || '',
     theatreTime: raw.theatreTime || '',
+    /* otOrder (Task 7 Fix round 1, Finding 2): public/app.js's
+       getOtListPatients() sorts on `Number(p.otOrder) || 0`, applied at
+       COMPARATOR time (public/app.js:1538), not at storage time. Carried
+       through raw and unconverted here so render.js's otList() can apply
+       the identical `Number(x.otOrder) || 0` coercion in its own
+       comparator — undefined (absent) and 0 must behave identically to
+       the main app, which they only do if neither is coerced early. */
+    otOrder: raw.otOrder,
+    /* admissionDate/dischargeDate (Minor, authorised in the same review,
+       Fix round 1): raw ISO, '' when absent. Needed by the discharged
+       archive to show a real discharge date and a computed length of
+       stay instead of a permanent '—' placeholder. This supersedes the
+       earlier Task 7 ruling recorded in fetchDischarged()'s comment below
+       (kept there, corrected) that VPatient must not carry dischargeDate
+       — that ruling covered SORTING (still done on raw records, for the
+       reason explained there), not display, which is what this field is
+       for. */
+    admissionDate: raw.admissionDate || '',
+    dischargeDate: raw.dischargeDate || '',
     implant: raw.implant || '—',
     labs: labs || 'None recorded',
     films: (Array.isArray(raw.images) ? raw.images : []).map(i => i.type || 'preop'),
@@ -148,9 +167,13 @@ export async function fetchWard(fetchImpl = fetch, deps = globalThis){
    task-7-brief.md): this codebase carries lifecycle on `p.status`
    ('discharged' is a string value, not a boolean), and the retrospective
    discharge date lives on `p.dischargeDate` — set only after discharge,
-   distinct from any prospective/expected discharge date. Sorting happens
-   on the RAW records, before toViewModel(), because dischargeDate is not
-   (and per the brief, must not be) added to VPatient. */
+   distinct from any prospective/expected discharge date. Sorting still
+   happens on the RAW records, before toViewModel(), even though
+   dischargeDate is now ALSO on VPatient (Fix round 1, authorised for
+   display — see toViewModel above): sorting raw avoids coupling this
+   function's ordering to toViewModel's shape, and there is no reason to
+   change working, already-tested code just because a sibling field
+   became available. */
 export async function fetchDischarged(fetchImpl = fetch, deps = globalThis){
   const out = await post('/api/sync', { since: 0, changes: [] }, fetchImpl);
   const list = Array.isArray(out.patients) ? out.patients : [];
@@ -161,6 +184,34 @@ export async function fetchDischarged(fetchImpl = fetch, deps = globalThis){
       .sort((a, b) => String(b.dischargeDate || '').localeCompare(String(a.dischargeDate || '')))
       .map(p => toViewModel(p, deps))
   };
+}
+
+/* extractDefaultUnit (Task 7 Fix round 1, Finding 1) — where v2 gets the
+   default unit for the OT list's unit filter.
+
+   public/app.js's getDefaultUnit() reads `wardMeta.defaultUnit`, which is
+   NOT localStorage: it's a record with id "__ward_meta__", written via
+   saveWardMeta() -> cachePut() -> scheduleSync() (public/app.js:3379-
+   3385) and synced through the exact same /api/sync endpoint as every
+   patient record (server.js's sync handler stores and returns it as an
+   ordinary row keyed by that id — see mergeServerRecords' special case
+   for WARD_META_ID in public/app.js:1827 for confirmation it travels the
+   normal sync path). Since fetchWard()/fetchDischarged() already POST
+   /api/sync and receive this record back in the same response, this
+   function reads it straight out of that already-fetched raw array: no
+   new fetch, no localStorage, no IndexedDB (v2 has neither) — just a
+   second look at data v2 already has.
+
+   Deliberately NOT filtered out of fetchWard's/fetchDischarged's own
+   `patients` output here: doing so would touch the ward-list filtering
+   this task was told not to disturb. Whether that record can leak into
+   the rendered ward/OT list as a phantom "patient" (it has no `status`,
+   so `p.status !== 'discharged'` in fetchWard is trivially true for it)
+   is a separate, pre-existing question the app.js caller must reason
+   about — see task-7-report.md, "Fix round 1", for the write-up. */
+export function extractDefaultUnit(rawList){
+  const meta = Array.isArray(rawList) ? rawList.find(p => p && p.id === '__ward_meta__') : null;
+  return String((meta && meta.defaultUnit) || '').trim();
 }
 
 export async function pushPatient(patient, fetchImpl = fetch){

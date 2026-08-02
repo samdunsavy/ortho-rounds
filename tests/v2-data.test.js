@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { loadV2Module } from './helpers/v2-env.js';
 
-const { toViewModel, fetchWard, fetchDischarged } = await loadV2Module('data.js');
+const { toViewModel, fetchWard, fetchDischarged, extractDefaultUnit } = await loadV2Module('data.js');
 
 const base = {
   id:'p1', bed:'12', name:'R. Kumar', age:'62', sex:'M', uhid:'MH-1',
@@ -115,6 +115,36 @@ test('surgeryDate and theatreTime default to empty string when absent, never und
   assert.equal(v.theatreTime, '');
 });
 
+/* ── Finding 2 (Fix round 1): otOrder, carried through raw — the main app
+   applies Number(x.otOrder) || 0 at comparator time (public/app.js:1538),
+   not at storage time, so the view model must carry the raw value
+   unconverted and let render.js's otList apply the same coercion. */
+test('otOrder is carried onto the view model unformatted, raw', () => {
+  const v = toViewModel({ ...base, otOrder: 3 }, deps);
+  assert.equal(v.otOrder, 3);
+});
+
+test('otOrder is undefined on the view model when absent from the raw record, not coerced to 0', () => {
+  const v = toViewModel(base, deps);
+  assert.equal(v.otOrder, undefined);
+});
+
+/* ── Minor (authorised, Fix round 1): admissionDate/dischargeDate, raw
+   ISO, needed for the discharged archive's real date + length-of-stay
+   columns. */
+test('admissionDate and dischargeDate are carried onto the view model as raw ISO strings', () => {
+  const v = toViewModel({ ...base, admissionDate:'2026-07-10', dischargeDate:'2026-07-20' }, deps);
+  assert.equal(v.admissionDate, '2026-07-10');
+  assert.equal(v.dischargeDate, '2026-07-20');
+});
+
+test('admissionDate and dischargeDate default to empty string when absent, never undefined', () => {
+  const { admissionDate, dischargeDate, ...rest } = base;
+  const v = toViewModel(rest, deps);
+  assert.equal(v.admissionDate, '');
+  assert.equal(v.dischargeDate, '');
+});
+
 test('fetchDischarged keeps only discharged patients, sorted by discharge date descending', async () => {
   const raw = [
     { ...base, id:'a', status:'discharged', dischargeDate:'2026-07-20' },
@@ -131,6 +161,32 @@ test('fetchDischarged keeps only discharged patients, sorted by discharge date d
 test('fetchDischarged rejects with a readable message on a failed response', async () => {
   const fake = async () => ({ ok:false, status:500, json: async () => ({}) });
   await assert.rejects(() => fetchDischarged(fake), /500/);
+});
+
+/* ── Finding 1 (Fix round 1): where v2 gets the default unit.
+   public/app.js's getDefaultUnit() reads wardMeta.defaultUnit, which is
+   NOT in localStorage — it's a record (id "__ward_meta__") synced through
+   the same /api/sync endpoint as every patient (see public/app.js:3379-
+   3385's saveWardMeta -> cachePut -> scheduleSync, and server.js's sync
+   handler, which treats it as an ordinary row keyed by that id). Since
+   v2's fetchWard()/fetchDischarged() already POST /api/sync and get this
+   record back in the same response, extractDefaultUnit() reads it
+   straight from that already-fetched raw array: no new fetch, no
+   localStorage, no IndexedDB. See task-7-report.md "Fix round 1" for
+   the full trace and for why the record is deliberately left in the raw
+   list this function reads, rather than filtered out here. */
+test('extractDefaultUnit reads defaultUnit off the ward-meta record within a raw sync response', () => {
+  const list = [base, { id:'__ward_meta__', defaultUnit:'Unit II' }];
+  assert.equal(extractDefaultUnit(list), 'Unit II');
+});
+
+test('extractDefaultUnit returns empty string when no ward-meta record is present', () => {
+  assert.equal(extractDefaultUnit([base]), '');
+});
+
+test('extractDefaultUnit trims whitespace and returns empty string for a blank defaultUnit', () => {
+  assert.equal(extractDefaultUnit([{ id:'__ward_meta__', defaultUnit:'  IV  ' }]), 'IV');
+  assert.equal(extractDefaultUnit([{ id:'__ward_meta__', defaultUnit:'' }]), '');
 });
 
 test('loadV2Module can be called twice in the same process without crashing', async () => {

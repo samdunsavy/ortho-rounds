@@ -175,16 +175,48 @@ export function complete(count){
    otList, handover and discharged are read-only document views (Task 7).
    Markup and classes are lifted verbatim from docs/prototypes/ortho-v3.html's
    rOT/rHand/rDisch. The prototype's date input and search box are static —
-   neither is wired to live filtering in the prototype either — so they're
-   reproduced as presentational markup only; data-toast/data-print stay
+   neither is wired to live filtering in the prototype either. Task 7 Fix
+   round 1 (Finding 3) wires them up for real, but from app.js only: it
+   listens for their change/input events and calls otList()/discharged()
+   again with a new dateISO/unitFilter/search argument — no fetch, no DOM,
+   no global read happens in this module; every input these builders need
+   is an explicit parameter, so they stay pure. data-toast/data-print stay
    presentational hooks for app.js to wire toast()/print() onto. */
 
-/** OT list for `dateISO`. Filter MUST match public/app.js:1530's
- *  getOtListPatients() exactly: `p.status === 'preop' && p.surgeryDate ===
- *  date` (status==='preop' already implies not discharged, so the main
- *  app's redundant `p.status !== 'discharged'` clause is a no-op here). */
-export function otList(patients, dateISO){
-  const rows = patients.filter(p => p.status === 'preop' && p.surgeryDate === dateISO);
+/** OT list for `dateISO`, optionally narrowed to `unitFilter`. Filter and
+ *  sort MUST match public/app.js:1526-1545's getOtListPatients() exactly:
+ *
+ *   1. `p.status === 'preop' && p.surgeryDate === dateISO` (status ===
+ *      'preop' already implies not discharged, so the main app's
+ *      redundant `p.status !== 'discharged'` clause is a no-op here).
+ *   2. Only when `unitFilter` is non-empty, AND only when it would not
+ *      empty the list, narrow further to patients whose unit matches it
+ *      (case-insensitive, trimmed) — the main app discards the filter
+ *      rather than showing nobody when nothing on the list matches it.
+ *      Unit comparison treats VPatient's '—' placeholder (toViewModel's
+ *      fallback for an absent raw `unit`) as equivalent to an absent
+ *      unit, since the main app's filter runs against the raw record —
+ *      where an absent unit is simply falsy, never the literal '—'.
+ *   3. Sort by `otOrder` ascending (`Number(x.otOrder) || 0`), where a
+ *      truthy otOrder on one side and not the other always sorts the
+ *      truthy side first; then by `theatreTime`; then by `name`. */
+export function otList(patients, dateISO, unitFilter = ''){
+  let rows = patients.filter(p => p.status === 'preop' && p.surgeryDate === dateISO);
+  const uf = String(unitFilter || '').trim().toUpperCase();
+  if(uf){
+    const unitOf = p => String(p.unit === '—' ? '' : (p.unit || '')).trim().toUpperCase();
+    const matched = rows.filter(p => unitOf(p) === uf);
+    if(matched.length) rows = matched;
+  }
+  rows = rows.slice().sort((a, b) => {
+    const ao = Number(a.otOrder) || 0;
+    const bo = Number(b.otOrder) || 0;
+    if(ao && bo && ao !== bo) return ao - bo;
+    if(ao && !bo) return -1;
+    if(!ao && bo) return 1;
+    return (a.theatreTime || '').localeCompare(b.theatreTime || '')
+      || (a.name || '').localeCompare(b.name || '');
+  });
   const body = rows.map((p, n) => `<tr><td class="mono">${n + 1}</td><td class="mono">${esc(p.bed)}</td>
  <td style="font-weight:500">${esc(p.name)}</td><td>${esc(p.age)}</td><td>${esc(p.dx)}</td>
  <td>${esc(p.proc)}</td><td>${esc(p.surgeon)}</td><td class="mono">${esc(p.theatreTime)}</td></tr>`).join('');
@@ -223,19 +255,53 @@ export function handover(patients, meta){
  <p class="note" style="margin-top:var(--s-4)">Generated from today's plans and open flags. Edit before sending.</p></div>`;
 }
 
+/** Formats an ISO discharge date for display, or '' if `iso` is absent/
+ *  unparseable — the caller renders the codebase's '—' placeholder for
+ *  that case, never a fabricated date. */
+function fmtDischargeDate(iso){
+  if(!iso) return '';
+  const d = new Date(iso + 'T00:00:00');
+  if(Number.isNaN(d.getTime())) return '';
+  return d.toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric' });
+}
+
+/** Whole days between `admissionIso` and `dischargeIso`, or null when
+ *  either date is absent/unparseable — the caller renders '—' for that
+ *  case rather than a fabricated length of stay. */
+function stayDays(admissionIso, dischargeIso){
+  if(!admissionIso || !dischargeIso) return null;
+  const a = new Date(admissionIso + 'T00:00:00');
+  const d = new Date(dischargeIso + 'T00:00:00');
+  if(Number.isNaN(a.getTime()) || Number.isNaN(d.getTime())) return null;
+  const days = Math.round((d.getTime() - a.getTime()) / 86400000);
+  return Number.isFinite(days) ? days : null;
+}
+
 /** Discharged-patients archive. `rows` are already filtered/sorted by
- *  data.js's fetchDischarged() — this function only renders. No discharge
- *  date or length-of-stay columns: VPatient does not (and per the design
- *  ruling in task-7-brief.md, must not) carry `dischargeDate`, so those
- *  two columns render the codebase's established '—' placeholder for
- *  data that is genuinely absent from the view model, rather than
- *  fabricating a value. */
-export function discharged(rows){
-  const body = rows.map(p => `<tr><td style="font-weight:500">${esc(p.name)}</td><td>${esc(p.age)}</td>
- <td>${esc(p.dx)}</td><td>${esc(p.proc)}</td><td>—</td><td class="mono">—</td></tr>`).join('');
+ *  data.js's fetchDischarged() — this function narrows further by
+ *  `search` (Task 7 Fix round 1, Finding 3: case-insensitive substring
+ *  match against name and diagnosis; render.js stays pure, so `search`
+ *  is an explicit parameter, never read from a global) and renders.
+ *
+ *  Discharged date and length of stay (Minor, authorised in the same
+ *  review, Fix round 1) render the real values from VPatient's
+ *  `dischargeDate`/`admissionDate` when present; the codebase's
+ *  established '—' placeholder renders only when the underlying date(s)
+ *  are genuinely absent, never a fabricated value. */
+export function discharged(rows, search = ''){
+  const q = String(search || '').trim().toLowerCase();
+  const filtered = q
+    ? rows.filter(p => (p.name || '').toLowerCase().includes(q) || (p.dx || '').toLowerCase().includes(q))
+    : rows;
+  const body = filtered.map(p => {
+    const dc = fmtDischargeDate(p.dischargeDate);
+    const stay = stayDays(p.admissionDate, p.dischargeDate);
+    return `<tr><td style="font-weight:500">${esc(p.name)}</td><td>${esc(p.age)}</td>
+ <td>${esc(p.dx)}</td><td>${esc(p.proc)}</td><td>${dc ? esc(dc) : '—'}</td><td class="mono">${stay != null ? esc(stay + 'd') : '—'}</td></tr>`;
+  }).join('');
   return `<div class="toolbar">
- <input class="inp" placeholder="Search discharged patients…" style="min-width:260px" aria-label="Search discharged"></div>
- ${rows.length ? `<div class="tw"><table class="tbl"><thead><tr><th>Name</th><th>Age/Sex</th><th>Diagnosis</th><th>Procedure</th><th>Discharged</th><th>Stay</th></tr></thead>
+ <input class="inp" placeholder="Search discharged patients…" style="min-width:260px" aria-label="Search discharged" value="${esc(search)}"></div>
+ ${filtered.length ? `<div class="tw"><table class="tbl"><thead><tr><th>Name</th><th>Age/Sex</th><th>Diagnosis</th><th>Procedure</th><th>Discharged</th><th>Stay</th></tr></thead>
  <tbody>${body}</tbody></table></div>`
- : `<p class="empty">No discharges in this period.</p>`}`;
+ : `<p class="empty">${rows.length ? 'No discharges match your search.' : 'No discharges in this period.'}</p>`}`;
 }

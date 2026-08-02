@@ -143,6 +143,80 @@ test('otList escapes every patient-supplied field', () => {
   assert.ok(!html.includes(hostile), 'hostile string must not appear unescaped anywhere in the output');
 });
 
+/* ── Finding 1 (Fix round 1): unit filtering, mirroring public/app.js:1526-1545's
+   getOtListPatients exactly — the unit filter applies only when non-empty,
+   AND is discarded (not applied at all) when it would produce an empty
+   list, rather than showing nobody. */
+test('OT list applies the unit filter when it is set and narrows the list', () => {
+  const html = R.otList([
+    { ...p, id:'a', status:'preop', surgeryDate:'2026-08-02', unit:'Unit II', name:'InUnit' },
+    { ...p, id:'b', status:'preop', surgeryDate:'2026-08-02', unit:'Unit I', name:'OtherUnit' }
+  ], '2026-08-02', 'Unit II');
+  assert.ok(html.includes('InUnit'));
+  assert.ok(!html.includes('OtherUnit'));
+});
+
+test('OT list discards the unit filter rather than showing nobody, when it would empty the list', () => {
+  const html = R.otList([
+    { ...p, id:'a', status:'preop', surgeryDate:'2026-08-02', unit:'Unit I', name:'OnlyPatient' }
+  ], '2026-08-02', 'Unit II');
+  assert.ok(html.includes('OnlyPatient'),
+    'unit filter must be discarded (not applied) when it would produce an empty list');
+});
+
+test('OT list unit filter is case-insensitive, trims whitespace, and no-ops when unset', () => {
+  const html = R.otList([
+    { ...p, id:'a', status:'preop', surgeryDate:'2026-08-02', unit:' unit ii ', name:'Matched' },
+    { ...p, id:'b', status:'preop', surgeryDate:'2026-08-02', unit:'Unit I', name:'Unmatched' }
+  ], '2026-08-02', '  UNIT II  ');
+  assert.ok(html.includes('Matched'));
+  assert.ok(!html.includes('Unmatched'));
+
+  const noFilter = R.otList([
+    { ...p, id:'a', status:'preop', surgeryDate:'2026-08-02', unit:'Unit I', name:'Any' }
+  ], '2026-08-02');
+  assert.ok(noFilter.includes('Any'), 'no unitFilter argument must render every patient');
+});
+
+/* ── Finding 2 (Fix round 1): row order must match public/app.js:1536-1544's
+   comparator exactly — otOrder ascending (Number(x.otOrder) || 0), a set
+   otOrder always sorting before an unset/zero one on the OTHER side only,
+   then theatreTime, then name. */
+test('OT list sorts by otOrder ascending, then theatreTime, then name', () => {
+  const mk = (id, otOrder, theatreTime, name) =>
+    ({ ...p, id, status:'preop', surgeryDate:'2026-08-02', otOrder, theatreTime, name });
+  const html = R.otList([
+    mk('a', 2, '09:00', 'Bravo'),
+    mk('b', 1, '10:00', 'Alpha'),
+    mk('c', undefined, '08:00', 'Charlie'),
+    mk('d', undefined, '08:00', 'Able')
+  ], '2026-08-02');
+  const pos = name => html.indexOf(`>${name}<`);
+  // Alpha (otOrder 1) before Bravo (otOrder 2); both set-otOrder rows before
+  // the two unset ones, which tie-break on theatreTime (equal here) then name.
+  assert.ok(pos('Alpha') < pos('Bravo'), 'lower otOrder must sort first');
+  assert.ok(pos('Bravo') < pos('Able'), 'a set otOrder must sort before an unset one');
+  assert.ok(pos('Able') < pos('Charlie'), 'equal otOrder/theatreTime falls back to name');
+});
+
+test('OT list sort: a set otOrder sorts before an unset one even when it is the higher-looking value, one-sided only', () => {
+  const html = R.otList([
+    { ...p, id:'x', status:'preop', surgeryDate:'2026-08-02', otOrder: undefined, theatreTime:'01:00', name:'NoOrder' },
+    { ...p, id:'y', status:'preop', surgeryDate:'2026-08-02', otOrder: 9, theatreTime:'23:00', name:'HasOrder' }
+  ], '2026-08-02');
+  assert.ok(html.indexOf('>HasOrder<') < html.indexOf('>NoOrder<'),
+    'any set otOrder must sort before an unset one, regardless of theatreTime');
+});
+
+test('OT list sort: otOrder of 0 is treated the same as an absent otOrder', () => {
+  const html = R.otList([
+    { ...p, id:'x', status:'preop', surgeryDate:'2026-08-02', otOrder: 0, theatreTime:'09:00', name:'Zero' },
+    { ...p, id:'y', status:'preop', surgeryDate:'2026-08-02', theatreTime:'08:00', name:'Unset' }
+  ], '2026-08-02');
+  // Neither has a truthy otOrder, so they tie-break on theatreTime: Unset (08:00) before Zero (09:00).
+  assert.ok(html.indexOf('>Unset<') < html.indexOf('>Zero<'));
+});
+
 test('handover lists every patient and surfaces urgent flags', () => {
   const html = R.handover([{ ...p, flags:[['bad','Antibiotic overdue']] }],
     { when:'2 Aug, 18:30', to:'Dr Verma' });
@@ -184,4 +258,57 @@ test('discharged escapes every patient-supplied field', () => {
   const hostile = '<b>x</b>"onmouseover="a';
   const html = R.discharged([{ ...p, name:hostile, age:hostile, dx:hostile, proc:hostile }]);
   assert.ok(!html.includes(hostile), 'hostile string must not appear unescaped anywhere in the output');
+});
+
+/* ── Minor (authorised, Fix round 1): real discharge date + computed
+   length of stay, in place of the '—' placeholders. '—' only when the
+   underlying data is genuinely absent. */
+test('discharged renders a real discharge date and a computed length of stay', () => {
+  const html = R.discharged([{ ...p, name:'Dated', admissionDate:'2026-07-10', dischargeDate:'2026-07-20' }]);
+  assert.ok(/20 Jul/.test(html), 'expected a formatted discharge date');
+  assert.ok(html.includes('10d'), 'expected a 10-day computed stay (20 Jul minus 10 Jul)');
+});
+
+test('discharged renders — for discharge date and stay only when the underlying data is absent', () => {
+  const html = R.discharged([{ ...p, name:'Undated', admissionDate:'', dischargeDate:'' }]);
+  const row = html.slice(html.indexOf('Undated'));
+  assert.ok(/<td>—<\/td><td class="mono">—<\/td>/.test(row),
+    'both discharge date and stay must show — when neither date is present');
+});
+
+test('discharged shows — for stay when admissionDate is absent even though dischargeDate is present', () => {
+  const html = R.discharged([{ ...p, name:'PartialDates', admissionDate:'', dischargeDate:'2026-07-20' }]);
+  assert.ok(/20 Jul/.test(html), 'discharge date must still render when present');
+  const row = html.slice(html.indexOf('PartialDates'));
+  assert.ok(/<td class="mono">—<\/td>/.test(row), 'stay must show — when admissionDate is missing');
+});
+
+/* ── Finding 3 (Fix round 1): the discharged search box filters by name
+   and diagnosis, case-insensitively. render.js stays pure — `search` is
+   an explicit parameter, not read from any global. */
+test('discharged search filters by name, case-insensitively', () => {
+  const rows = [
+    { ...p, id:'a', name:'Alice Sharma', dx:'Femur fracture' },
+    { ...p, id:'b', name:'Bob Verma', dx:'Hip dislocation' }
+  ];
+  const html = R.discharged(rows, 'alice');
+  assert.ok(html.includes('Alice Sharma'));
+  assert.ok(!html.includes('Bob Verma'));
+});
+
+test('discharged search filters by diagnosis, case-insensitively', () => {
+  const rows = [
+    { ...p, id:'a', name:'Alice Sharma', dx:'Femur fracture' },
+    { ...p, id:'b', name:'Bob Verma', dx:'Hip dislocation' }
+  ];
+  const html = R.discharged(rows, 'HIP');
+  assert.ok(html.includes('Bob Verma'));
+  assert.ok(!html.includes('Alice Sharma'));
+});
+
+test('discharged with no search term renders every row', () => {
+  const rows = [{ ...p, id:'a', name:'Alice Sharma' }, { ...p, id:'b', name:'Bob Verma' }];
+  const html = R.discharged(rows);
+  assert.ok(html.includes('Alice Sharma'));
+  assert.ok(html.includes('Bob Verma'));
 });

@@ -47,7 +47,7 @@
    additionally bound to its receiver because real browsers throw
    "Illegal invocation" if fetch is called detached from `window`. */
 import { esc, hero, row, detail, board, workList, complete, otList, handover, discharged } from './render.js';
-import { fetchWard, fetchDischarged, pushPatient, toViewModel } from './data.js';
+import { fetchWard, fetchDischarged, pushPatient, toViewModel, extractDefaultUnit } from './data.js';
 
 const DOC = document;
 const WIN = window;
@@ -72,12 +72,23 @@ const S = {
                       // checklist push) — test-introspection only, so a test
                       // can `await api.state.pending` for the write to settle
                       // before asserting; app.js itself never awaits it.
-  otDate: todayISO(),        // OT list date filter — presentational only,
-                              // same as the prototype's static date input
-  dischargedPatients: []     // populated by loadDischarged(), a separate
+  otDate: todayISO(),        // OT list date filter, live (Task 7 Fix
+                              // round 1, Finding 3) — the date input's
+                              // change event updates this and re-renders
+                              // the OT view from S.patients; no new fetch
+  defaultUnit: '',           // OT list unit filter (Task 7 Fix round 1,
+                              // Finding 1) — extracted from the raw
+                              // "__ward_meta__" sync record every
+                              // loadWard() already fetches; see
+                              // extractDefaultUnit() in data.js for
+                              // exactly where this value comes from
+  dischargedPatients: [],    // populated by loadDischarged(), a separate
                               // fetch — fetchWard() excludes discharged
                               // patients entirely, so the ward's own
                               // S.patients can never serve this view
+  dischSearch: ''            // discharged-archive search term, live
+                              // (Task 7 Fix round 1, Finding 3) — filters
+                              // S.dischargedPatients client-side; no fetch
 };
 
 /* ── toast ── */
@@ -151,6 +162,10 @@ async function loadWard(){
   const data = await fetchWard(capturingFetch, WIN);
   if(mySeq === loadSeq && rawSnapshot && Array.isArray(rawSnapshot.patients)){
     S.raw = new Map(rawSnapshot.patients.map(p => [p.id, p]));
+    // Task 7 Fix round 1, Finding 1: the default-unit record rides along
+    // in this same raw response (see extractDefaultUnit()'s doc comment
+    // in data.js for exactly where it comes from) — no extra fetch.
+    S.defaultUnit = extractDefaultUnit(rawSnapshot.patients);
   }
   return data;
 }
@@ -243,10 +258,16 @@ function rWork(){
    generation. The OT list and handover sheet render straight off
    S.patients (already loaded by loadWard()/render()); the discharged
    archive needs its own fetch, since fetchWard() filters discharged
-   patients OUT. */
+   patients OUT.
+
+   rOT()/rDisch() are called both from go() (initial view entry) and
+   from the change/input handlers below (Fix round 1, Finding 3) — every
+   call re-derives from already-loaded state (S.patients/S.otDate/
+   S.defaultUnit, or S.dischargedPatients/S.dischSearch), never issuing a
+   fetch of its own. */
 function rOT(){
   const el = $('#otP');
-  if(el) el.innerHTML = otList(S.patients, S.otDate);
+  if(el) el.innerHTML = otList(S.patients, S.otDate, S.defaultUnit);
 }
 
 function handoverWhen(){
@@ -259,9 +280,30 @@ function rHandover(){
   if(el) el.innerHTML = handover(S.patients, { when: handoverWhen(), to: 'the on-call team' });
 }
 
+/* Re-rendering #dcP on every keystroke (Fix round 1, Finding 3) replaces
+   the search input's own DOM node — which would otherwise drop focus and
+   cursor position after each character, making the box effectively
+   untypeable. Save/restore both around the innerHTML swap so typing
+   feels continuous; discharged() is told the CURRENT search term so the
+   freshly-built input's `value` reflects what was just typed rather than
+   reverting to empty. */
 function rDisch(){
   const el = $('#dcP');
-  if(el) el.innerHTML = discharged(S.dischargedPatients);
+  if(!el) return;
+  const active = DOC.activeElement;
+  const restoreFocus = !!(active && el.contains(active) && active.tagName === 'INPUT');
+  const selStart = restoreFocus ? active.selectionStart : null;
+  const selEnd = restoreFocus ? active.selectionEnd : null;
+  el.innerHTML = discharged(S.dischargedPatients, S.dischSearch);
+  if(restoreFocus){
+    const input = el.querySelector('input');
+    if(input){
+      input.focus();
+      if(selStart != null && typeof input.setSelectionRange === 'function'){
+        try{ input.setSelectionRange(selStart, selEnd); }catch{ /* not all input types support it */ }
+      }
+    }
+  }
 }
 /* Fetches independently of loadWard()/render() — fetchDischarged() hits
    the same /api/sync endpoint but keeps ONLY discharged patients, the
@@ -554,10 +596,33 @@ DOC.addEventListener('click', e => {
      not a crash. */
 });
 DOC.addEventListener('input', e => {
+  /* Fix round 1, Finding 3: the discharged search box filters
+     S.dischargedPatients client-side, live as the clinician types — no
+     fetch. Checked first/returned early so it can't be shadowed by the
+     dataset.plan branch below (a plain <input>, not a .pin, never has
+     dataset.plan, but keeping the branches mutually exclusive avoids any
+     future ambiguity). */
+  if(e.target.matches('#dcP input')){
+    S.dischSearch = e.target.value || '';
+    rDisch();
+    return;
+  }
   const p = e.target.dataset.plan;
   if(p === undefined) return;
   const i = +p;
   if(S.patients[i]){ S.patients[i].plan = e.target.value; schedulePlanPush(i); }
+});
+/* Fix round 1, Finding 3: the OT date input re-renders the OT list for
+   the newly-picked date from already-loaded S.patients — no fetch.
+   `change` (not `input`) fires once the date is actually committed,
+   avoiding a re-render — and a rebuilt, refocus-losing input — on every
+   intermediate keystroke while a clinician is still typing the digits of
+   a partial date. */
+DOC.addEventListener('change', e => {
+  if(e.target.matches('#otP input[type="date"]')){
+    S.otDate = e.target.value || todayISO();
+    rOT();
+  }
 });
 /* Task 8 must introduce S.vwP (film-viewer state) together with its
    `?.length` guard everywhere the viewer is driven from here — [data-vnav]

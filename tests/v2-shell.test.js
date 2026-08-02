@@ -296,3 +296,77 @@ test('two rapid checklist toggles on the same patient are serialised — neither
   assert.equal(c1.status, 'done', "toggle A's change (c1) must not be lost");
   assert.equal(c2.status, 'done', "toggle B's change (c2) must not be reverted by A's stale write");
 });
+
+/* ── Task 7 Fix round 1: Finding 3 — the OT date input and discharged
+   search must actually do something, client-side, with no new fetch. ── */
+
+async function waitFor(fn, timeout = 1000){
+  const start = Date.now();
+  while(Date.now() - start < timeout){
+    if(fn()) return;
+    await new Promise(r => setTimeout(r, 5));
+  }
+  throw new Error('waitFor timed out');
+}
+
+test('changing the OT date re-renders the list for the new date without a new fetch', async () => {
+  const p1 = { ...raw(1), status:'preop', surgeryDate:'2026-08-02', name:'AliceOT' };
+  const p2 = { ...raw(2), status:'preop', surgeryDate:'2026-08-03', name:'BobOT' };
+  let fetchCalls = 0;
+  const { document, window } = await bootV2({
+    fetchImpl: async () => {
+      fetchCalls++;
+      return { ok:true, json: async () => ({ serverTime:1, patients:[p1, p2] }) };
+    }
+  });
+  document.querySelector('[data-go="ot"]').click();
+
+  const dateInput = document.querySelector('#otP input[type="date"]');
+  assert.ok(dateInput, 'expected the OT date input to render');
+  dateInput.value = '2026-08-02';
+  dateInput.dispatchEvent(new window.Event('change', { bubbles:true }));
+  const callsAfterFirstChange = fetchCalls;
+  assert.ok(document.querySelector('#otP').textContent.includes('AliceOT'));
+  assert.ok(!document.querySelector('#otP').textContent.includes('BobOT'));
+
+  // Re-query: rOT() rebuilds #otP's innerHTML, so the previous input node is detached.
+  const dateInput2 = document.querySelector('#otP input[type="date"]');
+  dateInput2.value = '2026-08-03';
+  dateInput2.dispatchEvent(new window.Event('change', { bubbles:true }));
+  assert.equal(fetchCalls, callsAfterFirstChange, 'changing the OT date must not trigger a new fetch');
+  assert.ok(document.querySelector('#otP').textContent.includes('BobOT'));
+  assert.ok(!document.querySelector('#otP').textContent.includes('AliceOT'));
+});
+
+test('typing in the discharged search filters by name and diagnosis, case-insensitively, with no new fetch', async () => {
+  const d1 = { ...raw(1), status:'discharged', dischargeDate:'2026-07-20', admissionDate:'2026-07-10',
+    name:'Alice Sharma', diagnosis:'Femur fracture' };
+  const d2 = { ...raw(2), status:'discharged', dischargeDate:'2026-07-25', admissionDate:'2026-07-15',
+    name:'Bob Verma', diagnosis:'Hip dislocation' };
+  let fetchCalls = 0;
+  const { document, window, api } = await bootV2({
+    fetchImpl: async () => {
+      fetchCalls++;
+      return { ok:true, json: async () => ({ serverTime:1, patients:[d1, d2] }) };
+    }
+  });
+  document.querySelector('[data-go="disch"]').click();
+  await waitFor(() => api.state.dischargedPatients.length === 2);
+  assert.ok(document.querySelector('#dcP').textContent.includes('Alice Sharma'));
+  assert.ok(document.querySelector('#dcP').textContent.includes('Bob Verma'));
+  const callsBeforeTyping = fetchCalls;
+
+  const searchByName = document.querySelector('#dcP input');
+  searchByName.value = 'alice';
+  searchByName.dispatchEvent(new window.Event('input', { bubbles:true }));
+  assert.ok(document.querySelector('#dcP').textContent.includes('Alice Sharma'));
+  assert.ok(!document.querySelector('#dcP').textContent.includes('Bob Verma'));
+
+  const searchByDx = document.querySelector('#dcP input');
+  searchByDx.value = 'HIP';
+  searchByDx.dispatchEvent(new window.Event('input', { bubbles:true }));
+  assert.ok(document.querySelector('#dcP').textContent.includes('Bob Verma'));
+  assert.ok(!document.querySelector('#dcP').textContent.includes('Alice Sharma'));
+
+  assert.equal(fetchCalls, callsBeforeTyping, 'typing in the discharged search must not trigger a new fetch');
+});
