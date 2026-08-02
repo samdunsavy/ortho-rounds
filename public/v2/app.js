@@ -1,9 +1,16 @@
 /* v2 preview app — state, event delegation, view switching for
-   Round, Ward and Work. OT list, handover, discharged, admin, the
-   palette, the film viewer, presentation mode and the add modal are
-   out of scope for this file (later tasks); go() accepts their view
-   names without throwing but renders nothing for them — a seam, not
-   a stub.
+   Round, Ward, Work, and the three read-only documents (OT list,
+   handover, discharged archive). Admin, the palette, the film viewer,
+   presentation mode and the add modal are out of scope for this file
+   (later tasks); go() accepts their view names without throwing but
+   renders nothing for them — a seam, not a stub.
+
+   The three documents are read-only: no write paths, no real
+   export/Word generation. Their data-toast/data-print buttons are
+   presentational hooks, wired here only to toast()/WIN.print(), exactly
+   as they behave in docs/prototypes/ortho-v3.html (whose date input and
+   search box are likewise static there — not wired to live filtering —
+   so they're reproduced the same way).
 
    Markup for patient cards/rows/board tiles/work items/the completion
    screen comes exclusively from render.js's exports. The only markup
@@ -39,8 +46,8 @@
    window/document/fetch never change during a page's lifetime. fetch is
    additionally bound to its receiver because real browsers throw
    "Illegal invocation" if fetch is called detached from `window`. */
-import { esc, hero, row, detail, board, workList, complete } from './render.js';
-import { fetchWard, pushPatient, toViewModel } from './data.js';
+import { esc, hero, row, detail, board, workList, complete, otList, handover, discharged } from './render.js';
+import { fetchWard, fetchDischarged, pushPatient, toViewModel } from './data.js';
 
 const DOC = document;
 const WIN = window;
@@ -50,15 +57,27 @@ const $ = s => DOC.querySelector(s);
 const $$ = s => [...DOC.querySelectorAll(s)];
 const wide = () => WIN.innerWidth >= 1100;
 
+function todayISO(){
+  const d = new Date();
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`;
+}
+
 const S = {
   view: 'round', idx: 0, seen: new Set(), work: 0,
   patients: [],      // view models, from fetchWard() — never demo data
   raw: new Map(),    // id -> raw patient record, for safe pushPatient() writes
   serverTime: 0,
-  pending: null      // promise from the most recent in-flight write (plan or
+  pending: null,     // promise from the most recent in-flight write (plan or
                       // checklist push) — test-introspection only, so a test
                       // can `await api.state.pending` for the write to settle
                       // before asserting; app.js itself never awaits it.
+  otDate: todayISO(),        // OT list date filter — presentational only,
+                              // same as the prototype's static date input
+  dischargedPatients: []     // populated by loadDischarged(), a separate
+                              // fetch — fetchWard() excludes discharged
+                              // patients entirely, so the ward's own
+                              // S.patients can never serve this view
 };
 
 /* ── toast ── */
@@ -219,10 +238,57 @@ function rWork(){
   $('#workDet').innerHTML = sel ? detail(S.patients[sel[0]], sel[0]) : '';
 }
 
+/* ── documents (Task 7): OT list, handover, discharged archive ──
+   All three are read-only — no write paths, no real export/Word
+   generation. The OT list and handover sheet render straight off
+   S.patients (already loaded by loadWard()/render()); the discharged
+   archive needs its own fetch, since fetchWard() filters discharged
+   patients OUT. */
+function rOT(){
+  const el = $('#otP');
+  if(el) el.innerHTML = otList(S.patients, S.otDate);
+}
+
+function handoverWhen(){
+  const d = new Date();
+  return d.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })
+    + ', ' + d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+}
+function rHandover(){
+  const el = $('#hoP');
+  if(el) el.innerHTML = handover(S.patients, { when: handoverWhen(), to: 'the on-call team' });
+}
+
+function rDisch(){
+  const el = $('#dcP');
+  if(el) el.innerHTML = discharged(S.dischargedPatients);
+}
+/* Fetches independently of loadWard()/render() — fetchDischarged() hits
+   the same /api/sync endpoint but keeps ONLY discharged patients, the
+   inverse of what fetchWard() keeps, so it cannot be derived from
+   S.patients. Re-fetched every time the discharged view is opened (this
+   is a read-only preview document, not a high-traffic path); a failed
+   fetch leaves the previous list on screen rather than clearing it, and
+   only re-renders if the user is still on the discharged view by the
+   time it resolves (they may have navigated away). */
+async function loadDischarged(){
+  try{
+    const data = await fetchDischarged(FETCH, WIN);
+    S.dischargedPatients = data.patients;
+  }catch{
+    /* leave S.dischargedPatients as whatever it already was */
+  }
+  if(S.view === 'disch') rDisch();
+}
+
 /* ── view switching ──
-   ot/handover/disch/admin are accepted (the shell declares #v-ot etc.
-   per Task 2) but deliberately render nothing — that's tasks 7 and 9. */
-const TITLES = { round: ['Morning round', null], ward: ['Ward board', null], work: ['Work', 'What needs doing today'] };
+   admin/the palette/the viewer/presentation/the add modal are accepted
+   (the shell declares #v-admin etc. per Task 2) but deliberately render
+   nothing — that's tasks 8 and 9. */
+const TITLES = {
+  round: ['Morning round', null], ward: ['Ward board', null], work: ['Work', 'What needs doing today'],
+  ot: ['OT list', null], handover: ['Handover', null], disch: ['Discharged', null]
+};
 function go(v){
   S.view = v;
   $$('.view').forEach(e => e.classList.toggle('on', e.id === 'v-' + v));
@@ -244,6 +310,9 @@ function go(v){
   if(v === 'round'){ rSpine(); rRound(); }
   else if(v === 'ward') rBoardView();
   else if(v === 'work') rWork();
+  else if(v === 'ot') rOT();
+  else if(v === 'handover') rHandover();
+  else if(v === 'disch'){ rDisch(); loadDischarged(); }
 }
 
 /* ── round actions ── */
@@ -477,10 +546,12 @@ DOC.addEventListener('click', e => {
   if(t.closest('[data-reset]')){ S.seen.clear(); S.idx = 0; rSpine(); rRound(); return; }
   const g = t.closest('[data-go]'); if(g){ go(g.dataset.go); return; }
   if(t.closest('#themeBtn')){ setTheme(DOC.documentElement.dataset.theme !== 'dark'); return; }
+  if(t.closest('[data-print]')){ WIN.print?.(); return; }
+  const ts = t.closest('[data-toast]'); if(ts){ toast(ts.dataset.toast); return; }
   /* data-act, data-film, data-vnav, data-pnav, data-pclose, data-prow,
-     data-add, data-close, data-print, data-toast are palette/viewer/
-     present/add-modal/documents concerns — tasks 7-9. Intentionally
-     unhandled here: clicking them is a no-op, not a crash. */
+     data-add, data-close are palette/viewer/present/add-modal concerns
+     — tasks 8-9. Intentionally unhandled here: clicking them is a no-op,
+     not a crash. */
 });
 DOC.addEventListener('input', e => {
   const p = e.target.dataset.plan;

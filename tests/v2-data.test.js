@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { loadV2Module } from './helpers/v2-env.js';
 
-const { toViewModel, fetchWard } = await loadV2Module('data.js');
+const { toViewModel, fetchWard, fetchDischarged } = await loadV2Module('data.js');
 
 const base = {
   id:'p1', bed:'12', name:'R. Kumar', age:'62', sex:'M', uhid:'MH-1',
@@ -96,6 +96,41 @@ test('fetchWard posts a full-resync body and returns normalised patients', async
 test('fetchWard rejects with a readable message on a failed response', async () => {
   const fake = async () => ({ ok:false, status:401, json: async () => ({}) });
   await assert.rejects(() => fetchWard(fake), /401/);
+});
+
+/* Task 7: surgeryDate/theatreTime are the raw (unformatted) fields the
+   OT list filter needs — public/app.js:1530's getOtListPatients() filters
+   on `p.status === 'preop' && p.surgeryDate === date`, which requires the
+   raw ISO date, not the pre-formatted `proc` string. */
+test('surgeryDate and theatreTime are carried onto the view model, unformatted', () => {
+  const v = toViewModel({ ...base, surgeryDate:'2026-08-02', theatreTime:'11:00' }, deps);
+  assert.equal(v.surgeryDate, '2026-08-02');
+  assert.equal(v.theatreTime, '11:00');
+});
+
+test('surgeryDate and theatreTime default to empty string when absent, never undefined', () => {
+  const { surgeryDate, theatreTime, ...rest } = base;
+  const v = toViewModel(rest, deps);
+  assert.equal(v.surgeryDate, '');
+  assert.equal(v.theatreTime, '');
+});
+
+test('fetchDischarged keeps only discharged patients, sorted by discharge date descending', async () => {
+  const raw = [
+    { ...base, id:'a', status:'discharged', dischargeDate:'2026-07-20' },
+    { ...base, id:'b', status:'postop' },
+    { ...base, id:'c', status:'discharged', dischargeDate:'2026-07-30' },
+    { ...base, id:'d', status:'discharged' }
+  ];
+  const fake = async () => ({ ok:true, json: async () => ({ serverTime: 5, patients: raw }) });
+  const out = await fetchDischarged(fake);
+  assert.deepEqual(out.patients.map(p => p.id), ['c', 'a', 'd']);
+  assert.equal(out.serverTime, 5);
+});
+
+test('fetchDischarged rejects with a readable message on a failed response', async () => {
+  const fake = async () => ({ ok:false, status:500, json: async () => ({}) });
+  await assert.rejects(() => fetchDischarged(fake), /500/);
 });
 
 test('loadV2Module can be called twice in the same process without crashing', async () => {

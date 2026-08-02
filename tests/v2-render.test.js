@@ -12,7 +12,8 @@ const p = {
   stat:'Post-op', plan:'', track:[['op',0,'done'],['POD 4',40,'now']],
   flags:[['warn','No plan entered today']],
   checks:[['Suture removal','POD 12',0]], dc:[['Summary',0]],
-  hist:[['1 Aug','Sit out of bed']]
+  hist:[['1 Aug','Sit out of bed']],
+  surgeryDate:'', theatreTime:''
 };
 
 test('esc neutralises every html metacharacter', () => {
@@ -101,4 +102,86 @@ test('filmBox with unknown-but-harmless kind still renders artwork fallback', ()
   assert.ok(html.includes('<button'), 'unknown kind should render as button, not placeholder');
   assert.ok(html.includes('data-film="0:preop"'), 'unknown kind should resolve to preop via whitelist');
   assert.ok(html.includes('<svg'), 'should render artwork SVG for fallback preop');
+});
+
+/* ── documents (Task 7) ──
+   The brief's original otList test drove a field called `otDate`, which
+   does not exist anywhere in this codebase (verified: zero occurrences
+   in public/app.js or server.js). The real rule, from public/app.js:1530
+   (getOtListPatients), is `p.status === 'preop' && p.surgeryDate ===
+   date` — pre-op patients whose surgeryDate equals the requested date.
+   These two tests are rewritten to drive `surgeryDate`/`status` instead
+   of the nonexistent `otDate`, keeping the brief's original intent: one
+   asserts only same-date cases appear, the other asserts the empty
+   state. */
+test('OT list includes only patients scheduled for theatre today', () => {
+  const html = R.otList([
+    { ...p, id:'a', status:'preop', proc:'ORIF · 2 Aug · OT 11:00', surgeryDate:'2026-08-02', theatreTime:'11:00' },
+    { ...p, id:'b', status:'preop', proc:'PFN · 29 Jul', surgeryDate:'2026-07-29', theatreTime:'09:00' }
+  ], '2026-08-02');
+  assert.ok(html.includes('11:00'));
+  assert.ok(!html.includes('29 Jul'));
+});
+
+test('OT list renders an empty state when nothing is scheduled', () => {
+  assert.ok(/no cases/i.test(R.otList([], '2026-08-02')));
+});
+
+test('OT list excludes same-date patients who are not pre-op', () => {
+  const html = R.otList([
+    { ...p, id:'a', status:'postop', surgeryDate:'2026-08-02', name:'Not On List' }
+  ], '2026-08-02');
+  assert.ok(!html.includes('Not On List'));
+  assert.ok(/no cases/i.test(html));
+});
+
+test('otList escapes every patient-supplied field', () => {
+  const hostile = '<b>x</b>"onmouseover="a';
+  const html = R.otList([{ ...p, status:'preop', surgeryDate:'2026-08-02',
+    bed:hostile, name:hostile, age:hostile, dx:hostile, proc:hostile, surgeon:hostile, theatreTime:hostile }],
+    '2026-08-02');
+  assert.ok(!html.includes(hostile), 'hostile string must not appear unescaped anywhere in the output');
+});
+
+test('handover lists every patient and surfaces urgent flags', () => {
+  const html = R.handover([{ ...p, flags:[['bad','Antibiotic overdue']] }],
+    { when:'2 Aug, 18:30', to:'Dr Verma' });
+  assert.ok(html.includes('R. Kumar'));
+  assert.ok(html.includes('Antibiotic overdue'));
+  assert.ok(html.includes('Dr Verma'));
+});
+
+test('handover falls back to the last plan when today has none', () => {
+  const html = R.handover([{ ...p, plan:'', hist:[['1 Aug','Sit out of bed']] }],
+    { when:'x', to:'y' });
+  assert.ok(html.includes('Sit out of bed'));
+});
+
+test('handover escapes plan text', () => {
+  const html = R.handover([{ ...p, plan:'<b>x</b>' }], { when:'x', to:'y' });
+  assert.ok(!html.includes('<b>x</b>'));
+});
+
+test('handover escapes every patient-supplied field, not just plan text', () => {
+  const hostile = '<b>x</b>"onmouseover="a';
+  const html = R.handover([{ ...p, bed:hostile, name:hostile, age:hostile, dx:hostile,
+    flags:[['bad', hostile]] }], { when: hostile, to: hostile });
+  assert.ok(!html.includes(hostile), 'hostile string must not appear unescaped anywhere in the output');
+});
+
+test('discharged renders an empty state for no rows', () => {
+  assert.ok(/no discharges/i.test(R.discharged([])));
+});
+
+test('discharged lists patients when rows are present', () => {
+  const html = R.discharged([{ ...p, name:'V. Pillai', dx:'Femur shaft fracture', proc:'Nailing' }]);
+  assert.ok(html.includes('V. Pillai'));
+  assert.ok(html.includes('Femur shaft fracture'));
+  assert.ok(!/no discharges/i.test(html));
+});
+
+test('discharged escapes every patient-supplied field', () => {
+  const hostile = '<b>x</b>"onmouseover="a';
+  const html = R.discharged([{ ...p, name:hostile, age:hostile, dx:hostile, proc:hostile }]);
+  assert.ok(!html.includes(hostile), 'hostile string must not appear unescaped anywhere in the output');
 });

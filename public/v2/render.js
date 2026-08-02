@@ -170,3 +170,72 @@ export function complete(count){
  <button class="btn pri" style="flex:0 0 auto" data-go="handover">Open handover</button>
  <button class="btn gh" data-reset="1">Start again</button></div></div>`;
 }
+
+/* ── documents ──
+   otList, handover and discharged are read-only document views (Task 7).
+   Markup and classes are lifted verbatim from docs/prototypes/ortho-v3.html's
+   rOT/rHand/rDisch. The prototype's date input and search box are static —
+   neither is wired to live filtering in the prototype either — so they're
+   reproduced as presentational markup only; data-toast/data-print stay
+   presentational hooks for app.js to wire toast()/print() onto. */
+
+/** OT list for `dateISO`. Filter MUST match public/app.js:1530's
+ *  getOtListPatients() exactly: `p.status === 'preop' && p.surgeryDate ===
+ *  date` (status==='preop' already implies not discharged, so the main
+ *  app's redundant `p.status !== 'discharged'` clause is a no-op here). */
+export function otList(patients, dateISO){
+  const rows = patients.filter(p => p.status === 'preop' && p.surgeryDate === dateISO);
+  const body = rows.map((p, n) => `<tr><td class="mono">${n + 1}</td><td class="mono">${esc(p.bed)}</td>
+ <td style="font-weight:500">${esc(p.name)}</td><td>${esc(p.age)}</td><td>${esc(p.dx)}</td>
+ <td>${esc(p.proc)}</td><td>${esc(p.surgeon)}</td><td class="mono">${esc(p.theatreTime)}</td></tr>`).join('');
+  return `<div class="toolbar">
+ <input class="inp" type="date" value="${esc(dateISO)}" aria-label="OT date">
+ <button class="btn gh" data-toast="Word file generated">Download Word</button>
+ <button class="btn gh" data-print="1">Print / PDF</button>
+ <button class="btn gh" data-toast="Default doctors saved">Default doctors</button></div>
+ ${rows.length ? `<div class="tw"><table class="tbl"><thead><tr><th>#</th><th>Bed</th><th>Name</th><th>Age/Sex</th><th>Diagnosis</th><th>Procedure</th><th>Surgeon</th><th>Time</th></tr></thead>
+ <tbody>${body}</tbody></table></div>
+ <p class="note">Formatted to the hospital OT list template. The Word export preserves the header block and signature lines, so it can go straight to theatre.</p>`
+ : `<p class="empty">No cases scheduled for this date.</p>`}`;
+}
+
+/** Evening handover sheet. `meta.when`/`meta.to` are supplied by the
+ *  caller (app.js), not derived here — render.js stays pure. Falls back
+ *  from today's plan to yesterday's plan-history entry, then to an
+ *  explicit "not entered" string, and surfaces the first `bad` flag (if
+ *  any) as `.ho-f`. */
+export function handover(patients, meta){
+  const rows = patients.map(p => {
+    const bad = badOf(p);
+    const planText = p.plan || p.hist[0]?.[1] || 'plan not entered';
+    return `<div class="ho"><div class="ho-t"><b>${esc(p.bed)}</b>
+ <strong>${esc(p.name)}</strong><em>${esc(p.age)} · ${p.pod != null ? 'POD ' + p.pod : esc(p.stat)}</em></div>
+ <p class="ho-p">${esc(p.dx)} — ${esc(planText)}</p>
+ ${bad ? `<span class="ho-f">${esc(bad[1])}</span>` : ''}</div>`;
+  }).join('');
+  return `<div class="toolbar">
+ <button class="btn pri" style="flex:0 0 auto" data-toast="Handover copied to clipboard">Copy for WhatsApp</button>
+ <button class="btn gh" data-toast="Word file generated">Download Word</button>
+ <button class="btn gh" data-print="1">Print</button></div>
+ <div class="sheet"><h3>Unit II — evening handover</h3>
+ <p class="sh-meta">${esc(meta.when)} · ${patients.length} inpatient${patients.length === 1 ? '' : 's'} · handed to ${esc(meta.to)}</p>
+ ${rows}
+ <p class="note" style="margin-top:var(--s-4)">Generated from today's plans and open flags. Edit before sending.</p></div>`;
+}
+
+/** Discharged-patients archive. `rows` are already filtered/sorted by
+ *  data.js's fetchDischarged() — this function only renders. No discharge
+ *  date or length-of-stay columns: VPatient does not (and per the design
+ *  ruling in task-7-brief.md, must not) carry `dischargeDate`, so those
+ *  two columns render the codebase's established '—' placeholder for
+ *  data that is genuinely absent from the view model, rather than
+ *  fabricating a value. */
+export function discharged(rows){
+  const body = rows.map(p => `<tr><td style="font-weight:500">${esc(p.name)}</td><td>${esc(p.age)}</td>
+ <td>${esc(p.dx)}</td><td>${esc(p.proc)}</td><td>—</td><td class="mono">—</td></tr>`).join('');
+  return `<div class="toolbar">
+ <input class="inp" placeholder="Search discharged patients…" style="min-width:260px" aria-label="Search discharged"></div>
+ ${rows.length ? `<div class="tw"><table class="tbl"><thead><tr><th>Name</th><th>Age/Sex</th><th>Diagnosis</th><th>Procedure</th><th>Discharged</th><th>Stay</th></tr></thead>
+ <tbody>${body}</tbody></table></div>`
+ : `<p class="empty">No discharges in this period.</p>`}`;
+}

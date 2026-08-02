@@ -92,6 +92,13 @@ export function toViewModel(raw, deps = globalThis){
     dx: (raw.diagnosis || '').trim() || 'Diagnosis not entered',
     proc: [raw.procedure, fmtDate(raw.surgeryDate), raw.theatreTime && 'OT ' + raw.theatreTime]
       .filter(Boolean).join(' · '),
+    /* Raw (unformatted) surgery date/theatre time, added for the OT list
+       (Task 7): it must select the exact same patients as public/app.js's
+       getOtListPatients() — `p.status === 'preop' && p.surgeryDate === date`
+       — which needs the raw ISO date, not the pre-formatted `proc` string
+       above. Empty string, never undefined, when absent. */
+    surgeryDate: raw.surgeryDate || '',
+    theatreTime: raw.theatreTime || '',
     implant: raw.implant || '—',
     labs: labs || 'None recorded',
     films: (Array.isArray(raw.images) ? raw.images : []).map(i => i.type || 'preop'),
@@ -132,6 +139,27 @@ export async function fetchWard(fetchImpl = fetch, deps = globalThis){
       .filter(p => p.status !== 'discharged')
       .map(p => toViewModel(p, deps))
       .sort((a, b) => (parseInt(a.bed, 10) || 1e9) - (parseInt(b.bed, 10) || 1e9))
+  };
+}
+
+/* Mirrors fetchWard, but for the discharged-patients archive (Task 7):
+   filters on the inverse of fetchWard's status check, and sorts by
+   discharge date descending instead of by bed. Field-name note (see
+   task-7-brief.md): this codebase carries lifecycle on `p.status`
+   ('discharged' is a string value, not a boolean), and the retrospective
+   discharge date lives on `p.dischargeDate` — set only after discharge,
+   distinct from any prospective/expected discharge date. Sorting happens
+   on the RAW records, before toViewModel(), because dischargeDate is not
+   (and per the brief, must not be) added to VPatient. */
+export async function fetchDischarged(fetchImpl = fetch, deps = globalThis){
+  const out = await post('/api/sync', { since: 0, changes: [] }, fetchImpl);
+  const list = Array.isArray(out.patients) ? out.patients : [];
+  return {
+    serverTime: out.serverTime,
+    patients: list
+      .filter(p => p.status === 'discharged')
+      .sort((a, b) => String(b.dischargeDate || '').localeCompare(String(a.dischargeDate || '')))
+      .map(p => toViewModel(p, deps))
   };
 }
 
