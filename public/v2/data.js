@@ -36,6 +36,14 @@ function buildTrack(raw, pod, deps){
   }
   const checks = Array.isArray(raw.postOpChecks) ? raw.postOpChecks : [];
   const dueDays = checks.map(c => Number(c.duePod)).filter(Number.isFinite);
+  // `expectedDischargeDate` is not yet a stored field on the patient record
+  // (only `dischargeDate`, set retrospectively after discharge, which must
+  // NOT be substituted here — using it prospectively would be wrong). This
+  // is intentional: with the field absent, `hasDischarge` is always false
+  // and the track falls back to ending at the last milestone, which is the
+  // documented behaviour in the design spec's "Empty and degraded states"
+  // section. Adding a real discharge-anchor field is a listed outstanding
+  // build prerequisite in the design spec.
   const hasDischarge = !!raw.expectedDischargeDate;
   const span = Math.max(pod + 1, ...dueDays, hasDischarge ? pod + 3 : 0);
   const pct = day => Math.max(0, Math.min(100, Math.round((day / span) * 100)));
