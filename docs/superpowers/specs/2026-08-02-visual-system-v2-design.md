@@ -179,6 +179,18 @@ Three items must exist before the card redesign can ship. Each is a real depende
 2. **Discharge anchor.** The POD track's right terminus needs a target discharge date, either stored or derived from the milestone set. Absent it, the track ends at the last milestone (see §3).
 3. **Imaging-coverage measurement.** Before committing to film-as-hero, measure what fraction of live patients actually have an uploaded film. Below ~40%, the hero slot is mostly placeholder and the design is worse than today — in which case the film demotes to a row-scale element and identity leads.
 
+## Imaging coverage
+
+**2026-08-02 — Task 0 measurement (`scripts/imaging-coverage.js`), sandbox environment:**
+
+```
+live patients      0
+with >=1 film      0  (0%)
+
+```
+
+0 live patients in this environment — measurement must be re-run against production before Task 5. The sandbox `data/ortho.db` has no rows in its `patients` table (confirmed via `store.countPatients()`), so this is a genuine reading, not a script defect — but it settles nothing. Task 5 must not proceed on film-as-hero vs. row-scale until this script is re-run against a database with real patient volume and the coverage percentage is recorded here.
+
 ## 9 · Delivery tiers
 
 **Tier A — committed.** High confidence, ships regardless of experiment outcome.
