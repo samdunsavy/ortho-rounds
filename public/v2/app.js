@@ -98,8 +98,25 @@ function closeAll(){
    edit). So fetchImpl is wrapped here to capture the exact JSON body
    fetchWard() itself already fetched and parsed — no second network
    round trip — giving both the view models AND the untransformed raw
-   records, keyed by id, from one request. */
+   records, keyed by id, from one request.
+
+   Monotonic guard: `loadSeq` is bumped at the START of every loadWard()
+   call (render()'s calls included, not just the write path's). If a
+   newer call has already started by the time an older call's response
+   lands, the older call's snapshot is NOT applied to S.raw/S.patients —
+   an in-flight response only reflects state as of when the request was
+   made, so an older request that resolves late must never clobber
+   whatever a request that started later already wrote. This complements
+   the write queue below (which is the actual fix for the interleaving
+   finding — see "Fix round 3" in task-6-report.md); it does not replace
+   it. On its own this guard would not have prevented the finding, since
+   both write cycles restart their OWN loadWard() after the fact, each
+   correctly becoming "the newest call" by the time it fires — the queue
+   is what stops a second write cycle from starting at all while the
+   first is still in flight. */
+let loadSeq = 0;
 async function loadWard(){
+  const mySeq = ++loadSeq;
   let rawSnapshot = null;
   const capturingFetch = async (url, opts) => {
     const res = await FETCH(url, opts);
@@ -113,7 +130,7 @@ async function loadWard(){
     };
   };
   const data = await fetchWard(capturingFetch, WIN);
-  if(rawSnapshot && Array.isArray(rawSnapshot.patients)){
+  if(mySeq === loadSeq && rawSnapshot && Array.isArray(rawSnapshot.patients)){
     S.raw = new Map(rawSnapshot.patients.map(p => [p.id, p]));
   }
   return data;
@@ -286,10 +303,48 @@ function skip(){
    that case, and the specific optimistic edit is reverted in place —
    on the fresh record if the write itself failed, or on the original
    pre-refresh record if even the refresh couldn't reach the server —
-   so the UI stops claiming a state the server does not have. */
+   so the UI stops claiming a state the server does not have.
+
+   ── Write queue (Fix round 3) ──
+   Refresh-before-write (above) closes the CROSS-CLIENT staleness hole,
+   but by itself it introduced a new same-client hole: two overlapping
+   write cycles for the SAME patient each do their own
+   `loadWard() -> mutate -> pushPatient()`, and nothing stops those two
+   async cycles from interleaving. Whichever cycle's `loadWard()` happens
+   to resolve LAST wins the write, regardless of which click happened
+   first or which push actually reached the server last — because that
+   cycle's "fresh" snapshot was taken before the other cycle's push
+   landed, and it silently replaces the whole postOpChecks/
+   dischargeChecks array, reverting the other cycle's edit. See
+   task-6-report.md, "Fix round 3", for the exact reproduction.
+
+   Fixed by serialising every write through one promise chain
+   (`writeChain`) so a write's `loadWard() -> mutate -> pushPatient()` is
+   atomic with respect to every other write: the next write's body does
+   not even START running until the previous one has fully settled.
+   Chosen scope: GLOBAL, not per-patient. A ward round's write volume is
+   low (one clinician, one tab, occasional checkbox/plan edits — this is
+   a preview, not a high-throughput multi-user editor), so cross-patient
+   writes queueing behind each other costs, at most, a few hundred
+   milliseconds of extra latency on an already-network-bound path; a
+   global chain is far simpler to reason about and verify than a
+   per-patient `Map<id, Promise>` for that trade. `enqueueWrite` never
+   lets a rejected/thrown write poison the chain: the continuation that
+   becomes the new `writeChain` always resolves (via `.then(noop, noop)`
+   on the just-run write), so the write's own try/catch — which already
+   handles the thrown-vs-{rejected:true} distinction — still runs
+   exactly as before; only the SCHEDULING is serialised, not the
+   per-write error handling. */
 function touchChecklistItem(c){
   c.updatedAt = Date.now();
   return c;
+}
+
+let writeChain = Promise.resolve();
+function enqueueWrite(fn){
+  const run = writeChain.then(fn, fn);
+  writeChain = run.then(() => {}, () => {});
+  return run;
 }
 
 const planTimers = new Map();
@@ -299,7 +354,7 @@ function schedulePlanPush(i){
   clearTimeout(planTimers.get(p.id));
   planTimers.set(p.id, setTimeout(() => {
     planTimers.delete(p.id);
-    S.pending = pushPlanNow(p.id);
+    S.pending = enqueueWrite(() => pushPlanNow(p.id));
   }, 600));
 }
 async function pushPlanNow(id){
@@ -354,9 +409,9 @@ function toggleCheck(kind, i, n){
   item.status = item.status === 'done' ? 'pending' : 'done';
   S.patients[i] = toViewModel(rec, WIN);
   (S.view === 'work' ? rWork : rRound)();
-  S.pending = pushCheckNow(kind, p.id, itemId, {
+  S.pending = enqueueWrite(() => pushCheckNow(kind, p.id, itemId, {
     rec, prevStatus: optimisticPrevStatus, prevUpdatedAt: optimisticPrevUpdatedAt
-  });
+  }));
 }
 async function pushCheckNow(kind, patientId, itemId, optimistic){
   let flipped = null, prevStatus, prevUpdatedAt, freshRec;

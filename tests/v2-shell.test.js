@@ -229,3 +229,70 @@ test('a toggle push reflects a server-side change made after the initial fetch, 
   assert.equal(sentC2.status, 'done',
     "clinician B's completed milestone must not be silently reverted by a stale push");
 });
+
+/* ── Fix round 3: two overlapping write cycles for the SAME patient must
+   not interleave and revert one another ── */
+
+test('two rapid checklist toggles on the same patient are serialised — neither is reverted', async () => {
+  const patient0 = rawWithCheck(1, [
+    { id:'c1', label:'Drain out', duePod:1, status:'pending' },
+    { id:'c2', label:'Mobilise', duePod:2, status:'pending' }
+  ]);
+  let serverPatient = JSON.parse(JSON.stringify(patient0));
+  let serverTime = 1;
+  let readCount = 0;
+  const pushedBodies = [];
+  const sleep = ms => new Promise(res => setTimeout(res, ms));
+  let resolveBothPushed;
+  const bothPushed = new Promise(res => { resolveBothPushed = res; });
+
+  // fetchImpl distinguishes reads (empty `changes`, i.e. loadWard's
+  // fetchWard call) from writes (one entry in `changes`, i.e. pushPatient).
+  // The SECOND read issued after boot (readCount === 2 — the very first
+  // write cycle's own refresh) is made deliberately slow to resolve, to
+  // simulate ordinary network jitter: it's issued first but arrives last.
+  // Its response snapshot is captured at REQUEST time (matching a real
+  // server, which answers with the state as of when it received the
+  // request, not as of when the response happens to arrive) — a slow
+  // response is not automatically a stale one; it only becomes a problem
+  // if the client applies it after a newer write has already landed.
+  const fetchImpl = async (url, opts) => {
+    const body = JSON.parse(opts.body);
+    if(body.changes && body.changes.length){
+      const pushed = JSON.parse(JSON.stringify(body.changes[0]));
+      pushedBodies.push(pushed);
+      serverPatient = pushed;
+      serverTime++;
+      if(pushedBodies.length === 2) resolveBothPushed();
+      return { ok:true, json: async () => ({ serverTime }) };
+    }
+    readCount++;
+    const snapshot = JSON.parse(JSON.stringify(serverPatient));
+    if(readCount === 2) await sleep(30);
+    return { ok:true, json: async () => ({ serverTime, patients:[snapshot] }) };
+  };
+
+  const { document } = await bootV2({ fetchImpl });
+  const btnC1 = document.querySelector('[data-ck="0:0"]');
+  assert.ok(btnC1, 'expected the first milestone checkbox to render');
+
+  btnC1.click(); // starts write cycle A (toggles c1) — its refresh is the slow one
+  // toggleCheck's optimistic flip re-renders #roundDet synchronously (still
+  // inside this same .click() call, before A's push has even reached the
+  // network), replacing the DOM — a reference queried before this click
+  // would now be detached and its .click() would never bubble to the
+  // document-level listener. Re-query after A's click, not before.
+  const btnC2 = document.querySelector('[data-ck="0:1"]');
+  assert.ok(btnC2, 'expected the second milestone checkbox to render');
+  btnC2.click(); // starts write cycle B (toggles c2) before A has settled
+
+  await Promise.race([
+    bothPushed,
+    sleep(2000).then(() => { throw new Error('timed out waiting for both writes to land'); })
+  ]);
+
+  const c1 = serverPatient.postOpChecks.find(c => c.id === 'c1');
+  const c2 = serverPatient.postOpChecks.find(c => c.id === 'c2');
+  assert.equal(c1.status, 'done', "toggle A's change (c1) must not be lost");
+  assert.equal(c2.status, 'done', "toggle B's change (c2) must not be reverted by A's stale write");
+});
