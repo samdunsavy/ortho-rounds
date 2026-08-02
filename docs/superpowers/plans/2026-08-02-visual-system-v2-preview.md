@@ -782,7 +782,7 @@ export async function fetchWard(fetchImpl = fetch, deps = globalThis){
   return {
     serverTime: out.serverTime,
     patients: list
-      .filter(p => !p.discharged)
+      .filter(p => p.status !== 'discharged')
       .map(p => toViewModel(p, deps))
       .sort((a, b) => (parseInt(a.bed, 10) || 1e9) - (parseInt(b.bed, 10) || 1e9))
   };
@@ -1071,7 +1071,9 @@ git commit -m "feat: v2 app wiring for round, ward and work"
 **Interfaces:**
 - Consumes: `VPatient` from `data.js`; `esc` from `render.js`.
 - Produces (in `render.js`): `export function otList(patients: VPatient[], dateISO: string): string`, `export function handover(patients: VPatient[], meta: {when: string, to: string}): string`, `export function discharged(rows: VPatient[]): string`
-- Produces (in `data.js`): `export async function fetchDischarged(fetchImpl = fetch, deps = globalThis): Promise<{patients: VPatient[], serverTime: number}>` — identical to `fetchWard` but filters `p.discharged === true` and sorts by discharge date descending rather than by bed.
+- Produces (in `data.js`): `export async function fetchDischarged(fetchImpl = fetch, deps = globalThis): Promise<{patients: VPatient[], serverTime: number}>` — identical to `fetchWard` but filters `p.status === 'discharged'` and sorts by discharge date descending rather than by bed.
+
+> **Field-name correction (established in Task 0):** this codebase has no `discharged` boolean. Patient lifecycle is carried on `p.status`, whose discharged value is the string `'discharged'` (see `public/app.js:481,4132,4587`). `!p.discharged` would be true for every patient and silently filter nothing.
 
 - [ ] **Step 1: Write the failing test**
 
