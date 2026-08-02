@@ -1,7 +1,7 @@
 // tests/v2-shell.test.js
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 
 const html = readFileSync(new URL('../public/v2/index.html', import.meta.url), 'utf8');
 
@@ -47,4 +47,49 @@ test('preview banner is present and not dismissible', () => {
   const banner = html.slice(i, i + 400);
   assert.ok(/real patient/i.test(banner), 'banner must warn edits are real');
   assert.ok(!/data-close|dismiss/i.test(banner), 'banner must not be dismissible');
+});
+
+const cssDir = new URL('../public/v2/css/', import.meta.url);
+const readCss = f => readFileSync(new URL(f, cssDir), 'utf8');
+
+test('all seven css layers exist', () => {
+  const files = readdirSync(cssDir).sort();
+  assert.deepEqual(files,
+    ['base.css','board.css','card.css','detail.css','overlay.css','shell.css','tokens.css']);
+});
+
+test('tokens.css defines both themes and every colour role', () => {
+  const css = readCss('tokens.css');
+  assert.ok(css.includes(':root{'));
+  assert.ok(css.includes('[data-theme="dark"]'));
+  for(const v of ['--ink','--paper','--card','--accent','--bone','--good','--warn','--bad','--film'])
+    assert.ok(css.includes(v + ':'), `missing ${v}`);
+});
+
+test('only tokens.css declares colour variables', () => {
+  for(const f of ['shell.css','card.css','detail.css','board.css','overlay.css']){
+    assert.ok(!/^\s*--(ink|paper|accent|bone|film)[-:]/m.test(readCss(f)),
+      `${f} must not declare colour tokens`);
+  }
+});
+
+test('no layer hardcodes a hex colour outside tokens and film artwork', () => {
+  for(const f of ['shell.css','card.css','detail.css','board.css']){
+    const hex = readCss(f).match(/#[0-9a-fA-F]{3,8}\b/g) || [];
+    assert.deepEqual(hex, [], `${f} hardcodes ${hex.join(', ')}`);
+  }
+});
+
+test('exactly three breakpoint tiers, no strays', () => {
+  const all = ['shell.css','card.css','detail.css','board.css','overlay.css','base.css']
+    .flatMap(f => [...readCss(f).matchAll(/@media\s*\(min-width:\s*(\d+)px\)/g)].map(m => m[1]));
+  assert.deepEqual([...new Set(all)].sort((a,b)=>a-b), ['760','1100','1300']);
+});
+
+test('reduced motion is honoured', () => {
+  assert.ok(readCss('base.css').includes('prefers-reduced-motion'));
+});
+
+test('print stylesheet exists', () => {
+  assert.ok(readCss('base.css').includes('@media print'));
 });

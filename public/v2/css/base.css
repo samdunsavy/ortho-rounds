@@ -1,0 +1,36 @@
+/* resets, global element defaults, reduced-motion and print */
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+html,body{margin:0;height:100%;}
+body{font-family:var(--f-sans);font-size:var(--t-14);color:var(--ink);background:var(--paper);
+  -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;overflow:hidden;
+  font-variant-numeric:tabular-nums;
+  transition:background var(--d3) var(--ez),color var(--d3) var(--ez);}
+button{font:inherit;color:inherit;border:0;background:none;cursor:pointer;padding:0;text-align:left;}
+input,select,textarea{font:inherit;color:inherit;}
+svg{fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round;}
+.ico{width:19px;height:19px;flex-shrink:0;display:block;}
+.ico-s{width:15px;height:15px;flex-shrink:0;display:block;}
+:focus{outline:none;}
+:focus-visible{outline:none;box-shadow:var(--ring);border-radius:var(--r-sm);}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;}
+::-webkit-scrollbar{width:9px;height:9px;}
+::-webkit-scrollbar-thumb{background:var(--line);border-radius:9px;border:2px solid transparent;background-clip:content-box;}
+::-webkit-scrollbar-thumb:hover{background:var(--ink-3);background-clip:content-box;}
+::-webkit-scrollbar-track{background:transparent;}
+@media(prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;
+    transition-duration:.01ms!important;scroll-behavior:auto!important;}
+}
+.mono{font-family:var(--f-mono);font-size:var(--t-12);letter-spacing:-.01em;}
+.disp{font-family:var(--f-disp);font-weight:600;letter-spacing:-.022em;}
+.lbl{font-size:var(--t-11);letter-spacing:.11em;text-transform:uppercase;color:var(--ink-3);
+  font-weight:600;margin:0 0 10px 2px;}
+.lbl.mt{margin-top:var(--s-6);}
+.muted{color:var(--ink-3);}
+
+
+@media print{
+  .rail,.nav,.hd,.spine,.toolbar,.scrim,.pal,.modal,.present,.viewer,.toast{display:none!important;}
+  body,.app,.main,.body,.view,.full{overflow:visible!important;height:auto!important;display:block!important;background:#fff!important;}
+  .sheet,.tw{border:0!important;box-shadow:none!important;padding:0!important;max-width:none!important;}
+}

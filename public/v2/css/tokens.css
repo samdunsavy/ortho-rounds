@@ -1,0 +1,48 @@
+/* design tokens — colour, type, spacing, motion; light + dark themes */
+:root{
+  --f-sans:"DM Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  --f-disp:"Fraunces",Georgia,serif;
+  --f-mono:"JetBrains Mono","SF Mono",Consolas,monospace;
+
+  --t-11:11px; --t-12:12px; --t-13:13px; --t-14:14px;
+  --t-16:16px; --t-19:19px; --t-23:23px; --t-30:30px;
+
+  --s-1:4px; --s-2:8px; --s-3:12px; --s-4:16px; --s-5:20px; --s-6:26px; --s-7:34px;
+
+  --ink:#171d29; --ink-2:#525d72; --ink-3:#8992a3;
+  --line:#e3e6ec; --line-2:#eef0f4;
+  --paper:#f5f6f8; --card:#ffffff; --sunk:#fafbfc; --hover:#f1f3f6;
+  --accent:#2c5f6e; --accent-2:#e6efef; --accent-3:#1f4a57; --on-accent:#ffffff;
+  --bone:#f2ede3; --bone-line:#dcd3bd; --bone-ink:#75653f;
+  --good:#3a7355; --good-bg:#e7f2eb;
+  --warn:#98591f; --warn-bg:#fbefe0;
+  --bad:#9e3838;  --bad-bg:#fae9e9;
+  --film:#11151b; --film-in:rgba(0,0,0,.34); --film-fg:#b9c3ce;
+
+  --r-sm:8px; --r:12px; --r-lg:16px; --r-chip:6px;
+  --sh-1:0 1px 2px rgba(23,29,41,.05), 0 1px 3px rgba(23,29,41,.04);
+  --sh-2:0 2px 6px rgba(23,29,41,.06), 0 6px 16px rgba(23,29,41,.07);
+  --sh-3:0 12px 28px rgba(23,29,41,.12), 0 32px 60px rgba(23,29,41,.10);
+  --ring:0 0 0 3px var(--accent-2);
+
+  --ez:cubic-bezier(.32,.72,0,1);
+  --sp:cubic-bezier(.34,1.38,.64,1);
+  --d1:.16s; --d2:.28s; --d3:.44s;
+  --rail:76px; --rail-x:214px;
+}
+[data-theme="dark"]{
+  --ink:#e9eef5; --ink-2:#98a4b6; --ink-3:#69758a;
+  --line:#1d2631; --line-2:#161e27;
+  --paper:#06090d; --card:#0f161e; --sunk:#0a1017; --hover:#161f2a;
+  --accent:#6fd3c7; --accent-2:#112a2d; --accent-3:#8ee2d7; --on-accent:#042320;
+  --bone:#181d25; --bone-line:#28303b; --bone-ink:#b8a87e;
+  --good:#5cbe8a; --good-bg:#0e2318;
+  --warn:#dea15a; --warn-bg:#291d0d;
+  --bad:#ef837d;  --bad-bg:#2b1214;
+  --film:#05080b; --film-in:rgba(255,255,255,.055); --film-fg:#b9c3ce;
+  --sh-1:0 1px 2px rgba(0,0,0,.55);
+  --sh-2:0 3px 10px rgba(0,0,0,.5), 0 10px 26px rgba(0,0,0,.4);
+  --sh-3:0 16px 36px rgba(0,0,0,.62), 0 40px 72px rgba(0,0,0,.5);
+  --ring:0 0 0 3px rgba(111,211,199,.22);
+}
+
