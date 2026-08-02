@@ -69,6 +69,7 @@ import { recordEvent, getSnapshot, isExportEnabled, startExportLoop } from './te
 import { buildOrgTree, buildOrgRollups, buildScopeTree } from './admin.js';
 import { NODE_TYPES, PARENT_TYPE, getNode, nodeOrgId, childrenOf, unitIdsUnder, restampUnits, restampPatient, updateNode, deleteNode, PARENT_FIELD } from './structure.js';
 import { recordAudit, ACTIONS } from './audit.js';
+import { resolveStaticPath } from './static-path.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -200,8 +201,8 @@ const CONTENT_TYPES = {
 };
 
 function serveStatic(req, res){
-  let urlPath = decodeURIComponent((req.url.split('?')[0]) || '/');
-  if(urlPath === '/') urlPath = '/index.html';
+  const raw = decodeURIComponent((req.url.split('?')[0]) || '/');
+  const urlPath = resolveStaticPath(raw, PUBLIC_DIR);
   const filePath = path.normalize(path.join(PUBLIC_DIR, urlPath));
   if(!filePath.startsWith(PUBLIC_DIR)){
     res.writeHead(403); res.end('Forbidden'); return;
