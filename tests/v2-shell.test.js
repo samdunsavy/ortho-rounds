@@ -93,3 +93,58 @@ test('reduced motion is honoured', () => {
 test('print stylesheet exists', () => {
   assert.ok(readCss('base.css').includes('@media print'));
 });
+
+import { bootV2 } from './helpers/v2-env.js';
+
+export const raw = n => ({ id:'p'+n, bed:String(n), name:'P'+n, age:'40', sex:'M',
+  diagnosis:'Dx'+n, status:'postop', surgeryDate:'2026-07-29', images:[],
+  postOpChecks:[], dischargeChecks:[], planHistory:[], labs:{} });
+
+test('boots, fetches the ward, and renders one row per patient', async () => {
+  const { document } = await bootV2({ patients:[raw(1), raw(2), raw(3)] });
+  assert.equal(document.querySelectorAll('#roundList .qr').length, 3);
+});
+
+test('marking seen advances to the next unseen patient', async () => {
+  const { document, api } = await bootV2({ patients:[raw(1), raw(2)] });
+  const before = api.state.idx;
+  document.querySelector('[data-seen]').click();
+  assert.notEqual(api.state.idx, before);
+  assert.equal(api.state.seen.size, 1);
+});
+
+test('skip advances without marking seen', async () => {
+  const { document, api } = await bootV2({ patients:[raw(1), raw(2)] });
+  document.querySelector('[data-skip]').click();
+  assert.equal(api.state.seen.size, 0);
+});
+
+test('the round cannot complete while a patient is only skipped', async () => {
+  const { document } = await bootV2({ patients:[raw(1), raw(2)] });
+  document.querySelector('[data-skip]').click();
+  document.querySelector('[data-seen]').click();
+  assert.ok(!document.body.textContent.includes('Round complete'));
+});
+
+test('narrow viewport renders the hero and no detail pane', async () => {
+  const { document } = await bootV2({ patients:[raw(1), raw(2)], width:360 });
+  assert.ok(document.querySelector('#roundList .hero'));
+  assert.equal(document.querySelector('#roundDet').innerHTML, '');
+});
+
+test('wide viewport renders the list and the detail pane', async () => {
+  const { document } = await bootV2({ patients:[raw(1), raw(2)], width:1440 });
+  assert.ok(document.querySelector('#roundDet').innerHTML.length > 0);
+});
+
+test('a failed fetch surfaces a retry message and never a blank ward', async () => {
+  const { document } = await bootV2({
+    fetchImpl: async () => ({ ok:false, status:503, json: async () => ({}) }) });
+  assert.ok(/couldn.t reach|retry/i.test(document.body.textContent));
+});
+
+test('at most ten interactive targets render before the first patient row', async () => {
+  const { document } = await bootV2({ patients:[raw(1), raw(2)], width:360 });
+  const chrome = [...document.querySelectorAll('.hd button, .nav button, .preview-banner button')];
+  assert.ok(chrome.length <= 10, `${chrome.length} chrome targets, spec caps this at 10`);
+});
