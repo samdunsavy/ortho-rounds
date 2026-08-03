@@ -82,12 +82,28 @@ for(const [k, v] of Object.entries(byStatus)){
   console.log(`  ${k.padEnd(14)} ${String(v.filmed).padStart(3)}/${String(v.total).padEnd(3)} (${pct(v.filmed, v.total)}%)`);
 }
 console.log('');
+console.log(`ward image payload ${kb(totalBytes)} KB across ${imageCount} image(s)`);
+console.log(`largest single     ${kb(largest)} KB`);
+console.log(`mean per image     ${imageCount ? kb(totalBytes / imageCount) : 0} KB`);
+if(imageCount === 0 && withFilm.length > 0){
+  console.log('(image blobs not readable from this store — payload unmeasured)');
+}
+console.log('');
 if(live.length === 0){
   console.log('0 live patients in this environment; measurement must be re-run against production before Task 5.');
 } else {
   console.log(pct(withFilm.length, live.length) >= 40
     ? 'GO — film-as-hero is viable.'
     : 'NO GO — demote the film to row scale and lead with identity (spec §8.3).');
+  /* v2 renders stored images directly, lazy-loaded, with the server's
+     Cache-Control: private, max-age=86400 — so this is a once-per-device-
+     per-day cost, not per render. 3 MB is the line: below it, a first
+     load on poor ward wifi is seconds; above it, thumbnails first. */
+  if(imageCount > 0){
+    console.log(totalBytes <= 3 * 1024 * 1024
+      ? 'Payload OK — thumbnails are an optimisation, not a blocker.'
+      : 'Payload HEAVY — build server-side thumbnails before ward use (spec §8.1).');
+  }
 }
 
 await store.close?.();
