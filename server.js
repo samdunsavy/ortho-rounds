@@ -202,7 +202,18 @@ const CONTENT_TYPES = {
 
 function serveStatic(req, res){
   const raw = decodeURIComponent((req.url.split('?')[0]) || '/');
-  const urlPath = resolveStaticPath(raw, PUBLIC_DIR);
+  const resolved = resolveStaticPath(raw, PUBLIC_DIR);
+  if(resolved.redirect){
+    // A bare directory URL must redirect, not serve its index in place:
+    // otherwise the browser's base URL stays one level too high and the
+    // document's relative css/ and app.js references resolve to the wrong
+    // files (see static-path.js).
+    const qs = req.url.includes('?') ? '?' + req.url.split('?').slice(1).join('?') : '';
+    res.writeHead(301, { Location: encodeURI(resolved.redirect) + qs });
+    res.end();
+    return;
+  }
+  const urlPath = resolved.file;
   const filePath = path.normalize(path.join(PUBLIC_DIR, urlPath));
   if(!filePath.startsWith(PUBLIC_DIR)){
     res.writeHead(403); res.end('Forbidden'); return;
