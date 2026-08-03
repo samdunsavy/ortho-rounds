@@ -356,9 +356,16 @@ async function render(){
   try{
     ({ data } = await loadWard());
   }catch(err){
+    /* Log it. Swallowing this is how a real failure spent a whole round
+       of debugging looking like an empty ward: the user saw a generic
+       "couldn't reach the server" and the console said nothing. */
+    try{ (WIN.console || console).error('[v2] ward load failed:', err); }catch{}
+    const msg = /401|not signed in/.test(String(err && err.message))
+      ? 'You are not signed in. Open the main app, log in, then reload this page.'
+      : "Couldn't reach the server.";
     $('#roundList').innerHTML =
       `<div class="empty" style="text-align:center;padding:var(--s-7) var(--s-4)">
-   <p>Couldn't reach the server.</p>
+   <p>${esc(msg)}</p>
    <button class="btn gh" data-retry="1">Retry</button></div>`;
     /* Clear the detail pane too. Leaving it up left a plan input and a
        row of checkboxes wired to state that just failed to refresh —
