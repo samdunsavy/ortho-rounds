@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { loadV2Module } from './helpers/v2-env.js';
 
 const { toViewModel, fetchWard, fetchDischarged, extractDefaultUnit } = await loadV2Module('data.js');
@@ -298,4 +299,49 @@ test('checklist view models carry the raw item id', () => {
     dischargeChecks:[{ id:'dc_a', label:'Summary', status:'done' }] }, deps);
   assert.equal(v.checks[0][3], 'chk_a');
   assert.equal(v.dc[0][2], 'dc_a');
+});
+
+/* ── Authentication ──────────────────────────────────────────────────────
+   This app authenticates with a Bearer token from localStorage, NOT a
+   session cookie. v2 originally sent only `credentials: 'same-origin'`,
+   so every request was unauthenticated, /api/sync returned 401, and the
+   ward was permanently empty while the main app at / showed patients
+   normally. No test caught it because every test stubbed fetch. */
+
+test('fetchWard sends the main app\'s Bearer token', async () => {
+  const { fetchWard: fw } = await loadV2Module('data.js');
+  let sentAuth = null;
+  const fake = async (url, opts) => { sentAuth = opts.headers.Authorization;
+    return { ok: true, status: 200, json: async () => ({ serverTime: 1, patients: [] }) }; };
+  const prev = globalThis.localStorage;
+  globalThis.localStorage = { getItem: k => k === 'ortho_token' ? 'TKN' : null };
+  try { await fw(fake); } finally { globalThis.localStorage = prev; }
+  assert.equal(sentAuth, 'Bearer TKN');
+});
+
+test('the token key matches the one public/app.js writes', async () => {
+  const { LS_TOKEN } = await loadV2Module('data.js');
+  const appJs = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  assert.match(appJs, new RegExp(`LS_TOKEN\\s*=\\s*["']${LS_TOKEN}["']`),
+    'v2 must read the same localStorage key the main client writes');
+});
+
+test('a 401 raises a signed-out error rather than an empty ward', async () => {
+  const { fetchWard: fw } = await loadV2Module('data.js');
+  const fake = async () => ({ ok: false, status: 401, json: async () => ({}) });
+  await assert.rejects(() => fw(fake), /401.*not signed in/);
+});
+
+test('soft-deleted records never reach the ward or the archive', async () => {
+  const { fetchWard: fw, fetchDischarged: fd } = await loadV2Module('data.js');
+  const rows = [
+    { ...base, id: 'live' },
+    { ...base, id: 'gone', deleted: true },
+    { ...base, id: 'goneDc', deleted: true, status: 'discharged' },
+    { ...base, id: 'dc', status: 'discharged' }
+  ];
+  const fake = async () => ({ ok: true, status: 200,
+    json: async () => ({ serverTime: 1, patients: rows }) });
+  assert.deepEqual((await fw(fake, deps)).patients.map(p => p.id), ['live']);
+  assert.deepEqual((await fd(fake, deps)).patients.map(p => p.id), ['dc']);
 });

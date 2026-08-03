@@ -182,13 +182,34 @@ export function toViewModel(raw, deps = globalThis){
   };
 }
 
-async function post(url, body, fetchImpl){
+/* This app does NOT authenticate with a session cookie. POST /api/login
+   returns a token in its JSON body; the main client stores it in
+   localStorage under "ortho_token" (public/app.js:45,2051) and sends it as
+   `Authorization: Bearer <token>` on every request (public/app.js:361),
+   which is what server.js:176-178 reads. v2 originally sent
+   `credentials: 'same-origin'` and no Authorization header, so every
+   request was unauthenticated, /api/sync returned 401, and the ward was
+   always empty. Read the same key the main client writes, so logging in at
+   / carries straight over to /v2. */
+export const LS_TOKEN = 'ortho_token';
+
+export function authToken(store){
+  const s = store || (typeof localStorage !== 'undefined' ? localStorage : null);
+  try { return s ? s.getItem(LS_TOKEN) : null; }
+  catch { return null; }
+}
+
+async function post(url, body, fetchImpl, store){
+  const headers = { 'Content-Type': 'application/json' };
+  const token = authToken(store);
+  if(token) headers.Authorization = 'Bearer ' + token;
   const res = await fetchImpl(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     credentials: 'same-origin',
     body: JSON.stringify(body)
   });
+  if(res.status === 401) throw new Error(`${url} failed: 401 — not signed in`);
   if(!res.ok) throw new Error(`${url} failed: ${res.status}`);
   return res.json();
 }
@@ -206,6 +227,10 @@ export async function fetchWard(fetchImpl = fetch, deps = globalThis){
          bed "—". public/app.js:1824-1830 special-cases this same id;
          mirrored here. */
       .filter(p => p.id !== '__ward_meta__')
+      /* getChangedSince() returns soft-deleted rows too — rowToPatient
+         stamps obj.deleted = !!row.deleted (server.js:125-132) — so they
+         must be dropped or deleted patients reappear on the ward. */
+      .filter(p => !p.deleted)
       .filter(p => p.status !== 'discharged')
       .map(p => toViewModel(p, deps))
       .sort((a, b) => (parseInt(a.bed, 10) || 1e9) - (parseInt(b.bed, 10) || 1e9))
@@ -233,6 +258,7 @@ export async function fetchDischarged(fetchImpl = fetch, deps = globalThis){
     patients: list
       // Exclude the ward-meta record — see fetchWard's identical filter above.
       .filter(p => p.id !== '__ward_meta__')
+      .filter(p => !p.deleted)
       .filter(p => p.status === 'discharged')
       .sort((a, b) => String(b.dischargeDate || '').localeCompare(String(a.dischargeDate || '')))
       .map(p => toViewModel(p, deps))
