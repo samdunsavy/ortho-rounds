@@ -230,8 +230,19 @@ test('a stored X-ray renders as a real <img> and that URL actually serves the im
     images: [{ id: 'img1', type: 'postop', url }] })]);
 
   const window = await loadPage({ token: srv.token });
-  const img = window.document.querySelector('#roundDet img, #roundList img');
-  assert.ok(img, 'a patient with a stored film must render an <img>');
+  const api = window.__V2__;
+
+  // Rows deliberately carry a mark, not a film: a 27x33 radiograph is
+  // unreadable and production films average 166 KB each. Select the
+  // patient so the film loads where it can actually be seen.
+  assert.equal(window.document.querySelectorAll('#roundList img').length, 0,
+    'the round list must not download radiographs');
+  api.state.idx = api.state.patients.findIndex(q => q.id === 'http-withfilm');
+  assert.ok(api.state.idx >= 0, 'the seeded patient must be on the ward');
+  api.go('round');
+
+  const img = window.document.querySelector('#roundDet img');
+  assert.ok(img, 'the selected patient\'s stored film must render as an <img>');
   assert.ok(img.getAttribute('src').startsWith(url), 'the src must be the stored image url');
   assert.match(img.getAttribute('src'), /token=/, '<img> cannot send a header, so the token rides the query');
   assert.equal(img.getAttribute('loading'), 'lazy');

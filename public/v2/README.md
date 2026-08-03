@@ -43,11 +43,21 @@ appends `?token=` — the same mechanism `public/app.js:3340-3350` uses.
 `render.js` is pure and cannot read `localStorage`, so the finished `src`
 is built in `data.js` and carried on the view model as `films: [{type, src}]`.
 
-Row and hero images are `loading="lazy"` and `decoding="async"`; the
-server sends `Cache-Control: private, max-age=86400`, so the download is
-once per device per day. Run `node scripts/imaging-coverage.js` to see the
-real ward payload — it prints total KB and says whether thumbnails are an
-optimisation or a blocker.
+**Rows never load a film.** Measured on production: 21 images, 3.5 MB,
+averaging 166 KB each — and the row slot is 27x33px, where a radiograph is
+a grey smudge carrying no clinical information. So the row shows a
+bone-tinted *mark* (`.qm-has` / `.qm-none`) saying only whether films
+exist, and the image loads where it can actually be read: the hero, the
+detail gallery, the film viewer and presentation mode. That turns a 3.5 MB
+blocking wall into roughly 350 KB per patient as the clinician walks,
+lazy-loaded and cached for a day. A test asserts a 14-bed ward issues zero
+image requests.
+
+Images elsewhere are `loading="lazy"` and `decoding="async"`; the server
+sends `Cache-Control: private, max-age=86400`. Run
+`node scripts/imaging-coverage.js` for the real numbers — it reports
+whole-ward payload and per-patient cost separately, because only the
+second one is what a round actually pays.
 
 **Never reimplement clinical-day arithmetic.** `public/milestones.js` owns
 POD, milestone due/overdue windows and `milestoneDayPrefix`. v2 reaches it

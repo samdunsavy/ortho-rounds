@@ -505,3 +505,42 @@ test('all three imaging states remain mutually distinguishable', () => {
   assert.ok(onRec.includes('fslot-has') && !onRec.includes('fbox'));
   assert.ok(none.includes('fslot-none') && !none.includes('fbox'));
 });
+
+/* ── payload discipline ───────────────────────────────────────────────── */
+
+test('rows never load a real image — 27x33 cannot show a radiograph', () => {
+  // Measured: production films average 166 KB and the ward holds 21 of
+  // them (3.5 MB). Loading all of those to paint unreadable 27px chips is
+  // pure waste on ward wifi. The row shows a MARK; the film loads where
+  // it can actually be read.
+  const withFilm = R.row({ ...p, films:[film('preop', '/api/images/a.jpg?token=T')] }, 0, false, false);
+  assert.ok(!/<img\s/.test(withFilm), 'a row must not request an image');
+  assert.ok(withFilm.includes('qm-has'));
+  assert.match(withFilm, /aria-label="1 film on file"/);
+
+  const many = R.row({ ...p, films:[film('preop','/a'), film('postop','/b')] }, 0, false, false);
+  assert.match(many, /aria-label="2 films on file"/);
+
+  const none = R.row({ ...p, films:[] }, 0, false, false);
+  assert.ok(!/<img\s/.test(none));
+  assert.ok(none.includes('qm-none'));
+  assert.match(none, /aria-label="No imaging"/);
+});
+
+test('the film loads only where it is large enough to read', () => {
+  const f = [film('preop', '/api/images/a.jpg?token=T')];
+  // Hero (106x136) and detail gallery (98x128) show the real film.
+  assert.match(R.hero({ ...p, films:f }, 0), /<img\s/);
+  assert.match(R.detail({ ...p, films:f }, 0), /<img\s/);
+  assert.match(R.presentSlide({ ...p, films:f }), /<img\s/);
+  // The round list does not.
+  assert.ok(!/<img\s/.test(R.row({ ...p, films:f }, 0, false, false)));
+});
+
+test('a full ward of rows issues zero image requests', () => {
+  const ward = Array.from({ length: 14 }, (_, i) =>
+    ({ ...p, id:'w'+i, films:[film('preop', `/api/images/${i}.jpg?token=T`)] }));
+  const html = ward.map((q, i) => R.row(q, i, false, false)).join('');
+  assert.equal((html.match(/<img\s/g) || []).length, 0,
+    'a 14-bed ward must not download 14 radiographs to draw its list');
+});

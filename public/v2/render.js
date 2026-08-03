@@ -135,8 +135,19 @@ export function hero(p, i){
 
 export function row(p, i, cur, seen){
   const bad = badOf(p);
+  /* Deliberately the indicator, never the image. The row slot is 27x33px;
+     a radiograph at that size is a grey smudge carrying no clinical
+     information, and production films average 166 KB each. Loading 21 of
+     them to draw 21 thumbnails nobody can read is 3.5 MB of pure waste on
+     ward wifi — measured, not assumed (scripts/imaging-coverage.js).
+     Real films load where they are big enough to read: the hero, the
+     detail gallery, the viewer and presentation mode. Revisit only if
+     server-side thumbnails exist (spec §8.1). */
+  const filmMark = p.films.length
+    ? `<span class="qm qm-has" role="img" aria-label="${p.films.length} film${p.films.length > 1 ? 's' : ''} on file">${ic('img')}</span>`
+    : `<span class="qm qm-none" role="img" aria-label="No imaging"></span>`;
   return `<button class="qr ${seen ? 'seen' : ''}" data-open="${i}" ${cur ? 'aria-current="true"' : ''}>
- <span class="qb">${esc(p.bed)}</span><span class="qm">${filmBox(i, p.films[0], '')}</span>
+ <span class="qb">${esc(p.bed)}</span>${filmMark}
  <span class="qi"><span class="qn">${esc(p.name)}</span><span class="qs">${esc(p.dx)}</span></span>
  ${bad ? `<span class="qt" style="background:var(--bad-bg);color:var(--bad)">review</span>`
     : `<span class="qt" style="background:var(--paper);color:var(--ink-3)">${p.pod != null ? esc(dayLabel(p)) : esc(p.stat)}</span>`}</button>`;

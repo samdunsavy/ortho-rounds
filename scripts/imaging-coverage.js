@@ -100,9 +100,20 @@ if(live.length === 0){
      per-day cost, not per render. 3 MB is the line: below it, a first
      load on poor ward wifi is seconds; above it, thumbnails first. */
   if(imageCount > 0){
+    /* v2 never loads a film at row scale — a 27x33 radiograph is a smudge,
+       so the round list shows a mark and the image loads only on the hero,
+       the detail gallery, the viewer and presentation mode. The number
+       that matters on ward wifi is therefore the per-patient cost as the
+       clinician walks, not the whole ward at once. */
+    const perPatient = withFilm.length ? Math.round(totalBytes / withFilm.length / 1024) : 0;
+    console.log('');
+    console.log(`per patient seen   ~${perPatient} KB (rows load no imagery)`);
     console.log(totalBytes <= 3 * 1024 * 1024
-      ? 'Payload OK — thumbnails are an optimisation, not a blocker.'
-      : 'Payload HEAVY — build server-side thumbnails before ward use (spec §8.1).');
+      ? 'Whole-ward payload is modest; thumbnails remain an optimisation.'
+      : 'Whole-ward payload is heavy — which is why rows carry a mark, not a film.');
+    console.log(perPatient <= 400
+      ? 'Per-patient cost OK for ward use.'
+      : 'Per-patient cost HIGH — build server-side thumbnails (spec §8.1).');
   }
 }
 
