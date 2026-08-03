@@ -35,9 +35,30 @@ test('age without sex renders without a trailing slash', () => {
   assert.equal(v.age, '62');
 });
 
-test('films list is derived from images', () => {
-  const v = toViewModel({ ...base, images:[{type:'preop'},{type:'postop'}] }, deps);
-  assert.deepEqual(v.films, ['preop','postop']);
+test('films carry both the image type and a ready-to-use <img> src', () => {
+  const store = { getItem: k => k === 'ortho_token' ? 'TK' : null };
+  const v = toViewModel({ ...base, images:[
+    { type:'preop',  url:'/api/images/a1.jpg' },
+    { type:'postop', url:'/api/images/b2.jpg' }
+  ]}, deps, store);
+  assert.deepEqual(v.films.map(f => f.type), ['preop','postop']);
+  // <img> cannot send an Authorization header, so the token rides the
+  // query string — the same mechanism public/app.js:3340-3350 uses.
+  assert.equal(v.films[0].src, '/api/images/a1.jpg?token=TK');
+  assert.equal(v.films[1].src, '/api/images/b2.jpg?token=TK');
+});
+
+test('an image with no url yields a null src, never a broken image', () => {
+  const store = { getItem: () => 'TK' };
+  const v = toViewModel({ ...base, images:[{ type:'preop' }] }, deps, store);
+  assert.equal(v.films[0].type, 'preop');
+  assert.equal(v.films[0].src, null);
+});
+
+test('with no token an image src is null rather than an unauthorised request', () => {
+  const v = toViewModel({ ...base, images:[{ type:'preop', url:'/api/images/a1.jpg' }] },
+    deps, { getItem: () => null });
+  assert.equal(v.films[0].src, null);
 });
 
 test('no images yields an empty films array, not undefined', () => {

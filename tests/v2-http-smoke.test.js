@@ -199,3 +199,59 @@ test('every ward patient lands in exactly one board column', async () => {
   assert.equal(tiles.length, api.state.patients.length,
     'board tiles must account for every patient — no one may fall between columns');
 });
+
+/* ── real radiographs, end to end ─────────────────────────────────────── */
+
+test('a stored X-ray renders as a real <img> and that URL actually serves the image', async () => {
+  // Upload a real (tiny) JPEG through the real image endpoint, attach it to
+  // a patient, then confirm the page renders an <img> whose src the server
+  // genuinely serves. This is the whole point: v2 previously discarded the
+  // image url and drew stand-in anatomy instead.
+  // The endpoint takes a data URL in a JSON body (server.js:1184-1189),
+  // matching how the main client uploads after canvas compression.
+  const dataURL = 'data:image/jpeg;base64,'
+    + '/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////'
+    + '////////////////////////////////////////////////2wBDAf//////////////'
+    + '//////////////////////////////////////////////////////////////////wA'
+    + 'ARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAn/xAAUEAEAAAAAAAAA'
+    + 'AAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAAX/xAAUEQEAAAAAAAAAAAAAAAAAAA'
+    + 'AA/9oADAMBAAIRAxEAPwCdABmX/9k=';
+
+  const up = await srv.request('/api/images', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + srv.token },
+    body: JSON.stringify({ dataURL })
+  });
+  assert.equal(up.status, 200, 'image upload endpoint must accept the file');
+  const { url } = await up.json();
+  assert.match(url, /^\/api\/images\//);
+
+  await srv.seed([patient(60, { id: 'http-withfilm', name: 'Has Film',
+    images: [{ id: 'img1', type: 'postop', url }] })]);
+
+  const window = await loadPage({ token: srv.token });
+  const img = window.document.querySelector('#roundDet img, #roundList img');
+  assert.ok(img, 'a patient with a stored film must render an <img>');
+  assert.ok(img.getAttribute('src').startsWith(url), 'the src must be the stored image url');
+  assert.match(img.getAttribute('src'), /token=/, '<img> cannot send a header, so the token rides the query');
+  assert.equal(img.getAttribute('loading'), 'lazy');
+  assert.ok(img.getAttribute('alt'), 'the image needs a real alt');
+
+  // And the browser would actually get bytes back from that URL.
+  const fetched = await srv.request(img.getAttribute('src'));
+  assert.equal(fetched.status, 200, 'the rendered src must really serve the image');
+  assert.match(fetched.headers.get('content-type') || '', /image\//);
+  assert.match(fetched.headers.get('cache-control') || '', /max-age/,
+    'images must be cacheable or every round re-downloads the ward');
+});
+
+test('an image URL without a token is refused — the query token is doing real work', async () => {
+  const up = await srv.request('/api/images', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + srv.token },
+    body: JSON.stringify({ dataURL: 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//2Q==' })
+  });
+  const { url } = await up.json();
+  const anon = await srv.request(url);
+  assert.equal(anon.status, 401, 'stored films must not be readable without auth');
+});

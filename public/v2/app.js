@@ -48,13 +48,13 @@
    additionally bound to its receiver because real browsers throw
    "Illegal invocation" if fetch is called detached from `window`. */
 import { esc, hero, row, detail, board, workList, complete, otList, handover, discharged,
-  paletteGroup, paletteNoMatch, paletteRow, viewerTitle, filmArt, presentSlide } from './render.js?v=6';
-import { fetchWard, fetchDischarged, pushPatient, toViewModel, extractDefaultUnit, authToken } from './data.js?v=6';
+  paletteGroup, paletteNoMatch, paletteRow, viewerTitle, filmArt, presentSlide } from './render.js?v=7';
+import { fetchWard, fetchDischarged, pushPatient, toViewModel, extractDefaultUnit, authToken } from './data.js?v=7';
 
 /* Bump alongside the ?v= stamps in index.html. Printed at boot and shown
    in the failure state, so "which build is actually live?" is answerable
    in one second instead of by inference. */
-const BUILD = 'v6';
+const BUILD = 'v7';
 
 const DOC = document;
 const WIN = window;
@@ -258,9 +258,17 @@ function openViewer(pi, k){
   $('#viewer').classList.add('on');
 }
 function rViewer(){
-  const k = S.vwP[S.vwI];
-  $('#vwF').innerHTML = filmArt(k) || '';
-  $('#vwT').innerHTML = viewerTitle(k, S.vwI, S.vwP.length);
+  const f = S.vwP[S.vwI];
+  const kind = typeof f === 'string' ? f : f && f.type;
+  const src = typeof f === 'string' ? null : f && f.src;
+  /* Full-size here on purpose: the viewer is where a clinician actually
+     looks at the film, so it gets the real image at its stored
+     resolution. No lazy attribute — this one is wanted immediately. */
+  $('#vwF').innerHTML = src
+    ? `<img src="${esc(src)}" alt="${esc(viewerTitle(kind, S.vwI, S.vwP.length))}" decoding="async">`
+    : `<div class="fslot fslot-has" role="img" aria-label="Film on file, not shown">
+   <span class="fslot-t">Film on file</span><span class="fslot-s">not shown yet</span></div>`;
+  $('#vwT').innerHTML = viewerTitle(kind, S.vwI, S.vwP.length);
 }
 
 /* ── presentation mode (Task 8) ──
@@ -343,7 +351,7 @@ async function loadWard(){
       }
     };
   };
-  const data = await fetchWard(capturingFetch, WIN);
+  const data = await fetchWard(capturingFetch, WIN, WIN.localStorage);
   const hasRaw = !!(rawSnapshot && Array.isArray(rawSnapshot.patients));
   const raw = hasRaw ? new Map(rawSnapshot.patients.map(p => [p.id, p])) : new Map();
   if(mySeq === loadSeq && hasRaw){
@@ -556,7 +564,7 @@ function rDisch(){
    time it resolves (they may have navigated away). */
 async function loadDischarged(){
   try{
-    const data = await fetchDischarged(FETCH, WIN);
+    const data = await fetchDischarged(FETCH, WIN, WIN.localStorage);
     S.dischargedPatients = data.patients;
   }catch{
     /* leave S.dischargedPatients as whatever it already was */

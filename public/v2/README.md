@@ -25,15 +25,29 @@ a test enforces this.
 text. `render.js` exports `esc`. These are real records.
 
 **Never render anything that could be mistaken for a patient's own
-radiograph.** The imaging slot (`.fslot`) is a bone-tinted card that says
-in words whether a film is on file — it is deliberately not a dark
-lightbox. v2 does not render real imagery yet: `data.js` keeps only the
-image `type` and discards the `url`, pending server-side thumbnails
-(§8.1). Production coverage is 71.4%, so most rows genuinely have an X-ray
-that is not being shown; drawn stand-in anatomy used to fill that slot and
-read as the patient's own film at a glance. Restore film styling only when
-the thing inside it is that patient's actual radiograph. Tests assert no
-drawn film SVGs exist and that the two states are distinguishable.
+radiograph.** Three imaging states, deliberately distinct:
+
+| State | Markup | When |
+|---|---|---|
+| Real film | `.fbox` + `<img>` | the record has a usable image url |
+| On record, no source | `.fslot-has` | an image entry with no url, or no token |
+| No imaging | `.fslot-none` | the patient has no images |
+
+The dark film treatment belongs to `.fbox` **only** — because what is
+inside it is that patient's actual radiograph. Drawn stand-in anatomy used
+to fill the slot and read as the real film at a glance; it is gone, and a
+test asserts it cannot return.
+
+`<img>` cannot send an `Authorization` header, so `data.js`'s `filmSrc()`
+appends `?token=` — the same mechanism `public/app.js:3340-3350` uses.
+`render.js` is pure and cannot read `localStorage`, so the finished `src`
+is built in `data.js` and carried on the view model as `films: [{type, src}]`.
+
+Row and hero images are `loading="lazy"` and `decoding="async"`; the
+server sends `Cache-Control: private, max-age=86400`, so the download is
+once per device per day. Run `node scripts/imaging-coverage.js` to see the
+real ward payload — it prints total KB and says whether thumbnails are an
+optimisation or a blocker.
 
 **Never reimplement clinical-day arithmetic.** `public/milestones.js` owns
 POD, milestone due/overdue windows and `milestoneDayPrefix`. v2 reaches it

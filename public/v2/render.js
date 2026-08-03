@@ -64,7 +64,13 @@ const icS = n => `<svg class="ico-s" aria-hidden="true"><use href="#i-${n}"/></s
    the patient's own film at a glance, which on a round is worse than
    showing nothing: a clinician could take a generic hip drawing for this
    patient's hip. Bone-tinted card, explicit words, no fake anatomy. */
-export function filmBox(pi, kind, cap, cls=''){
+export function filmBox(pi, film, cap, cls=''){
+  /* `film` is a view-model entry `{ type, src }`, or undefined. A bare
+     string is accepted so older callers/tests keep working; it means
+     "this type is on record" with no source. */
+  const kind = typeof film === 'string' ? film : film && film.type;
+  const src  = typeof film === 'string' ? null : film && film.src;
+
   if (!kind) {
     /* "No imaging available", not "no imaging on file" — the latter reads
        ambiguously aloud, and a test asserts this state never contains the
@@ -72,8 +78,24 @@ export function filmBox(pi, kind, cap, cls=''){
     return `<div class="fslot fslot-none ${esc(cls)}" role="img" aria-label="No imaging available">
    ${ic('img')}<span class="fslot-t">No imaging</span></div>`;
   }
+
   const resolvedKind = resolveFilmKind(kind);
   const label = FILM_LABELS[resolvedKind] || 'Film';
+
+  if (src) {
+    /* The real radiograph. Dark backing is CORRECT here and only here —
+       what is inside it is this patient's own film, so it should look
+       like one. `loading="lazy"` and `decoding="async"` keep an off-screen
+       row from blocking the round; the browser caches these for a day
+       (server.js sends Cache-Control: private, max-age=86400), so the
+       download cost is once per device per day, not once per render. */
+    return `<button class="fbox ${esc(cls)}" data-film="${esc(String(pi))}:${esc(resolvedKind)}"
+   aria-label="View ${esc(label)}"><img src="${esc(src)}" alt="${esc(label)}"
+   loading="lazy" decoding="async">${cap ? `<em>${esc(cap)}</em>` : ''}</button>`;
+  }
+
+  /* On record, but no usable source — say so rather than showing a broken
+     image or, worse, stand-in anatomy that reads as this patient's film. */
   return `<div class="fslot fslot-has ${esc(cls)}" role="img"
    aria-label="${esc(label)} on file — not shown in this preview build">
    ${ic('img')}<span class="fslot-t">${esc(label)}</span><span class="fslot-s">on file · not shown yet</span>
@@ -362,8 +384,12 @@ export function discharged(rows, search = ''){
  *  filmBox(), with the same 'preop' fallback for an unknown/future kind.
  *  Returns null for a falsy `kind`; the caller renders its own "no film"
  *  placeholder in that case (see presentSlide() below). */
+/** Resolves an image type to its whitelisted key, or null. Kept as an
+ *  export because the film viewer and its tests resolve types through a
+ *  single guarded path — it returns a KEY, never artwork. */
 export function filmArt(kind){
-  return kind ? resolveFilmKind(kind) : null;
+  const k = typeof kind === 'string' ? kind : kind && kind.type;
+  return k ? resolveFilmKind(k) : null;
 }
 
 
@@ -406,14 +432,15 @@ export function paletteRow(icon, label, hint, index){
  *  explicitly (design spec §5): a `.pr-f.none` placeholder with the
  *  generic image icon, never an empty black box with no indication. */
 export function presentSlide(p){
-  const art = filmArt(p.films[0]);
-  /* "POD 4" / "DAY 4" — the prefix comes from the view model (see
-     dayLabel above), so a conservative patient is never announced to a
-     projected room as post-operative. */
+  const film = p.films[0];
+  const src = film && film.src;
   const podLabel = p.pod != null
     ? esc(dayLabel(p)).toUpperCase()
     : esc(String(p.stat || '').toUpperCase());
-  return `<div class="pr-f none">${ic('img')}<span class="pr-fs">${art ? 'Film on file — not shown yet' : 'No imaging'}</span></div>
+  const filmPane = src
+    ? `<div class="pr-f"><img src="${esc(src)}" alt="${esc(FILM_LABELS[resolveFilmKind(film.type)] || 'Film')}" decoding="async"></div>`
+    : `<div class="pr-f none">${ic('img')}<span class="pr-fs">${film ? 'Film on file — not shown yet' : 'No imaging'}</span></div>`;
+  return `${filmPane}
  <div class="pr-i"><div class="pr-bd">BED ${esc(p.bed)}</div><h2 class="pr-n">${esc(p.name)}</h2>
  <p class="pr-d">${esc(p.dx)}</p><p class="pr-p">${esc(p.age)} · ${esc(p.proc)}</p>
  <div class="pr-pod">${podLabel}</div>

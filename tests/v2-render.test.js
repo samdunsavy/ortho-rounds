@@ -452,3 +452,56 @@ test('every imaging slot in the module uses the honest .fslot markup', async () 
   assert.ok(without.includes('fslot-none'), 'the no-imaging detail slot must be a real fslot');
   assert.ok(!without.includes('fnone'));
 });
+
+/* ── real radiographs ─────────────────────────────────────────────────── */
+
+const film = (type, src) => ({ type, src });
+
+test('a film with a src renders the patient\'s real image, lazily', () => {
+  const html = R.filmBox(2, film('postop', '/api/images/x.jpg?token=TK'), 'post-op');
+  assert.match(html, /<img\s/, 'a real film must render an <img>');
+  assert.ok(html.includes('src="/api/images/x.jpg?token=TK"'));
+  assert.ok(html.includes('loading="lazy"'), 'off-screen rows must not block the round');
+  assert.ok(html.includes('decoding="async"'));
+  assert.ok(html.includes('alt="Post-op film"'), 'the image needs a real alt, not empty');
+  assert.ok(html.includes('class="fbox'), 'a real film gets the dark film treatment');
+  assert.ok(!html.includes('not shown'), 'it IS shown — do not claim otherwise');
+});
+
+test('a film on record with no src still says so rather than breaking', () => {
+  const html = R.filmBox(2, film('preop', null), '');
+  assert.ok(!/<img\s/.test(html), 'no <img> without a source');
+  assert.ok(html.includes('fslot-has'));
+  assert.match(html, /on file/i);
+  assert.match(html, /not shown/i);
+});
+
+test('the image src is escaped in attribute position', () => {
+  const html = R.filmBox(0, film('preop', '/api/images/x.jpg?token=a"onerror="alert(1)'), '');
+  assert.ok(!/onerror="alert/.test(html), 'a hostile src must not break out of the attribute');
+  assert.ok(html.includes('&quot;'));
+});
+
+test('presentation mode shows the real film when there is one', () => {
+  const withFilm = R.presentSlide({ ...p, films:[film('preop', '/api/images/y.jpg?token=TK')] });
+  assert.match(withFilm, /<img\s/);
+  assert.ok(withFilm.includes('/api/images/y.jpg?token=TK'));
+  assert.ok(!withFilm.includes('pr-f none'));
+
+  const onRecord = R.presentSlide({ ...p, films:[film('preop', null)] });
+  assert.ok(onRecord.includes('pr-f none'));
+  assert.match(onRecord, /on file/i);
+
+  const none = R.presentSlide({ ...p, films:[] });
+  assert.ok(none.includes('pr-f none'));
+  assert.match(none, /no imaging/i);
+});
+
+test('all three imaging states remain mutually distinguishable', () => {
+  const real = R.filmBox(0, film('preop', '/api/images/z.jpg'), '');
+  const onRec = R.filmBox(0, film('preop', null), '');
+  const none = R.filmBox(0, undefined, '');
+  assert.ok(real.includes('fbox') && !real.includes('fslot'));
+  assert.ok(onRec.includes('fslot-has') && !onRec.includes('fbox'));
+  assert.ok(none.includes('fslot-none') && !none.includes('fbox'));
+});

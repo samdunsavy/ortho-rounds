@@ -94,7 +94,27 @@ function buildFlags(raw, pod, deps){
   return flags;
 }
 
-export function toViewModel(raw, deps = globalThis){
+/* A ready-to-use <img> source for one stored image, or null.
+
+   Server-hosted X-rays are auth-protected and an <img> tag cannot send an
+   Authorization header, so the server accepts the token as a query
+   parameter instead (server.js:176-188 — the same mechanism the main app
+   uses at public/app.js:3340-3350). render.js is pure and cannot read
+   localStorage, so the finished src is built here and carried on the view
+   model.
+
+   Returns null for a record with no url — that renders the "film on file,
+   not shown" slot rather than a broken image icon. */
+export function filmSrc(image, store){
+  const url = image && image.url;
+  if(!url) return null;
+  if(!url.startsWith('/api/images/')) return url;
+  const token = authToken(store);
+  if(!token) return null;
+  return url + (url.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(token);
+}
+
+export function toViewModel(raw, deps = globalThis, store){
   const pod = deps.getPatientPod ? deps.getPatientPod(raw) : null;
   /* "POD" for an operated patient, "Day" for a conservative one — the
      decision belongs to public/milestones.js:287's milestoneDayPrefix()
@@ -148,7 +168,13 @@ export function toViewModel(raw, deps = globalThis){
     dischargeDate: raw.dischargeDate || '',
     implant: raw.implant || '—',
     labs: labs || 'None recorded',
-    films: (Array.isArray(raw.images) ? raw.images : []).map(i => i.type || 'preop'),
+    /* `{ type, src }` per image. `src` is a ready-to-use <img> source with
+       the auth token already appended, because render.js is pure and
+       cannot read localStorage — see filmSrc(). It is null when the record
+       has no usable url, which renders the "on file, not shown" slot
+       rather than a broken image. */
+    films: (Array.isArray(raw.images) ? raw.images : [])
+      .map(i => ({ type: i.type || 'preop', src: filmSrc(i, store) })),
     pod,
     dayPrefix,
     /* Pre-composed "POD 4" / "Day 4" for every surface that shows the
@@ -221,8 +247,8 @@ async function post(url, body, fetchImpl, store){
   return res.json();
 }
 
-export async function fetchWard(fetchImpl = fetch, deps = globalThis){
-  const out = await post('/api/sync', { since: 0, changes: [] }, fetchImpl);
+export async function fetchWard(fetchImpl = fetch, deps = globalThis, store){
+  const out = await post('/api/sync', { since: 0, changes: [] }, fetchImpl, store);
   const list = Array.isArray(out.patients) ? out.patients : [];
   return {
     serverTime: out.serverTime,
@@ -239,7 +265,7 @@ export async function fetchWard(fetchImpl = fetch, deps = globalThis){
          must be dropped or deleted patients reappear on the ward. */
       .filter(p => !p.deleted)
       .filter(p => p.status !== 'discharged')
-      .map(p => toViewModel(p, deps))
+      .map(p => toViewModel(p, deps, store))
       .sort((a, b) => (parseInt(a.bed, 10) || 1e9) - (parseInt(b.bed, 10) || 1e9))
   };
 }
@@ -257,8 +283,8 @@ export async function fetchWard(fetchImpl = fetch, deps = globalThis){
    function's ordering to toViewModel's shape, and there is no reason to
    change working, already-tested code just because a sibling field
    became available. */
-export async function fetchDischarged(fetchImpl = fetch, deps = globalThis){
-  const out = await post('/api/sync', { since: 0, changes: [] }, fetchImpl);
+export async function fetchDischarged(fetchImpl = fetch, deps = globalThis, store){
+  const out = await post('/api/sync', { since: 0, changes: [] }, fetchImpl, store);
   const list = Array.isArray(out.patients) ? out.patients : [];
   return {
     serverTime: out.serverTime,
@@ -268,7 +294,7 @@ export async function fetchDischarged(fetchImpl = fetch, deps = globalThis){
       .filter(p => !p.deleted)
       .filter(p => p.status === 'discharged')
       .sort((a, b) => String(b.dischargeDate || '').localeCompare(String(a.dischargeDate || '')))
-      .map(p => toViewModel(p, deps))
+      .map(p => toViewModel(p, deps, store))
   };
 }
 

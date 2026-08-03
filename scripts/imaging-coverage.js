@@ -55,6 +55,25 @@ for(const p of live){
   if(p.images?.length) byStatus[k].filmed++;
 }
 
+/* Byte weight of what a round would actually download. v2 renders the
+   stored image directly (lazy-loaded, cached a day by the browser), so
+   this is the real first-load cost per device per day — the number that
+   decides whether server-side thumbnails are an optimisation or a
+   prerequisite. */
+let totalBytes = 0, imageCount = 0, largest = 0;
+for(const p of live){
+  for(const img of (p.images || [])){
+    const name = String(img.url || '').split('/').pop();
+    if(!name) continue;
+    try{
+      const rec = await store.getImage(name);
+      if(rec && rec.buffer){ totalBytes += rec.buffer.length; imageCount++;
+        if(rec.buffer.length > largest) largest = rec.buffer.length; }
+    }catch{ /* missing blob — counted in coverage, not in weight */ }
+  }
+}
+const kb = n => Math.round(n / 1024);
+
 const pct = (a, b) => b ? Math.round((a / b) * 1000) / 10 : 0;
 console.log(`live patients      ${live.length}`);
 console.log(`with >=1 film      ${withFilm.length}  (${pct(withFilm.length, live.length)}%)`);

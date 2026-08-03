@@ -1,13 +1,26 @@
-/* Imaging slot, and the hero patient card.
+/* Imaging, and the hero patient card. Three states, deliberately distinct:
 
-   NOT a radiograph. Production coverage is 71.4%, so most rows have a
-   real X-ray on file that v2 does not render yet (data.js keeps only the
-   image type, pending server-side thumbnails — spec §8.1). The slot has
-   to read as "there is a film, we are not showing it", never as the
-   film itself. Bone-tinted card, words, no dark lightbox: a clinician
-   glancing down a round must not be able to mistake this for the
-   patient's own imaging. Restore film styling only when a real <img> of
-   the patient's radiograph is what is inside it. */
+     .fbox        the patient's REAL radiograph in an <img>. Dark film
+                  backing is correct here and ONLY here.
+     .fslot-has   a film is on record but has no usable source. Says so.
+     .fslot-none  no imaging at all.
+
+   The rule that produced this split: nothing may be rendered in the
+   imaging slot that a clinician glancing down a round could mistake for
+   this patient's own film unless it IS this patient's own film. Drawn
+   stand-in anatomy used to fill it and read exactly that way. */
+.fbox{background:var(--film);border-radius:10px;position:relative;overflow:hidden;display:block;
+  box-shadow:inset 0 0 0 1px var(--film-in);transition:transform var(--d2) var(--sp);cursor:zoom-in;}
+.fbox:hover{transform:scale(1.025);}
+.fbox:active{transform:scale(.98);}
+.fbox img{width:100%;height:100%;object-fit:cover;display:block;}
+.fbox em{position:absolute;left:0;right:0;bottom:0;padding:3px 5px;font-size:10px;font-style:normal;
+  color:var(--film-fg);background:rgba(0,0,0,.55);text-align:center;letter-spacing:.04em;}
+[data-theme="dark"] .fbox{box-shadow:inset 0 0 0 1px var(--film-in),0 0 26px rgba(140,190,220,.12);}
+.hero-f .fbox{height:136px;}
+.qm .fbox{width:100%;height:100%;border-radius:5px;}
+.qm .fbox em{display:none;}
+
 .fslot{background:var(--bone);border:1px dashed var(--bone-line);border-radius:10px;
   color:var(--bone-ink);display:flex;flex-direction:column;align-items:center;
   justify-content:center;gap:3px;text-align:center;padding:6px;overflow:hidden;}
