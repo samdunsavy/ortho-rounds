@@ -1298,6 +1298,17 @@
     display:none;position:fixed;inset:0;background:rgba(8,9,12,0.92);z-index:500;
     align-items:center;justify-content:center;flex-direction:column;
     padding-top:env(safe-area-inset-top);box-sizing:border-box;
+    /* touch-action:none must live on the whole overlay, not just the <img>.
+       The pinch/pan gesture handlers (bindImgViewerGestures) are bound to
+       this overlay container, but the image only fills 92vw x 76vh, leaving
+       a letterboxed backdrop around it. touch-action is resolved per touch
+       point: a pinch with a finger on that backdrop (default touch-action)
+       let the browser run its native page-zoom at the same time as our JS
+       zoom — zooming the whole site *and* the X-ray, which is what made
+       zoom feel broken and intermittent (it depended on where fingers
+       landed). Handing the native gesture off across the entire surface is
+       what stops that fight. */
+    touch-action:none;
   }
   .img-viewer-overlay.active{display:flex;}
   .img-viewer-overlay img{
@@ -1308,7 +1319,9 @@
        never fights with our own gesture handling. That fight (native page
        zoom + our swipe-to-next-image listener both reacting to the same
        touch) was the root cause of zoom "glitching" and accidentally
-       advancing to the next X-ray while trying to zoom in. */
+       advancing to the next X-ray while trying to zoom in. The overlay
+       carries touch-action:none too (see above) so the letterboxed backdrop
+       around the image hands the gesture off as well, not just the image. */
     touch-action:none;user-select:none;cursor:zoom-in;
     transform-origin:center center;
   }
