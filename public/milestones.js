@@ -7,6 +7,28 @@ const TEMPLATE_LIBRARY_ID = '__template_library__';
 const CHECKLIST_CATEGORIES = ['nv','mobilization','imaging','antibiotics','drain','wound','other'];
 const CHECKLIST_STATUSES = ['pending','done','skipped','na'];
 
+// todayISO/calcPOD were previously resolved from app.js's global scope: in
+// the main app, index.html loads this file before app.js, so both land in
+// the same classic-script global scope and app.js's copies satisfied these
+// calls. They are declared here too so milestones.js is usable standalone
+// (e.g. by the v2 preview, which loads it without app.js). Kept byte-
+// identical to app.js's implementations; app.js is not modified.
+function todayISO(){
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth()+1).padStart(2,'0');
+  const day = String(d.getDate()).padStart(2,'0');
+  return `${y}-${m}-${day}`;
+}
+
+function calcPOD(surgeryDateISO){
+  if(!surgeryDateISO) return null;
+  const surg = new Date(surgeryDateISO + 'T00:00:00');
+  const now = new Date(); now.setHours(0,0,0,0);
+  const diff = Math.round((now - surg) / 86400000);
+  return diff;
+}
+
 let wardTemplateLibrary = {
   templates: [],
   disabledIds: [],

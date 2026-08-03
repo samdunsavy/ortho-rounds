@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<title>Ortho Rounds — preview</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/tokens.css">
+<link rel="stylesheet" href="css/base.css">
+<link rel="stylesheet" href="css/shell.css">
+<link rel="stylesheet" href="css/card.css">
+<link rel="stylesheet" href="css/detail.css">
+<link rel="stylesheet" href="css/board.css">
+<link rel="stylesheet" href="css/overlay.css">
+</head>
+<body>
+<div class="preview-banner" id="previewBanner" role="alert">
+  Preview build — you are editing real patient records.
+</div>
+
+<div class="app">
+  <aside class="rail">
+    <div class="rl-brand">
+      <div class="rl-mk" aria-hidden="true">O</div>
+      <div class="rl-tx"><b>Ortho rounds</b><span>Unit II · Ward 3</span></div>
+    </div>
+    <button class="rl" data-go="round" aria-current="page"><svg class="ico"><use href="#i-route"/></svg><span class="rl-lb">Round</span></button>
+    <button class="rl" data-go="ward"><svg class="ico"><use href="#i-board"/></svg><span class="rl-lb">Ward</span></button>
+    <button class="rl" data-go="work"><svg class="ico"><use href="#i-check"/></svg><span class="rl-lb">Work</span></button>
+    <div class="rl-div"></div>
+    <button class="rl" data-go="ot"><svg class="ico"><use href="#i-doc"/></svg><span class="rl-lb">OT list</span></button>
+    <button class="rl" data-go="handover"><svg class="ico"><use href="#i-hand"/></svg><span class="rl-lb">Handover</span></button>
+    <button class="rl" data-go="disch"><svg class="ico"><use href="#i-out"/></svg><span class="rl-lb">Discharged</span></button>
+    <div class="rl-sp"></div>
+    <button class="rl" data-go="admin"><svg class="ico"><use href="#i-set"/></svg><span class="rl-lb">Admin</span></button>
+    <button class="rl" data-act="pal"><svg class="ico"><use href="#i-cmd"/></svg><span class="rl-lb">Go to…</span></button>
+  </aside>
+
+  <div class="main">
+    <header class="hd">
+      <div class="hd-ti"><b id="hT">Morning round</b><span id="hS">—</span></div>
+      <span class="sync" id="sync"><i></i>Synced</span>
+      <div class="ringw" id="ringW">
+        <svg class="ring" viewBox="0 0 36 36" aria-hidden="true"><circle class="bg" cx="18" cy="18" r="15.5"/><circle class="fg" id="ringFg" cx="18" cy="18" r="15.5" stroke-dasharray="97.4" stroke-dashoffset="97.4"/></svg>
+        <div><b id="ringN">0/8</b><span>seen</span></div>
+      </div>
+      <div class="hd-ac">
+        <button class="ib" id="themeBtn" aria-label="Toggle reading room"><svg class="ico"><use href="#i-moon"/></svg></button>
+        <button class="ib" data-act="pal" aria-label="Open command palette"><svg class="ico"><use href="#i-cmd"/></svg></button>
+      </div>
+    </header>
+
+    <div class="spine" id="spine" role="tablist" aria-label="Ward beds"></div>
+
+    <div class="body">
+      <section class="view on split" id="v-round"><div class="plist" id="roundList"></div><div class="pdet" id="roundDet"></div></section>
+      <section class="view" id="v-ward"><div class="full"><div class="board" id="board"></div></div></section>
+      <section class="view split" id="v-work"><div class="plist" id="workList"></div><div class="pdet" id="workDet"></div></section>
+      <section class="view" id="v-ot"><div class="full" id="otP"></div></section>
+      <section class="view" id="v-handover"><div class="full" id="hoP"></div></section>
+      <section class="view" id="v-disch"><div class="full" id="dcP"></div></section>
+      <section class="view" id="v-admin"><div class="full" id="adP"></div></section>
+    </div>
+
+    <nav class="nav" aria-label="Main">
+      <button class="nv" data-go="round" aria-current="page"><svg class="ico"><use href="#i-route"/></svg>Round</button>
+      <button class="nv" data-go="ward"><svg class="ico"><use href="#i-board"/></svg>Ward</button>
+      <button class="nv add" data-act="add"><svg class="ico"><use href="#i-plus"/></svg>Add</button>
+      <button class="nv" data-go="work"><svg class="ico"><use href="#i-check"/></svg>Work</button>
+      <button class="nv" data-act="pal"><svg class="ico"><use href="#i-cmd"/></svg>Go</button>
+    </nav>
+  </div>
+</div>
+
+<div class="scrim" id="scrim"></div>
+
+<div class="pal" id="pal" role="dialog" aria-label="Command palette" aria-modal="true">
+  <div class="pal-in">
+    <svg class="ico" style="color:var(--ink-3)" aria-hidden="true"><use href="#i-search"/></svg>
+    <input id="palIn" placeholder="Search patients, or type a command…" autocomplete="off" aria-label="Search">
+    <span class="kbd">esc</span>
+  </div>
+  <div class="pal-l" id="palL"></div>
+</div>
+
+<div class="modal" id="addM" role="dialog" aria-label="New admission" aria-modal="true">
+  <div class="md-h"><h3>New admission</h3><button class="ib" data-close="1" aria-label="Close"><svg class="ico"><use href="#i-x"/></svg></button></div>
+  <div class="md-b">
+    <div class="smart"><svg class="ico-s" style="margin-top:2px" aria-hidden="true"><use href="#i-spark"/></svg>
+      <span>Paste the admission note or photograph the case sheet — bed, name, age, diagnosis and unit fill themselves.</span></div>
+    <div class="frow"><label for="a1">Bed</label><input id="a1" placeholder="e.g. 15"></div>
+    <div class="frow"><label for="a2">Name</label><input id="a2" placeholder="Patient name"></div>
+    <div class="frow"><label for="a3">Age / sex</label><input id="a3" placeholder="e.g. 45/M"></div>
+    <div class="frow"><label for="a4">Diagnosis</label><input id="a4" placeholder="e.g. Distal femur fracture, left"></div>
+    <div class="frow"><label for="a5">Status</label><select id="a5"><option>Pre-op</option><option>Post-op</option><option>Conservative</option><option>For discharge</option></select></div>
+  </div>
+  <div class="md-f"><button class="btn gh" data-close="1">Cancel</button><button class="btn pri" style="flex:0 0 auto" data-add="1">Add patient</button></div>
+</div>
+
+<div class="viewer" id="viewer" role="dialog" aria-label="Film viewer" aria-modal="true">
+  <button class="vw-x" data-vclose="1" aria-label="Close viewer"><svg class="ico"><use href="#i-x"/></svg></button>
+  <div class="vw-f" id="vwF"></div>
+  <div class="vw-c">
+    <button class="vw-b" data-vnav="-1" aria-label="Previous film"><svg class="ico"><use href="#i-left"/></svg></button>
+    <div class="vw-t" id="vwT"></div>
+    <button class="vw-b" data-vnav="1" aria-label="Next film"><svg class="ico"><use href="#i-right"/></svg></button>
+  </div>
+</div>
+
+<div class="present" id="present" role="dialog" aria-label="Presentation mode" aria-modal="true">
+  <div class="pr-t"><span>Presentation mode</span><span id="prC">1 of 8</span></div>
+  <div class="pr-b" id="prB"></div>
+  <div class="pr-nv">
+    <button class="pr-btn" data-pnav="-1">← Previous</button>
+    <button class="pr-btn" data-pnav="1">Next →</button>
+    <button class="pr-btn" data-pclose="1" style="margin-left:auto">Exit</button>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<svg class="sr" aria-hidden="true">
+<symbol id="i-route" viewBox="0 0 24 24"><path d="M4 19h5a3 3 0 0 0 0-6H5a3 3 0 0 1 0-6h5"/><circle cx="18.5" cy="17.5" r="2.5"/><circle cx="17" cy="5.5" r="2.5"/></symbol>
+<symbol id="i-board" viewBox="0 0 24 24"><rect x="3" y="4" width="7" height="16" rx="1.5"/><rect x="14" y="4" width="7" height="9" rx="1.5"/></symbol>
+<symbol id="i-check" viewBox="0 0 24 24"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h10"/></symbol>
+<symbol id="i-doc" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></symbol>
+<symbol id="i-hand" viewBox="0 0 24 24"><path d="M14 5l7 7-7 7"/><path d="M21 12H3"/></symbol>
+<symbol id="i-out" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5M21 12H9"/></symbol>
+<symbol id="i-set" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M20.1 14.5a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5v.2a2 2 0 1 1-4 0v-.1a1.6 1.6 0 0 0-1.1-1.5 1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.6 1.6 0 0 0 1.5-1.1 1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1h.2a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/></symbol>
+<symbol id="i-cmd" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8.5 9.5L11 12l-2.5 2.5M13 15h3"/></symbol>
+<symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></symbol>
+<symbol id="i-moon" viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/></symbol>
+<symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+<symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></symbol>
+<symbol id="i-skip" viewBox="0 0 24 24"><path d="M5 4l10 8-10 8V4zM19 5v14"/></symbol>
+<symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21v-2a5 5 0 0 1 5-5h6a5 5 0 0 1 5 5v2"/></symbol>
+<symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/></symbol>
+<symbol id="i-img" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 15l5-5 4 4 3-3 6 6"/><circle cx="8.5" cy="8.5" r="1.5"/></symbol>
+<symbol id="i-tick" viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></symbol>
+<symbol id="i-list" viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/></symbol>
+<symbol id="i-left" viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></symbol>
+<symbol id="i-right" viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></symbol>
+</svg>
+
+<script src="../milestones.js"></script>
+<script type="module" src="app.js"></script>
+</body>
+</html>

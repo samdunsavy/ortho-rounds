@@ -13,6 +13,7 @@
 - **No new runtime dependencies.** `package.json` dependencies must be unchanged at the end of this plan.
 - **No build step.** CSS and JS are served as authored.
 - **`public/index.html` and `public/app.js` must not be modified.** Verify with `git diff --stat` before every commit.
+- **`public/sw.js` — one authorised exception (ruled 2026-08-02).** The root worker registers at scope `/` (`public/index.html:2568` calls `register('sw.js')` with no scope option), so it controls `/v2/` too. Its fetch handler intercepts every same-origin GET except `/api/`, and on network failure a navigation falls back to the cached `/index.html` — serving testers the OLD shell at the new URL. The permitted change is an early return in the fetch handler for paths under `/v2`, plus a cache-name bump. Nothing else in `sw.js` may change.
 - **Reuse `public/milestones.js`.** Never reimplement `getPatientPod`, `isItemOverdue`, `isItemInDueWindow`, `isItemUpcoming`, `getMilestoneBuckets`, or `normalizePatientChecklists`.
 - **All existing tests stay green.** Run `npm test` before every commit.
 - **Preview banner is mandatory and non-dismissible.** Testers are editing real patient records.
@@ -252,9 +253,18 @@ test('shell reuses the shared milestones module', () => {
   assert.ok(html.includes('src="../milestones.js"'));
 });
 
-test('shell registers no service worker and unregisters inherited ones', () => {
+test('shell registers no service worker', () => {
   assert.ok(!/serviceWorker\s*\.\s*register/.test(html), 'v2 must not register a SW');
-  assert.ok(html.includes('getRegistrations'), 'v2 must unregister inherited SWs');
+});
+
+test('the root service worker ignores /v2 entirely', () => {
+  const sw = readFileSync(new URL('../public/sw.js', import.meta.url), 'utf8');
+  const fetchHandler = sw.slice(sw.indexOf("addEventListener('fetch'"));
+  assert.ok(/pathname\.startsWith\(['"]\/v2/.test(fetchHandler),
+    'sw.js fetch handler must return early for /v2 paths');
+  const guardIdx = fetchHandler.search(/pathname\.startsWith\(['"]\/v2/);
+  const respondIdx = fetchHandler.indexOf('respondWith');
+  assert.ok(guardIdx < respondIdx, 'the /v2 guard must precede respondWith');
 });
 
 test('preview banner is present and not dismissible', () => {
@@ -782,7 +792,7 @@ export async function fetchWard(fetchImpl = fetch, deps = globalThis){
   return {
     serverTime: out.serverTime,
     patients: list
-      .filter(p => !p.discharged)
+      .filter(p => p.status !== 'discharged')
       .map(p => toViewModel(p, deps))
       .sort((a, b) => (parseInt(a.bed, 10) || 1e9) - (parseInt(b.bed, 10) || 1e9))
   };
@@ -1071,7 +1081,9 @@ git commit -m "feat: v2 app wiring for round, ward and work"
 **Interfaces:**
 - Consumes: `VPatient` from `data.js`; `esc` from `render.js`.
 - Produces (in `render.js`): `export function otList(patients: VPatient[], dateISO: string): string`, `export function handover(patients: VPatient[], meta: {when: string, to: string}): string`, `export function discharged(rows: VPatient[]): string`
-- Produces (in `data.js`): `export async function fetchDischarged(fetchImpl = fetch, deps = globalThis): Promise<{patients: VPatient[], serverTime: number}>` — identical to `fetchWard` but filters `p.discharged === true` and sorts by discharge date descending rather than by bed.
+- Produces (in `data.js`): `export async function fetchDischarged(fetchImpl = fetch, deps = globalThis): Promise<{patients: VPatient[], serverTime: number}>` — identical to `fetchWard` but filters `p.status === 'discharged'` and sorts by discharge date descending rather than by bed.
+
+> **Field-name correction (established in Task 0):** this codebase has no `discharged` boolean. Patient lifecycle is carried on `p.status`, whose discharged value is the string `'discharged'` (see `public/app.js:481,4132,4587`). `!p.discharged` would be true for every patient and silently filter nothing.
 
 - [ ] **Step 1: Write the failing test**
 

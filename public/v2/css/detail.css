@@ -1,0 +1,32 @@
+/* patient detail pane — header, cards, checklists, history */
+.dt-hd{display:flex;gap:var(--s-5);margin-bottom:var(--s-5);flex-wrap:wrap;}
+.dt-gal{display:flex;gap:var(--s-2);flex-shrink:0;}
+.dt-gal .fbox,.dt-gal .fnone{width:98px;height:128px;}
+.dt-nm{font-family:var(--f-disp);font-size:var(--t-30);font-weight:600;letter-spacing:-.03em;line-height:1.08;margin:3px 0 0;}
+.dt-sub{font-size:var(--t-13);color:var(--ink-2);margin-top:5px;}
+.dt-dx{font-size:var(--t-16);font-weight:500;margin-top:11px;line-height:1.35;}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:var(--s-4);margin-bottom:var(--s-3);}
+.card:last-child{margin-bottom:0;}
+.g2{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:var(--s-3);align-items:start;}
+.g4{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:var(--s-3);}
+.fld label{display:block;font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-3);font-weight:600;margin-bottom:4px;}
+.fld div{font-size:var(--t-13);line-height:1.45;}
+.ck{display:flex;align-items:center;gap:11px;padding:9px 0;border-bottom:1px solid var(--line-2);
+  font-size:var(--t-13);width:100%;transition:opacity var(--d2);}
+.ck:last-child{border:0;padding-bottom:0;}
+.ck-b{width:20px;height:20px;border-radius:6px;border:1.6px solid var(--line);flex-shrink:0;
+  display:grid;place-items:center;color:transparent;
+  transition:background var(--d2) var(--sp),border-color var(--d2),color var(--d2);}
+.ck:hover .ck-b{border-color:var(--accent);}
+.ck.done .ck-b{background:var(--accent);border-color:var(--accent);color:var(--on-accent);}
+.ck-b .ico-s{stroke-width:3;}
+.ck span{flex:1;}
+.ck.done span{color:var(--ink-3);text-decoration:line-through;text-decoration-thickness:1px;}
+.ck em{font-family:var(--f-mono);font-size:10px;color:var(--ink-3);font-style:normal;flex-shrink:0;}
+.ck.due em{color:var(--bad);font-weight:700;}
+.hist{font-size:var(--t-12);color:var(--ink-2);padding:8px 0;border-bottom:1px solid var(--line-2);
+  display:flex;gap:12px;line-height:1.5;}
+.hist:last-child{border:0;padding-bottom:0;}
+.hist b{font-family:var(--f-mono);font-size:10px;color:var(--ink-3);flex-shrink:0;width:48px;font-weight:500;padding-top:1px;}
+.empty{font-size:var(--t-13);color:var(--ink-3);padding:var(--s-3) 0;line-height:1.5;}
+

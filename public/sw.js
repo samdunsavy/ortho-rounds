@@ -3,7 +3,7 @@
    arrive when online), falling back to cache when offline.
    API calls (/api/) always go to the network and are never cached. */
 
-const CACHE = 'ortho-rounds-v35';
+const CACHE = 'ortho-rounds-v36';
 const SHELL = ['./', 'index.html', 'milestones.js', 'admission-bridge.js', 'clinical-normalize-bridge.js', 'admission.js', 'clinical-normalize.js', 'app.js', 'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-maskable.svg'];
 
 self.addEventListener('install', (event)=>{
@@ -43,6 +43,15 @@ self.addEventListener('fetch', (event)=>{
   }
   // Only handle same-origin requests.
   if(url.origin !== self.location.origin) return;
+
+  // The /v2 preview client is online-only and must never be served from
+  // this worker's cache — a cached root-shell fallback would silently show
+  // testers the old UI at the new URL.
+  // Prefix-precise: testing for the bare three-character prefix would
+  // also swallow /v2x.js, /v2-old.css and anything else that merely
+  // begins with those characters, quietly excluding future root-app
+  // assets from the cache. Match the exact path or a real descendant.
+  if(url.pathname === '/v2' || url.pathname.startsWith('/v2/')) return;
 
   event.respondWith(
     fetch(req)
