@@ -30,7 +30,12 @@ through the `deps` parameter (defaults to `globalThis`).
 
 **Status values are `preop` / `conservative` / `postop` / `fordischarge`**
 (`public/app.js:13-14`). The prototype used different words; that drift
-made every for-discharge patient invisible on the board.
+made every for-discharge patient invisible on the board. Real records also
+carry **no status at all** — production has some — so `data.js` normalises
+`raw.status || 'preop'` before any renderer sees it, matching the main
+app's own default. Anything filtering on exact status values must consume
+the view model, never the raw record. A test asserts every ward patient
+lands in exactly one board column.
 
 **Writes go through `enqueueWrite`.** It serialises `loadWard() → mutate →
 pushPatient()` so two writes cannot interleave. It took three rounds to get

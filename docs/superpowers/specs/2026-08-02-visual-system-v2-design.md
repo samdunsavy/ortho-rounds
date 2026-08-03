@@ -189,7 +189,28 @@ with >=1 film      0  (0%)
 
 ```
 
-0 live patients in this environment — measurement must be re-run against production before Task 5. The sandbox `data/ortho.db` has no rows in its `patients` table (confirmed via `store.countPatients()`), so this is a genuine reading, not a script defect — but it settles nothing. Task 5 must not proceed on film-as-hero vs. row-scale until this script is re-run against a database with real patient volume and the coverage percentage is recorded here.
+0 live patients in this environment — the sandbox `data/ortho.db` has no rows in its `patients` table (confirmed via `store.countPatients()`), so this is a genuine reading, not a script defect, but it settles nothing. Re-run against production. **Superseded by the reading below.**
+
+**2026-08-03 — production measurement:**
+
+```
+live patients      14
+with >=1 film      10  (71.4%)
+  unknown          0/2   (0%)
+  postop           2/2   (100%)
+  conservative     2/2   (100%)
+  preop            6/8   (75%)
+GO — film-as-hero is viable.
+```
+
+**Ruling: film-as-hero stands.** 71.4% is comfortably above the ~40% floor below which the hero slot would be mostly placeholder and the design worse than the existing card. The fallback described above (demote the film to row scale, lead with identity) is **not** taken.
+
+Two things this reading also settled, worth keeping:
+
+- **Post-op and conservative patients have 100% coverage.** These are exactly the patients the POD track is for, so the two differentiating elements of the card — film and track — are both fully populated for the cohort that matters most.
+- **The `unknown` bucket is real: 2 of 14 records carry no `status` at all.** Anything that filters on exact status values must consume the view model, not the raw record — `data.js` normalises `raw.status || 'preop'` first, matching the main app's default (`public/app.js:2403`). Covered by `tests/v2-http-smoke.test.js` ("a patient with NO status still appears" and "every ward patient lands in exactly one board column").
+
+The remaining prerequisite is unchanged and now the **only** thing gating the card at scale: server-side thumbnails (§8.1). At 71% coverage, ten of fourteen rows will request an image, so shipping the drawn placeholders to a real round without thumbnails would make the round slower on ward wifi.
 
 ## 9 · Delivery tiers
 

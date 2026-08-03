@@ -166,3 +166,36 @@ test('the ward-meta record never renders as a phantom patient', async () => {
   assert.ok(!ids.includes('__ward_meta__'));
   assert.ok(!window.document.body.textContent.includes('Unnamed'));
 });
+
+/* ── shapes found in real production data ─────────────────────────────── */
+
+test('a patient with NO status still appears — on the ward, the board and the round', async () => {
+  // Production has these: scripts/imaging-coverage.js reported an
+  // "unknown" status bucket. board() filters on exact status values, so a
+  // record that reached it unnormalised would be in no column at all —
+  // the same class of defect as the 'discharge'/'fordischarge' drift.
+  // data.js normalises `status: raw.status || 'preop'` before render sees
+  // it, matching the main app's own default (public/app.js:2403).
+  await srv.seed([patient(80, { id: 'http-nostatus', status: undefined, name: 'No Status' })]);
+  const window = await loadPage({ token: srv.token });
+  const api = window.__V2__;
+
+  const vm = api.state.patients.find(p => p.id === 'http-nostatus');
+  assert.ok(vm, 'a statusless patient must still reach the ward');
+  assert.equal(vm.status, 'preop', 'missing status normalises to preop, as the main app does');
+  assert.equal(vm.stat, 'Pre-op');
+
+  api.go('ward');
+  const board = window.document.querySelector('#board');
+  assert.ok(board.textContent.includes('No Status'),
+    'a statusless patient must appear in a board column, not vanish between them');
+});
+
+test('every ward patient lands in exactly one board column', async () => {
+  const window = await loadPage({ token: srv.token });
+  const api = window.__V2__;
+  api.go('ward');
+  const tiles = window.document.querySelectorAll('#board .tile');
+  assert.equal(tiles.length, api.state.patients.length,
+    'board tiles must account for every patient — no one may fall between columns');
+});
