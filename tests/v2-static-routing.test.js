@@ -57,8 +57,9 @@ test('v2/index.html references its assets relatively, which is why the redirect 
   const rel = [...html.matchAll(/(?:href|src)="([^"#]+)"/g)]
     .map(m => m[1])
     .filter(u => !/^(https?:)?\/\//.test(u) && !u.startsWith('/'));
-  assert.ok(rel.includes('css/tokens.css'),
+  const bare = rel.map(u => u.split('?')[0]);
+  assert.ok(bare.includes('css/tokens.css'),
     'stylesheets are relative, so they resolve against the base URL');
-  assert.ok(rel.includes('app.js'),
+  assert.ok(bare.includes('app.js'),
     'app.js is relative — at the URL /v2 it would resolve to /app.js, the MAIN app script');
 });

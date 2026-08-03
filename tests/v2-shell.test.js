@@ -24,7 +24,8 @@ test('shell loads the seven css layers in order', () => {
 });
 
 test('shell reuses the shared milestones module', () => {
-  assert.ok(html.includes('src="../milestones.js"'));
+  assert.match(html, /src="\.\.\/milestones\.js(\?v=\d+)?"/,
+    'v2 must load the shared milestones module; a ?v= cache-buster is allowed');
 });
 
 test('shell registers no service worker', () => {

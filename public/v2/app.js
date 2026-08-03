@@ -48,8 +48,8 @@
    additionally bound to its receiver because real browsers throw
    "Illegal invocation" if fetch is called detached from `window`. */
 import { esc, hero, row, detail, board, workList, complete, otList, handover, discharged,
-  paletteGroup, paletteNoMatch, paletteRow, viewerTitle, filmArt, presentSlide } from './render.js';
-import { fetchWard, fetchDischarged, pushPatient, toViewModel, extractDefaultUnit } from './data.js';
+  paletteGroup, paletteNoMatch, paletteRow, viewerTitle, filmArt, presentSlide } from './render.js?v=3';
+import { fetchWard, fetchDischarged, pushPatient, toViewModel, extractDefaultUnit } from './data.js?v=3';
 
 const DOC = document;
 const WIN = window;
