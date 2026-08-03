@@ -209,7 +209,14 @@ async function post(url, body, fetchImpl, store){
     credentials: 'same-origin',
     body: JSON.stringify(body)
   });
-  if(res.status === 401) throw new Error(`${url} failed: 401 — not signed in`);
+  /* Name whether we actually attached the header. The server's "Login
+     required" covers both "no Authorization header arrived" and "the
+     token was rejected", so without this the two are indistinguishable
+     from the outside — which cost a full debugging round. */
+  if(res.status === 401){
+    throw new Error(`${url} failed: 401 — not signed in `
+      + `(Authorization header ${token ? 'WAS sent, so the server rejected the token' : 'was NOT sent — no token found'})`);
+  }
   if(!res.ok) throw new Error(`${url} failed: ${res.status}`);
   return res.json();
 }

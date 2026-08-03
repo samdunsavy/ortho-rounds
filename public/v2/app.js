@@ -48,13 +48,13 @@
    additionally bound to its receiver because real browsers throw
    "Illegal invocation" if fetch is called detached from `window`. */
 import { esc, hero, row, detail, board, workList, complete, otList, handover, discharged,
-  paletteGroup, paletteNoMatch, paletteRow, viewerTitle, filmArt, presentSlide } from './render.js?v=3';
-import { fetchWard, fetchDischarged, pushPatient, toViewModel, extractDefaultUnit, authToken } from './data.js?v=3';
+  paletteGroup, paletteNoMatch, paletteRow, viewerTitle, filmArt, presentSlide } from './render.js?v=4';
+import { fetchWard, fetchDischarged, pushPatient, toViewModel, extractDefaultUnit, authToken } from './data.js?v=4';
 
 /* Bump alongside the ?v= stamps in index.html. Printed at boot and shown
    in the failure state, so "which build is actually live?" is answerable
    in one second instead of by inference. */
-const BUILD = 'v3';
+const BUILD = 'v4';
 
 const DOC = document;
 const WIN = window;
