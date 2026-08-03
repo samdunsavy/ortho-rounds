@@ -24,6 +24,17 @@ a test enforces this.
 **Escape everything patient-supplied**, in attribute position as well as
 text. `render.js` exports `esc`. These are real records.
 
+**Never render anything that could be mistaken for a patient's own
+radiograph.** The imaging slot (`.fslot`) is a bone-tinted card that says
+in words whether a film is on file — it is deliberately not a dark
+lightbox. v2 does not render real imagery yet: `data.js` keeps only the
+image `type` and discards the `url`, pending server-side thumbnails
+(§8.1). Production coverage is 71.4%, so most rows genuinely have an X-ray
+that is not being shown; drawn stand-in anatomy used to fill that slot and
+read as the patient's own film at a glance. Restore film styling only when
+the thing inside it is that patient's actual radiograph. Tests assert no
+drawn film SVGs exist and that the two states are distinguishable.
+
 **Never reimplement clinical-day arithmetic.** `public/milestones.js` owns
 POD, milestone due/overdue windows and `milestoneDayPrefix`. v2 reaches it
 through the `deps` parameter (defaults to `globalThis`).

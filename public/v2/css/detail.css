@@ -1,7 +1,7 @@
 /* patient detail pane — header, cards, checklists, history */
 .dt-hd{display:flex;gap:var(--s-5);margin-bottom:var(--s-5);flex-wrap:wrap;}
 .dt-gal{display:flex;gap:var(--s-2);flex-shrink:0;}
-.dt-gal .fbox,.dt-gal .fnone{width:98px;height:128px;}
+.dt-gal .fslot{width:98px;height:128px;}
 .dt-nm{font-family:var(--f-disp);font-size:var(--t-30);font-weight:600;letter-spacing:-.03em;line-height:1.08;margin:3px 0 0;}
 .dt-sub{font-size:var(--t-13);color:var(--ink-2);margin-top:5px;}
 .dt-dx{font-size:var(--t-16);font-weight:500;margin-top:11px;line-height:1.35;}

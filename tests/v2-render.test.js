@@ -32,17 +32,42 @@ test('patient names are escaped in the hero', () => {
   assert.ok(html.includes('&lt;script&gt;'));
 });
 
-test('filmBox with a kind renders a zoomable button carrying its index', () => {
-  const html = R.filmBox(3, 'preop', 'pre-op');
-  assert.ok(html.includes('data-film="3:preop"'));
+test('filmBox with a film on file renders an honest slot, never a fake radiograph', () => {
+  // Production imaging coverage is 71.4%: most rows have a real X-ray that
+  // v2 does not render yet. The slot must SAY that. It previously drew a
+  // convincing dark-film-with-white-bones image, which a clinician
+  // glancing down a round could take for the patient's own film.
+  const html = R.filmBox(3, 'postop', '');
+  assert.match(html, /on file/i, 'the slot must state that a film exists');
+  assert.match(html, /not shown/i, 'and that it is not being displayed');
+  assert.ok(html.includes('fslot-has'));
+  assert.ok(html.includes('role="img"'));
   assert.ok(html.includes('aria-label'));
+  assert.ok(!/<svg viewBox/.test(html), 'no drawn anatomy may be rendered');
+  assert.ok(!/fill="#[0-9a-f]{6}"/i.test(html), 'no radiograph-style artwork fills');
 });
 
-test('filmBox without a kind renders the bone placeholder, not a button', () => {
+test('filmBox without a kind says "No imaging" and is visually distinct', () => {
   const html = R.filmBox(3, undefined, '');
-  assert.ok(html.includes('fnone'));
-  assert.ok(!html.includes('<button'));
+  assert.ok(html.includes('fslot-none'));
+  assert.match(html, /no imaging/i);
   assert.ok(html.includes('role="img"'));
+  assert.ok(!/on file/i.test(html), 'must not claim a film exists');
+});
+
+test('the two imaging states are distinguishable from each other', () => {
+  const has = R.filmBox(0, 'preop', '');
+  const none = R.filmBox(0, undefined, '');
+  assert.notEqual(has, none);
+  assert.ok(has.includes('fslot-has') && !has.includes('fslot-none'));
+  assert.ok(none.includes('fslot-none'));
+});
+
+test('no drawn radiograph artwork survives anywhere in the module', async () => {
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('../public/v2/render.js', import.meta.url), 'utf8');
+  assert.equal((src.match(/<svg viewBox="0 0 60 76"/g) || []).length, 0,
+    'the drawn film SVGs must not come back — they read as the patient\'s own imaging');
 });
 
 test('track marks exactly one current station', () => {
@@ -97,11 +122,11 @@ test('filmBox with hostile kind containing quotes and event handlers is escaped'
   assert.ok(!html.includes(hostile), 'hostile string must not appear unescaped in output');
 });
 
-test('filmBox with unknown-but-harmless kind still renders artwork fallback', () => {
+test('an unknown image type still renders a slot rather than vanishing', () => {
   const html = R.filmBox(0, 'lateral', '');
-  assert.ok(html.includes('<button'), 'unknown kind should render as button, not placeholder');
-  assert.ok(html.includes('data-film="0:preop"'), 'unknown kind should resolve to preop via whitelist');
-  assert.ok(html.includes('<svg'), 'should render artwork SVG for fallback preop');
+  assert.ok(html.includes('fslot-has'), 'an unknown-but-real film must still show as on file');
+  assert.match(html, /on file/i);
+  assert.ok(!html.includes('fslot-none'), 'it must not be reported as no-imaging');
 });
 
 /* ── documents (Task 7) ──
@@ -384,11 +409,11 @@ test('a prototype-borrowed image type never leaks function source into the marku
   for(const kind of ['constructor', 'toString', 'hasOwnProperty', 'valueOf']){
     const box = R.filmBox(0, kind, '');
     assert.ok(!/native code|function \w*\(/.test(box), `filmBox leaked for "${kind}": ${box.slice(0, 120)}`);
-    assert.ok(box.includes('data-film="0:preop"'), `filmBox must fall back to preop for "${kind}"`);
+    assert.ok(box.includes('fslot-has'), `filmBox must render a slot for "${kind}"`);
 
     const art = R.filmArt(kind);
-    assert.ok(typeof art === 'string' && art.startsWith('<svg'),
-      `filmArt must return whitelisted artwork for "${kind}"`);
+    assert.equal(art, 'preop',
+      `filmArt must resolve a prototype-borrowed key to the whitelisted fallback, got ${art}`);
 
     const title = R.viewerTitle(kind, 0, 1);
     assert.ok(!/native code|function \w*\(/.test(title), `viewerTitle leaked for "${kind}"`);
@@ -410,4 +435,20 @@ test('checklist toggles carry the item\'s stable id, not its list position', () 
   assert.ok(html.includes('data-ck="5:chk_a"'), 'the first milestone must be addressed by id');
   assert.ok(html.includes('data-ck="5:chk_b"'), 'the second milestone must be addressed by id');
   assert.ok(html.includes('data-dc="5:dc_a"'), 'discharge items must be addressed by id too');
+});
+
+test('every imaging slot in the module uses the honest .fslot markup', async () => {
+  // A no-film patient's DETAIL pane once emitted a bare `.fnone` div with
+  // an inline size — a class whose CSS was removed with the fake artwork,
+  // so it rendered unstyled. Every path must go through filmBox().
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('../public/v2/render.js', import.meta.url), 'utf8');
+  assert.equal((src.match(/class="fnone/g) || []).length, 0,
+    'no path may emit the retired .fnone class');
+
+  const withFilms = R.detail({ ...p, films:['preop','postop'] }, 0);
+  const without   = R.detail({ ...p, films:[] }, 0);
+  assert.ok(withFilms.includes('fslot-has'));
+  assert.ok(without.includes('fslot-none'), 'the no-imaging detail slot must be a real fslot');
+  assert.ok(!without.includes('fnone'));
 });

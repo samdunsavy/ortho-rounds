@@ -6,29 +6,14 @@
    split from that same prototype, so a renamed class here produces
    unstyled output. */
 
-/* ════ films — drawn shapes, no patient imagery ════
-   These SVGs are PLACEHOLDERS standing in for real radiograph thumbnails.
-   Server-side thumbnail generation is a listed outstanding build
-   prerequisite (design spec §8.1) — nobody should mistake these drawings
-   for actual imaging.
-
-   RE-KEYED from the prototype. The prototype's FILMS object is keyed
-   anatomically (pfn, plate, wrist, spine, knee), but this app's real
-   image-type values (see public/index.html's imgTypePreop /
-   imgTypePostop / imgTypeFollowup pickers, and data.js's
-   `images.map(i => i.type || 'preop')`) are `preop`, `postop`,
-   `followup`. Re-keying by image type — reusing three of the prototype's
-   five drawn artworks verbatim — so real films render artwork instead of
-   silently falling through to the empty-bone placeholder:
-     preop    -> the prototype's `pfn` hip-nail artwork
-     postop   -> the prototype's `plate` fixation-plate artwork
-     followup -> the prototype's `knee` artwork
-   FILMS[kind] || FILMS.preop below covers any unknown/future type. */
-const FILMS = {
-  preop:'<svg viewBox="0 0 60 76" preserveAspectRatio="xMidYMid slice"><rect width="60" height="76" fill="#0e1218"/><path d="M34 8H53V70H36Z" fill="#3f454c" opacity=".45"/><ellipse cx="20" cy="17" rx="13" ry="11" fill="#5c626a"/><path d="M14 20L22 68H34L26 20Z" fill="#989ea5"/><ellipse cx="21" cy="16" rx="9" ry="8" fill="#c2c7cd"/><rect x="19" y="12" width="4.6" height="56" rx="2.3" fill="#eef1f4" transform="rotate(-5 21 40)"/><rect x="12" y="17" width="22" height="3.4" rx="1.7" fill="#eef1f4" transform="rotate(-32 23 19)"/><circle cx="23" cy="63" r="2.1" fill="#eef1f4"/><circle cx="24" cy="54" r="2.1" fill="#eef1f4"/></svg>',
-  postop:'<svg viewBox="0 0 60 76" preserveAspectRatio="xMidYMid slice"><rect width="60" height="76" fill="#0e1218"/><path d="M22 4L20 70H32L31 4Z" fill="#a1a7ae"/><path d="M33 8L34 68H39L38 8Z" fill="#747b83"/><ellipse cx="26" cy="7" rx="9" ry="5" fill="#c8cdd2"/><rect x="17" y="22" width="4" height="34" rx="2" fill="#f0f3f6"/><circle cx="19" cy="27" r="2.4" fill="#fbfcfd"/><circle cx="19" cy="37" r="2.4" fill="#fbfcfd"/><circle cx="19" cy="47" r="2.4" fill="#fbfcfd"/><path d="M20 40L31 42" stroke="#2e343b" stroke-width="1.6"/></svg>',
-  followup:'<svg viewBox="0 0 60 76" preserveAspectRatio="xMidYMid slice"><rect width="60" height="76" fill="#0e1218"/><path d="M20 2L18 30H36L34 2Z" fill="#999fa6"/><ellipse cx="21" cy="34" rx="9" ry="7" fill="#c5cad0"/><ellipse cx="34" cy="34" rx="9" ry="7" fill="#c5cad0"/><path d="M19 42L21 74H35L34 42Z" fill="#999fa6"/><ellipse cx="27" cy="28" rx="6" ry="4" fill="#dee1e5"/><rect x="16" y="30" width="24" height="5" rx="2.5" fill="#eef1f4"/></svg>'
-};
+/* Known image types. Formerly this held drawn SVG "radiographs" — dark
+   film, white bones, hardware — used as stand-ins until real thumbnails
+   existed. At 71.4% production coverage most rows have a genuine X-ray on
+   file, so a convincing fake in that slot could be read as the patient's
+   own film during a round. The artwork is gone; only the type whitelist
+   remains, feeding labels and the aria-label. Render real imagery here
+   only when it is the patient's actual radiograph (spec 8.1). */
+const FILM_KINDS = { preop: 1, postop: 1, followup: 1 };
 const FILM_LABELS = { preop:'Pre-op film', postop:'Post-op film', followup:'Follow-up film' };
 
 /* ── escaping ──
@@ -52,7 +37,7 @@ export function esc(s){
    row's inline thumbnail) goes through here, so none of them can be
    handed a non-whitelisted key. */
 const resolveFilmKind = kind =>
-  (kind && Object.prototype.hasOwnProperty.call(FILMS, kind)) ? kind : 'preop';
+  (kind && Object.prototype.hasOwnProperty.call(FILM_KINDS, kind)) ? kind : 'preop';
 
 /* "POD 4" / "Day 4" for a patient with a clinical day, '' otherwise.
    The POD-vs-Day decision is made by public/milestones.js's
@@ -68,12 +53,31 @@ const ic = n => `<svg class="ico" aria-hidden="true"><use href="#i-${n}"/></svg>
 const icS = n => `<svg class="ico-s" aria-hidden="true"><use href="#i-${n}"/></svg>`;
 
 /* ── fragments ── */
+/* Two visually distinct states, neither of which may be mistaken for an
+   actual radiograph.
+
+   Production imaging coverage is 71.4% (spec §Imaging coverage), so most
+   rows DO have a real X-ray on file — and v2 does not yet render it:
+   data.js keeps only the image `type` and discards the `url`, pending
+   server-side thumbnails (spec §8.1). Until then the slot must say so.
+   The previous drawn anatomy — dark film, white bones, hardware — read as
+   the patient's own film at a glance, which on a round is worse than
+   showing nothing: a clinician could take a generic hip drawing for this
+   patient's hip. Bone-tinted card, explicit words, no fake anatomy. */
 export function filmBox(pi, kind, cap, cls=''){
   if (!kind) {
-    return `<div class="fnone ${esc(cls)}" role="img" aria-label="No imaging on file">${ic('img')}</div>`;
+    /* "No imaging available", not "no imaging on file" — the latter reads
+       ambiguously aloud, and a test asserts this state never contains the
+       phrase that the has-a-film state uses to claim one exists. */
+    return `<div class="fslot fslot-none ${esc(cls)}" role="img" aria-label="No imaging available">
+   ${ic('img')}<span class="fslot-t">No imaging</span></div>`;
   }
   const resolvedKind = resolveFilmKind(kind);
-  return `<button class="fbox ${esc(cls)}" data-film="${esc(String(pi))}:${esc(resolvedKind)}" aria-label="View ${esc(FILM_LABELS[resolvedKind] || 'film')}">${FILMS[resolvedKind]}${cap ? `<em>${esc(cap)}</em>` : ''}</button>`;
+  const label = FILM_LABELS[resolvedKind] || 'Film';
+  return `<div class="fslot fslot-has ${esc(cls)}" role="img"
+   aria-label="${esc(label)} on file — not shown in this preview build">
+   ${ic('img')}<span class="fslot-t">${esc(label)}</span><span class="fslot-s">on file · not shown yet</span>
+   ${cap ? `<em>${esc(cap)}</em>` : ''}</div>`;
 }
 
 export function track(p){
@@ -93,7 +97,9 @@ export function hero(p, i){
   return `<article class="hero">
  <div class="hero-lb"><span class="pls"></span>At the bedside</div>
  <div class="hero-tp">
-  <div class="hero-f">${filmBox(i, p.films[0], '')}<div class="fcap">${p.films.length ? p.films.length + ' film' + (p.films.length > 1 ? 's' : '') + ' · tap to view' : 'no imaging'}</div></div>
+  <div class="hero-f">${filmBox(i, p.films[0], '')}<div class="fcap">${p.films.length
+      ? p.films.length + ' film' + (p.films.length > 1 ? 's' : '') + ' on file'
+      : 'no imaging'}</div></div>
   <div class="who"><div class="w-bed">BED ${esc(p.bed)}</div><h2 class="w-nm">${esc(p.name)}</h2>
    <div class="w-mt">${esc(p.age)} · ${esc(p.stat)}</div>
    <div class="w-dx">${esc(p.dx)}</div><div class="w-pr">${esc(p.proc)}</div></div></div>
@@ -108,7 +114,7 @@ export function hero(p, i){
 export function row(p, i, cur, seen){
   const bad = badOf(p);
   return `<button class="qr ${seen ? 'seen' : ''}" data-open="${i}" ${cur ? 'aria-current="true"' : ''}>
- <span class="qb">${esc(p.bed)}</span><span class="qm ${p.films[0] ? '' : 'none'}">${p.films[0] ? FILMS[resolveFilmKind(p.films[0])] : ''}</span>
+ <span class="qb">${esc(p.bed)}</span><span class="qm">${filmBox(i, p.films[0], '')}</span>
  <span class="qi"><span class="qn">${esc(p.name)}</span><span class="qs">${esc(p.dx)}</span></span>
  ${bad ? `<span class="qt" style="background:var(--bad-bg);color:var(--bad)">review</span>`
     : `<span class="qt" style="background:var(--paper);color:var(--ink-3)">${p.pod != null ? esc(dayLabel(p)) : esc(p.stat)}</span>`}</button>`;
@@ -127,7 +133,7 @@ export function detail(p, i){
   const firstOpen = p.checks.findIndex(c => !c[2]);
   return `<div class="dt-hd">
  <div class="dt-gal">${p.films.length ? p.films.map((k,n) => filmBox(i, k, n === 0 ? 'pre-op' : 'post-op')).join('')
-   : `<div class="fnone" style="width:98px;height:128px" role="img" aria-label="No imaging">${ic('img')}</div>`}</div>
+   : filmBox(i, undefined, '')}</div>
  <div style="min-width:230px;flex:1"><div class="w-bed">BED ${esc(p.bed)} · ${esc(p.uhid)}</div>
   <h2 class="dt-nm">${esc(p.name)}</h2>
   <div class="dt-sub">${esc(p.age)} · ${esc(p.stat)} · admitted ${esc(p.adm)} · ${esc(p.surgeon)}</div>
@@ -357,9 +363,9 @@ export function discharged(rows, search = ''){
  *  Returns null for a falsy `kind`; the caller renders its own "no film"
  *  placeholder in that case (see presentSlide() below). */
 export function filmArt(kind){
-  if(!kind) return null;
-  return FILMS[resolveFilmKind(kind)];
+  return kind ? resolveFilmKind(kind) : null;
 }
+
 
 /** Human label for a film kind, e.g. for the viewer's title bar.
  *  hasOwnProperty rather than a plain lookup: `FILM_LABELS['constructor']`
@@ -407,7 +413,7 @@ export function presentSlide(p){
   const podLabel = p.pod != null
     ? esc(dayLabel(p)).toUpperCase()
     : esc(String(p.stat || '').toUpperCase());
-  return `<div class="pr-f ${art ? '' : 'none'}">${art || ic('img')}</div>
+  return `<div class="pr-f none">${ic('img')}<span class="pr-fs">${art ? 'Film on file — not shown yet' : 'No imaging'}</span></div>
  <div class="pr-i"><div class="pr-bd">BED ${esc(p.bed)}</div><h2 class="pr-n">${esc(p.name)}</h2>
  <p class="pr-d">${esc(p.dx)}</p><p class="pr-p">${esc(p.age)} · ${esc(p.proc)}</p>
  <div class="pr-pod">${podLabel}</div>
