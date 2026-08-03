@@ -120,8 +120,10 @@ test. That test exists precisely to catch the harness doing the app's job.
 
 - Online-only: no IndexedDB, no offline queue. A dropped connection shows a
   retry state.
-- Radiographs are drawn SVG placeholders; server-side thumbnails are an
-  outstanding prerequisite (design spec §8.1).
+- Real radiographs render on the hero, detail gallery, viewer and
+  presentation mode; rows carry a mark instead (see above). Server-side
+  thumbnails (§8.1) would cut the per-patient cost further and remain worth
+  doing, but they no longer block ward use.
 - `expectedDischargeDate` does not exist in the schema, so the POD track
   ends at the last milestone rather than a discharge station.
 - Admin links out to `/` rather than being reimplemented.
