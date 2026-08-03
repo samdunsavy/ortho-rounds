@@ -123,7 +123,11 @@ export async function bootV2({ patients = [], width = 1440, fetchImpl } = {}){
     await import(new URL('app.js', V2) + `?n=${++seq}`);
     api = window.__V2__;
     if(!api) throw new Error('app.js did not expose window.__V2__');
-    await api.render();
+    /* Await the app's OWN boot render, do not perform it. Calling
+       api.render() here is what hid the fact that app.js never booted
+       itself in a browser: the harness supplied the missing boot, so the
+       whole suite passed against a page that could not start. */
+    await api.ready;
   } catch (err) {
     errCaught = err;
   } finally {

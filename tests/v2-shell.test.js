@@ -721,3 +721,49 @@ test('a full re-render mid-edit carries the un-pushed plan across, rather than b
   await api.state.pending;
   assert.equal(pushes.at(-1).dailyPlan, typed);
 });
+
+/* ── The app must boot itself ────────────────────────────────────────────
+   app.js once only DEFINED things: it logged its build line, exposed
+   __V2__ and stopped. In a browser nothing fetched and nothing rendered —
+   the shell sat on its static placeholder ring with no error, because no
+   code had run. The entire suite passed anyway, because bootV2 called
+   api.render() itself; the harness was doing the app's boot.
+
+   This test imports app.js WITHOUT any harness assistance and asserts the
+   module starts itself. It must never be "fixed" by calling render(). */
+test('app.js boots itself — importing it triggers a ward load with no help', async () => {
+  const { JSDOM } = await import('jsdom');
+  const { readFileSync } = await import('node:fs');
+  const shell = readFileSync(new URL('../public/v2/index.html', import.meta.url), 'utf8');
+  const dom = new JSDOM(shell, { runScripts: 'outside-only', url: 'http://localhost/v2/' });
+  const { window } = dom;
+  Object.defineProperty(window, 'innerWidth', { value: 1440, configurable: true });
+
+  let fetchCalls = 0;
+  window.fetch = async () => { fetchCalls++;
+    return { ok: true, status: 200, json: async () => ({ serverTime: 1, patients: [
+      { id: 'b1', name: 'Boot', bed: '01', age: '40', sex: 'M', diagnosis: 'Dx',
+        status: 'postop', surgeryDate: '2026-07-29', postOpChecks: [], dischargeChecks: [],
+        planHistory: [], labs: {}, images: [] }] }) }; };
+
+  const prev = {};
+  for(const k of ['window','document','navigator','fetch','localStorage','KeyboardEvent','MouseEvent','Event','requestAnimationFrame']){
+    prev[k] = Object.getOwnPropertyDescriptor(globalThis, k);
+    Object.defineProperty(globalThis, k, {
+      value: k === 'requestAnimationFrame' ? (cb => setTimeout(cb, 0)) : window[k],
+      configurable: true, writable: true });
+  }
+  try{
+    await import(new URL('../public/v2/app.js', import.meta.url) + '?selfboot=' + Math.random());
+    // NOTE: no api.render() call here — that is the whole point.
+    await window.__V2__.ready;
+  } finally {
+    for(const k of Object.keys(prev)) prev[k] ? Object.defineProperty(globalThis, k, prev[k]) : delete globalThis[k];
+  }
+
+  assert.ok(fetchCalls > 0, 'importing app.js must trigger a ward fetch on its own');
+  assert.equal(window.__V2__.state.patients.length, 1, 'the boot render must populate state');
+  assert.notEqual(window.document.querySelector('#ringN').textContent, '0/8',
+    'the static placeholder ring must have been overwritten by the boot render');
+  assert.equal(window.document.querySelector('#ringN').textContent, '0/1');
+});

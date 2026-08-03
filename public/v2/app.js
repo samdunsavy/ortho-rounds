@@ -48,13 +48,13 @@
    additionally bound to its receiver because real browsers throw
    "Illegal invocation" if fetch is called detached from `window`. */
 import { esc, hero, row, detail, board, workList, complete, otList, handover, discharged,
-  paletteGroup, paletteNoMatch, paletteRow, viewerTitle, filmArt, presentSlide } from './render.js?v=4';
-import { fetchWard, fetchDischarged, pushPatient, toViewModel, extractDefaultUnit, authToken } from './data.js?v=4';
+  paletteGroup, paletteNoMatch, paletteRow, viewerTitle, filmArt, presentSlide } from './render.js?v=5';
+import { fetchWard, fetchDischarged, pushPatient, toViewModel, extractDefaultUnit, authToken } from './data.js?v=5';
 
 /* Bump alongside the ?v= stamps in index.html. Printed at boot and shown
    in the failure state, so "which build is actually live?" is answerable
    in one second instead of by inference. */
-const BUILD = 'v4';
+const BUILD = 'v5';
 
 const DOC = document;
 const WIN = window;
@@ -1068,4 +1068,20 @@ if(WIN.matchMedia?.('(prefers-color-scheme: dark)')?.matches){
 }
 
 try{ (window.console || console).info('[v2] build', BUILD, '· signed in:', !!authToken(window.localStorage)); }catch{}
-window.__V2__ = { state: S, go, render, build: BUILD };
+
+/* ── boot ──────────────────────────────────────────────────────────────
+   Without this the module only DEFINES things. In a browser that meant
+   app.js loaded, logged its build line, exposed __V2__ and stopped: no
+   fetch, no render, the shell left showing its static placeholder ring
+   ("0/8", the prototype's demo count) and empty panes, with no error
+   anywhere because nothing had run.
+
+   It was invisible to the whole test suite because tests/helpers/v2-env.js's
+   bootV2 calls api.render() itself — the harness was performing the app's
+   boot, so 897 tests exercised a page that could never start on its own.
+   `ready` is that boot promise; bootV2 awaits it instead of re-rendering,
+   so there is exactly one boot render in both the browser and the tests.
+   The guard test is in tests/v2-shell.test.js ("app.js boots itself"). */
+const ready = render();
+
+window.__V2__ = { state: S, go, render, build: BUILD, ready };
