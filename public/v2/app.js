@@ -49,7 +49,12 @@
    "Illegal invocation" if fetch is called detached from `window`. */
 import { esc, hero, row, detail, board, workList, complete, otList, handover, discharged,
   paletteGroup, paletteNoMatch, paletteRow, viewerTitle, filmArt, presentSlide } from './render.js?v=3';
-import { fetchWard, fetchDischarged, pushPatient, toViewModel, extractDefaultUnit } from './data.js?v=3';
+import { fetchWard, fetchDischarged, pushPatient, toViewModel, extractDefaultUnit, authToken } from './data.js?v=3';
+
+/* Bump alongside the ?v= stamps in index.html. Printed at boot and shown
+   in the failure state, so "which build is actually live?" is answerable
+   in one second instead of by inference. */
+const BUILD = 'v3';
 
 const DOC = document;
 const WIN = window;
@@ -360,13 +365,32 @@ async function render(){
        of debugging looking like an empty ward: the user saw a generic
        "couldn't reach the server" and the console said nothing. */
     try{ (WIN.console || console).error('[v2] ward load failed:', err); }catch{}
-    const msg = /401|not signed in/.test(String(err && err.message))
-      ? 'You are not signed in. Open the main app, log in, then reload this page.'
-      : "Couldn't reach the server.";
+    /* Say WHICH failure this is, on screen, without needing DevTools.
+       "Login required" from the server covers both "no Authorization
+       header was sent" and "the token was rejected" — but the client
+       knows which, because it knows whether it had a token to send. */
+    const is401 = /401|not signed in/.test(String(err && err.message));
+    const hadToken = !!authToken(WIN.localStorage);
+    let msg, hint;
+    if(is401 && !hadToken){
+      msg = 'You are not signed in on this browser.';
+      hint = 'Open the main app, log in, then come back and reload.';
+    }else if(is401){
+      msg = 'Your session was rejected.';
+      hint = 'The saved sign-in has expired. Log in again on the main app, then reload.';
+    }else{
+      msg = "Couldn't reach the server.";
+      hint = String((err && err.message) || '');
+    }
     $('#roundList').innerHTML =
       `<div class="empty" style="text-align:center;padding:var(--s-7) var(--s-4)">
-   <p>${esc(msg)}</p>
-   <button class="btn gh" data-retry="1">Retry</button></div>`;
+   <p style="font-weight:500">${esc(msg)}</p>
+   <p style="font-size:var(--t-12);color:var(--ink-3);max-width:38ch;margin:6px auto 14px">${esc(hint)}</p>
+   <p style="display:flex;gap:9px;justify-content:center">
+     <a class="btn gh" href="/">Open the main app</a>
+     <button class="btn gh" data-retry="1">Retry</button></p>
+   <p style="font-size:var(--t-11);color:var(--ink-3);margin-top:16px">preview build ${esc(BUILD)} · signed in: ${hadToken ? 'yes' : 'no'}</p>
+   </div>`;
     /* Clear the detail pane too. Leaving it up left a plan input and a
        row of checkboxes wired to state that just failed to refresh —
        live-looking controls whose next click would write against a
@@ -1043,4 +1067,5 @@ if(WIN.matchMedia?.('(prefers-color-scheme: dark)')?.matches){
   DOC.documentElement.dataset.theme = 'dark';
 }
 
-window.__V2__ = { state: S, go, render };
+try{ (window.console || console).info('[v2] build', BUILD, '· signed in:', !!authToken(window.localStorage)); }catch{}
+window.__V2__ = { state: S, go, render, build: BUILD };
